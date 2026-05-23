@@ -22,12 +22,16 @@
     "package:mac-notfront": "bash ../../packaging/desktop/build_macos.sh --skip-prebuild"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@xyflow/react": "^12.10.2",
     "electron-updater": "^6.3.0",
     "html-to-image": "^1.11.13",
     "katex": "^0.16.11",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
+    "react-arborist": "^3.7.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.5.0",

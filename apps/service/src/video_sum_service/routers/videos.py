@@ -19,8 +19,17 @@ from video_sum_service.schemas import (
     VideoAssetDetailResponse,
     VideoAssetRecord,
     VideoAssetSummaryResponse,
+    VideoFolderCreateRequest,
+    VideoFolderResponse,
+    VideoFolderUpdateRequest,
+    VideoLibraryPreferencesResponse,
+    VideoLibraryPreferencesUpdateRequest,
+    VideoLibraryResponse,
+    VideoMoveRequest,
+    VideoPinRequest,
     VideoProbeRequest,
     VideoProbeResponse,
+    VideoReorderRequest,
     VideoTaskBatchPageResponse,
     VideoTaskBatchRequest,
     VideoTaskBatchResponse,
@@ -515,6 +524,96 @@ async def upload_local_videos_batch(request: Request) -> list[VideoProbeResponse
 def list_videos(request: Request) -> list[VideoAssetSummaryResponse]:
     task_store: SqliteTaskRepository = request.app.state.task_repository
     return [localize_video_cover(task_store, video).to_summary() for video in task_store.list_video_assets()]
+
+
+@router.get("/library", response_model=VideoLibraryResponse)
+def get_video_library(request: Request) -> VideoLibraryResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    return VideoLibraryResponse(
+        videos=[localize_video_cover(task_store, video).to_summary() for video in task_store.list_video_assets()],
+        folders=task_store.list_video_folders(),
+        preferences=task_store.get_library_preferences(),
+    )
+
+
+@router.put("/library/preferences", response_model=VideoLibraryPreferencesResponse)
+def update_video_library_preferences(
+    payload: VideoLibraryPreferencesUpdateRequest,
+    request: Request,
+) -> VideoLibraryPreferencesResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    return task_store.update_library_preferences(new_video_position=payload.new_video_position)
+
+
+@router.post("/folders", response_model=VideoFolderResponse, status_code=status.HTTP_201_CREATED)
+def create_video_folder(payload: VideoFolderCreateRequest, request: Request) -> VideoFolderResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    folder = task_store.create_video_folder(payload.name, payload.parent_id)
+    if folder is None:
+        raise HTTPException(status_code=400, detail="Folder name or parent is invalid.")
+    return folder
+
+
+@router.patch("/folders/{folder_id}", response_model=VideoFolderResponse)
+def update_video_folder(folder_id: str, payload: VideoFolderUpdateRequest, request: Request) -> VideoFolderResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    try:
+        folder = task_store.update_video_folder(
+            folder_id,
+            name=payload.name,
+            **({"parent_id": payload.parent_id} if "parent_id" in payload.model_fields_set else {}),
+            position=payload.position,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder not found.")
+    return folder
+
+
+@router.delete("/folders/{folder_id}")
+def delete_video_folder(folder_id: str, request: Request) -> dict[str, object]:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    deleted = task_store.delete_video_folder(folder_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Folder not found.")
+    return {"deleted": True, "folder_id": folder_id}
+
+
+@router.post("/reorder", response_model=list[VideoAssetSummaryResponse])
+def reorder_videos(payload: VideoReorderRequest, request: Request) -> list[VideoAssetSummaryResponse]:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    folder_id = "__global__" if payload.folder_id == "__global__" else payload.folder_id
+    try:
+        videos = task_store.reorder_videos(payload.video_ids, folder_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [
+        localize_video_cover(task_store, video).to_summary()
+        for video in videos
+    ]
+
+
+@router.patch("/{video_id}/move", response_model=VideoAssetDetailResponse)
+def move_video_to_folder(video_id: str, payload: VideoMoveRequest, request: Request) -> VideoAssetDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.move_video_to_folder(video_id, payload.folder_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Video or folder not found.")
+    return localize_video_cover(task_store, updated).to_detail()
+
+
+@router.patch("/{video_id}/pin", response_model=VideoAssetDetailResponse)
+def set_video_pin(video_id: str, payload: VideoPinRequest, request: Request) -> VideoAssetDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.set_video_pin(
+        video_id,
+        global_pinned=payload.global_pinned,
+        folder_pinned=payload.folder_pinned,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    return localize_video_cover(task_store, updated).to_detail()
 
 
 @router.get("/{video_id}", response_model=VideoAssetDetailResponse)

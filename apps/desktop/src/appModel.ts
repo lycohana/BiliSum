@@ -1,5 +1,5 @@
 import type { UpdateInfo } from "./components/UpdateDialog";
-import type { EnvironmentInfo, ServiceSettings, SystemInfo, TaskStatus, VideoAssetSummary } from "./types";
+import type { EnvironmentInfo, ServiceSettings, SystemInfo, TaskStatus, VideoAssetSummary, VideoFolder, VideoLibraryPreferences } from "./types";
 
 export type Snapshot = {
   serviceOnline: boolean;
@@ -7,6 +7,8 @@ export type Snapshot = {
   environment: EnvironmentInfo | null;
   settings: ServiceSettings | null;
   videos: VideoAssetSummary[];
+  folders: VideoFolder[];
+  libraryPreferences: VideoLibraryPreferences;
   error: string;
   runtimeInitializing: boolean;
 };
@@ -54,7 +56,17 @@ export type ConfigHealth = {
   actionText: string;
 };
 
-export const emptySnapshot: Snapshot = { serviceOnline: false, systemInfo: null, environment: null, settings: null, videos: [], error: "", runtimeInitializing: false };
+export const emptySnapshot: Snapshot = {
+  serviceOnline: false,
+  systemInfo: null,
+  environment: null,
+  settings: null,
+  videos: [],
+  folders: [],
+  libraryPreferences: { new_video_position: "front" },
+  error: "",
+  runtimeInitializing: false,
+};
 
 const MASKED_API_KEY = "******";
 

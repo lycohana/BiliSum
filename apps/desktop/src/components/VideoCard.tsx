@@ -2,15 +2,24 @@ import { Link } from "react-router-dom";
 import type { MouseEvent, SyntheticEvent } from "react";
 
 import { platformLabel, taskStatusClass } from "../appModel";
+import { GripVerticalIcon, PinIcon } from "./AppIcons";
 import type { VideoAssetSummary } from "../types";
 import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
 
 export function VideoCard({
   video,
+  folderName,
+  canPinInFolder = false,
   onToggleFavorite,
+  onToggleGlobalPin,
+  onToggleFolderPin,
 }: {
   video: VideoAssetSummary;
+  folderName?: string;
+  canPinInFolder?: boolean;
   onToggleFavorite?: (videoId: string, nextFavorite: boolean) => Promise<void>;
+  onToggleGlobalPin?: (videoId: string, nextPinned: boolean) => Promise<void>;
+  onToggleFolderPin?: (videoId: string, nextPinned: boolean) => Promise<void>;
 }) {
   const badgeClass = taskStatusClass(video.latest_status);
   const isMultiPageVideo = video.pages.length > 1;
@@ -20,6 +29,18 @@ export function VideoCard({
     event.preventDefault();
     event.stopPropagation();
     await onToggleFavorite?.(video.video_id, !video.is_favorite);
+  }
+
+  async function handleGlobalPinClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    await onToggleGlobalPin?.(video.video_id, !video.global_pinned);
+  }
+
+  async function handleFolderPinClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    await onToggleFolderPin?.(video.video_id, !video.folder_pinned);
   }
 
   const resultStateLabel = getResultStateLabel(video);
@@ -34,11 +55,12 @@ export function VideoCard({
   }
 
   return (
-    <Link className="video-card" to={`/videos/${video.video_id}`}>
+    <Link className="video-card" to={`/videos/${video.video_id}`} draggable={false}>
       <div className="video-card-cover">
+        <span className="video-card-drag-handle" title="拖动排序" aria-hidden="true"><GripVerticalIcon /></span>
         {video.cover_url ? (
           <>
-            <img src={video.cover_url} alt={video.title} loading="lazy" onError={handleImageError} />
+            <img src={video.cover_url} alt={video.title} loading="lazy" draggable={false} onError={handleImageError} />
             <div className="video-card-placeholder is-hidden">VIDEO</div>
           </>
         ) : (
@@ -55,6 +77,32 @@ export function VideoCard({
             <IconFavorite />
           </button>
         ) : null}
+        <div className="video-card-pin-actions">
+          {onToggleGlobalPin ? (
+            <button
+              aria-label={video.global_pinned ? "取消全局置顶" : "全局置顶"}
+              className={`video-card-pin ${video.global_pinned ? "is-active" : ""}`}
+              title={video.global_pinned ? "取消全局置顶" : "全局置顶"}
+              type="button"
+              onClick={(event) => void handleGlobalPinClick(event)}
+            >
+              <PinIcon />
+              <span>全局置顶</span>
+            </button>
+          ) : null}
+          {canPinInFolder && onToggleFolderPin ? (
+            <button
+              aria-label={video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}
+              className={`video-card-pin ${video.folder_pinned ? "is-active" : ""}`}
+              title={video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}
+              type="button"
+              onClick={(event) => void handleFolderPinClick(event)}
+            >
+              <PinIcon />
+              <span>文件夹置顶</span>
+            </button>
+          ) : null}
+        </div>
         <span className="video-duration">{formatDuration(video.duration)}</span>
       </div>
       <div className="video-card-body">
@@ -70,6 +118,7 @@ export function VideoCard({
           <span>{formatDateTime(video.updated_at)}</span>
           <span className="video-card-result-state">{resultStateLabel}</span>
         </div>
+        {folderName ? <div className="video-card-folder">{folderName}</div> : null}
       </div>
     </Link>
   );

@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
+from uuid import uuid4
 
 from video_sum_core.models.tasks import TaskInput, TaskResult, TaskStatus
 from video_sum_infra.db import sqlite_cursor
@@ -12,8 +13,12 @@ from video_sum_service.schemas import (
     TaskRecord,
     VideoTagRecord,
     VideoAssetRecord,
+    VideoFolderResponse,
+    VideoLibraryPreferencesResponse,
     VideoPageOptionResponse,
 )
+
+_UNSET = object()
 
 
 class SqliteTaskRepository:
@@ -40,6 +45,11 @@ class SqliteTaskRepository:
                     latest_error_message TEXT,
                     is_favorite INTEGER NOT NULL DEFAULT 0,
                     favorite_updated_at TEXT,
+                    folder_id TEXT,
+                    global_order REAL NOT NULL DEFAULT 0,
+                    folder_order REAL NOT NULL DEFAULT 0,
+                    global_pinned INTEGER NOT NULL DEFAULT 0,
+                    folder_pinned INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -48,6 +58,32 @@ class SqliteTaskRepository:
             self._ensure_column(cursor, "video_assets", "page_catalog_json", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(cursor, "video_assets", "is_favorite", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "video_assets", "favorite_updated_at", "TEXT")
+            self._ensure_column(cursor, "video_assets", "folder_id", "TEXT")
+            self._ensure_column(cursor, "video_assets", "global_order", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_assets", "folder_order", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_assets", "global_pinned", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_assets", "folder_pinned", "INTEGER NOT NULL DEFAULT 0")
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS video_folders (
+                    folder_id TEXT PRIMARY KEY,
+                    parent_id TEXT,
+                    name TEXT NOT NULL,
+                    position REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS library_preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -143,6 +179,36 @@ class SqliteTaskRepository:
         base = str(canonical_id or "").split("?", 1)[0]
         return base, f"{base}?p=%"
 
+    def _select_video_columns(self, prefix: str = "v") -> str:
+        return f"""
+                    {prefix}.video_id, {prefix}.canonical_id, {prefix}.platform, {prefix}.title, {prefix}.source_url, {prefix}.cover_url, {prefix}.duration,
+                    {prefix}.page_catalog_json,
+                    {prefix}.latest_task_id, {prefix}.latest_status, {prefix}.latest_stage, {prefix}.latest_error_message,
+                    {prefix}.is_favorite, {prefix}.favorite_updated_at,
+                    {prefix}.folder_id, {prefix}.global_order, {prefix}.folder_order, {prefix}.global_pinned, {prefix}.folder_pinned,
+                    {prefix}.created_at, {prefix}.updated_at, r.result_json AS latest_result_json
+        """
+
+    def _next_video_order(self, cursor: sqlite3.Cursor, field: str, folder_id: str | None = None) -> float:
+        preference = self._get_library_preference(cursor, "new_video_position", "front")
+        if field == "folder_order":
+            if folder_id is None:
+                row = cursor.execute("SELECT MIN(folder_order) AS min_order, MAX(folder_order) AS max_order FROM video_assets WHERE folder_id IS NULL").fetchone()
+            else:
+                row = cursor.execute(
+                    "SELECT MIN(folder_order) AS min_order, MAX(folder_order) AS max_order FROM video_assets WHERE folder_id = ?",
+                    (folder_id,),
+                ).fetchone()
+        else:
+            row = cursor.execute("SELECT MIN(global_order) AS min_order, MAX(global_order) AS max_order FROM video_assets").fetchone()
+        min_order = float(row["min_order"]) if row and row["min_order"] is not None else 0
+        max_order = float(row["max_order"]) if row and row["max_order"] is not None else 0
+        return max_order + 1000 if preference == "back" else min_order - 1000
+
+    def _get_library_preference(self, cursor: sqlite3.Cursor, key: str, default: str) -> str:
+        row = cursor.execute("SELECT value FROM library_preferences WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row is not None else default
+
     def _consolidate_video_family(self, cursor: sqlite3.Cursor, canonical_id: str) -> tuple[str, str] | None:
         family, pattern = self._canonical_family_pattern(canonical_id)
         rows = cursor.execute(
@@ -197,13 +263,36 @@ class SqliteTaskRepository:
             else:
                 video_id = asset.video_id
                 created = created_at
+            existing_detail = cursor.execute(
+                """
+                SELECT folder_id, global_order, folder_order, global_pinned, folder_pinned
+                FROM video_assets
+                WHERE video_id = ?
+                """,
+                (video_id,),
+            ).fetchone()
+            global_order = (
+                float(existing_detail["global_order"])
+                if existing_detail is not None and existing_detail["global_order"] is not None
+                else self._next_video_order(cursor, "global_order")
+            )
+            folder_order = (
+                float(existing_detail["folder_order"])
+                if existing_detail is not None and existing_detail["folder_order"] is not None
+                else self._next_video_order(cursor, "folder_order", asset.folder_id)
+            )
+            folder_id = existing_detail["folder_id"] if existing_detail is not None else asset.folder_id
+            global_pinned = bool(existing_detail["global_pinned"]) if existing_detail is not None else asset.global_pinned
+            folder_pinned = bool(existing_detail["folder_pinned"]) if existing_detail is not None else asset.folder_pinned
+
             cursor.execute(
                 """
                 INSERT INTO video_assets (
                     video_id, canonical_id, platform, title, source_url, cover_url, duration, page_catalog_json,
                     latest_task_id, latest_status, latest_stage, latest_error_message, is_favorite, favorite_updated_at,
+                    folder_id, global_order, folder_order, global_pinned, folder_pinned,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(canonical_id) DO UPDATE SET
                     title = excluded.title,
                     source_url = excluded.source_url,
@@ -227,6 +316,11 @@ class SqliteTaskRepository:
                     asset.latest_error_message,
                     1 if asset.is_favorite else 0,
                     asset.favorite_updated_at.isoformat() if asset.favorite_updated_at else None,
+                    folder_id,
+                    global_order,
+                    folder_order,
+                    1 if global_pinned else 0,
+                    1 if folder_pinned else 0,
                     created,
                     updated_at,
                 ),
@@ -240,15 +334,11 @@ class SqliteTaskRepository:
             row = cursor.execute(
                 """
                 SELECT
-                    v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
-                    v.page_catalog_json,
-                    v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
-                    v.is_favorite, v.favorite_updated_at,
-                    v.created_at, v.updated_at, r.result_json AS latest_result_json
+                    {columns}
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
                 WHERE v.video_id = ?
-                """,
+                """.format(columns=self._select_video_columns("v")),
                 (video_id,),
             ).fetchone()
         return self._row_to_video_asset(row) if row is not None else None
@@ -258,15 +348,11 @@ class SqliteTaskRepository:
             row = cursor.execute(
                 """
                 SELECT
-                    v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
-                    v.page_catalog_json,
-                    v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
-                    v.is_favorite, v.favorite_updated_at,
-                    v.created_at, v.updated_at, r.result_json AS latest_result_json
+                    {columns}
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
                 WHERE v.canonical_id = ?
-                """,
+                """.format(columns=self._select_video_columns("v")),
                 (canonical_id,),
             ).fetchone()
         return self._row_to_video_asset(row) if row is not None else None
@@ -276,15 +362,11 @@ class SqliteTaskRepository:
             rows = cursor.execute(
                 """
                 SELECT
-                    v.video_id, v.canonical_id, v.platform, v.title, v.source_url, v.cover_url, v.duration,
-                    v.page_catalog_json,
-                    v.latest_task_id, v.latest_status, v.latest_stage, v.latest_error_message,
-                    v.is_favorite, v.favorite_updated_at,
-                    v.created_at, v.updated_at, r.result_json AS latest_result_json
+                    {columns}
                 FROM video_assets v
                 LEFT JOIN task_results r ON r.task_id = v.latest_task_id
-                ORDER BY v.updated_at DESC
-                """
+                ORDER BY v.global_pinned DESC, v.global_order ASC, v.updated_at DESC
+                """.format(columns=self._select_video_columns("v"))
             ).fetchall()
         videos = [self._row_to_video_asset(row) for row in rows]
         grouped: dict[str, VideoAssetRecord] = {}
@@ -498,6 +580,203 @@ class SqliteTaskRepository:
             cursor.execute(f"DELETE FROM tasks WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM video_assets WHERE video_id IN ({placeholders})", tuple(video_ids))
         return True
+
+    def get_library_preferences(self) -> VideoLibraryPreferencesResponse:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            value = self._get_library_preference(cursor, "new_video_position", "front")
+        return VideoLibraryPreferencesResponse(new_video_position="back" if value == "back" else "front")
+
+    def update_library_preferences(self, *, new_video_position: str) -> VideoLibraryPreferencesResponse:
+        normalized = "back" if new_video_position == "back" else "front"
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO library_preferences (key, value, updated_at)
+                VALUES ('new_video_position', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (normalized, updated_at),
+            )
+        return VideoLibraryPreferencesResponse(new_video_position=normalized)
+
+    def list_video_folders(self) -> list[VideoFolderResponse]:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            rows = cursor.execute(
+                """
+                SELECT folder_id, parent_id, name, position, created_at, updated_at
+                FROM video_folders
+                ORDER BY parent_id IS NOT NULL, parent_id, position ASC, updated_at ASC
+                """
+            ).fetchall()
+        return [self._row_to_video_folder(row) for row in rows]
+
+    def create_video_folder(self, name: str, parent_id: str | None = None) -> VideoFolderResponse | None:
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            if parent_id is not None and not self._folder_exists(cursor, parent_id):
+                return None
+            row = cursor.execute(
+                "SELECT MIN(position) AS min_position FROM video_folders WHERE parent_id IS ?",
+                (parent_id,),
+            ).fetchone()
+            min_position = float(row["min_position"]) if row and row["min_position"] is not None else 0
+            folder_id = uuid4().hex
+            cursor.execute(
+                """
+                INSERT INTO video_folders (folder_id, parent_id, name, position, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (folder_id, parent_id, normalized_name, min_position - 1000, now, now),
+            )
+        folder = self.get_video_folder(folder_id)
+        assert folder is not None
+        return folder
+
+    def get_video_folder(self, folder_id: str) -> VideoFolderResponse | None:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute(
+                """
+                SELECT folder_id, parent_id, name, position, created_at, updated_at
+                FROM video_folders
+                WHERE folder_id = ?
+                """,
+                (folder_id,),
+            ).fetchone()
+        return self._row_to_video_folder(row) if row is not None else None
+
+    def update_video_folder(
+        self,
+        folder_id: str,
+        *,
+        name: str | None = None,
+        parent_id: str | None | object = _UNSET,
+        position: float | None = None,
+    ) -> VideoFolderResponse | None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            current = cursor.execute(
+                "SELECT folder_id, parent_id, name, position FROM video_folders WHERE folder_id = ?",
+                (folder_id,),
+            ).fetchone()
+            if current is None:
+                return None
+            next_parent_id = parent_id if parent_id is not _UNSET else current["parent_id"]
+            if next_parent_id == folder_id:
+                raise ValueError("Folder cannot be moved into itself.")
+            if next_parent_id is not None:
+                if not self._folder_exists(cursor, next_parent_id):
+                    return None
+                if next_parent_id in self._descendant_folder_ids(cursor, folder_id):
+                    raise ValueError("Folder cannot be moved into its descendant.")
+            next_name = str(name).strip() if name is not None else current["name"]
+            if not next_name:
+                next_name = current["name"]
+            next_position = float(position) if position is not None else float(current["position"] or 0)
+            cursor.execute(
+                """
+                UPDATE video_folders
+                SET name = ?, parent_id = ?, position = ?, updated_at = ?
+                WHERE folder_id = ?
+                """,
+                (next_name, next_parent_id, next_position, updated_at, folder_id),
+            )
+        return self.get_video_folder(folder_id)
+
+    def delete_video_folder(self, folder_id: str) -> bool:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            if not self._folder_exists(cursor, folder_id):
+                return False
+            folder_ids = [folder_id, *self._descendant_folder_ids(cursor, folder_id)]
+            placeholders = ",".join("?" for _ in folder_ids)
+            cursor.execute(
+                f"""
+                UPDATE video_assets
+                SET folder_id = NULL, folder_order = ?, folder_pinned = 0, updated_at = ?
+                WHERE folder_id IN ({placeholders})
+                """,
+                (self._next_video_order(cursor, "folder_order", None), datetime.now(timezone.utc).isoformat(), *folder_ids),
+            )
+            cursor.execute(f"DELETE FROM video_folders WHERE folder_id IN ({placeholders})", tuple(folder_ids))
+        return True
+
+    def move_video_to_folder(self, video_id: str, folder_id: str | None) -> VideoAssetRecord | None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute("SELECT video_id FROM video_assets WHERE video_id = ?", (video_id,)).fetchone()
+            if row is None:
+                return None
+            if folder_id is not None and not self._folder_exists(cursor, folder_id):
+                return None
+            cursor.execute(
+                """
+                UPDATE video_assets
+                SET folder_id = ?, folder_order = ?, folder_pinned = 0, updated_at = ?
+                WHERE video_id = ?
+                """,
+                (folder_id, self._next_video_order(cursor, "folder_order", folder_id), updated_at, video_id),
+            )
+        return self.get_video_asset(video_id)
+
+    def set_video_pin(
+        self,
+        video_id: str,
+        *,
+        global_pinned: bool | None = None,
+        folder_pinned: bool | None = None,
+    ) -> VideoAssetRecord | None:
+        updates: list[str] = []
+        values: list[object] = []
+        if global_pinned is not None:
+            updates.append("global_pinned = ?")
+            values.append(1 if global_pinned else 0)
+        if folder_pinned is not None:
+            updates.append("folder_pinned = ?")
+            values.append(1 if folder_pinned else 0)
+        if not updates:
+            return self.get_video_asset(video_id)
+        updates.append("updated_at = ?")
+        values.append(datetime.now(timezone.utc).isoformat())
+        values.append(video_id)
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute("SELECT video_id FROM video_assets WHERE video_id = ?", (video_id,)).fetchone()
+            if row is None:
+                return None
+            cursor.execute(f"UPDATE video_assets SET {', '.join(updates)} WHERE video_id = ?", tuple(values))
+        return self.get_video_asset(video_id)
+
+    def reorder_videos(self, video_ids: list[str], folder_id: str | None = None) -> list[VideoAssetRecord]:
+        ordered_ids = [str(video_id) for video_id in video_ids if str(video_id).strip()]
+        if not ordered_ids:
+            return []
+        field = "global_order" if folder_id == "__global__" else "folder_order"
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            if folder_id not in (None, "__global__") and not self._folder_exists(cursor, folder_id):
+                return []
+            valid_ids = self._video_ids_in_scope(cursor, folder_id)
+            if any(video_id not in valid_ids for video_id in ordered_ids):
+                raise ValueError("Video reorder payload contains videos outside the target scope.")
+            for index, video_id in enumerate(ordered_ids):
+                if field == "global_order":
+                    cursor.execute(
+                        "UPDATE video_assets SET global_order = ?, updated_at = ? WHERE video_id = ?",
+                        ((index + 1) * 1000, updated_at, video_id),
+                    )
+                elif folder_id is None:
+                    cursor.execute(
+                        "UPDATE video_assets SET folder_order = ?, updated_at = ? WHERE video_id = ? AND folder_id IS NULL",
+                        ((index + 1) * 1000, updated_at, video_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE video_assets SET folder_order = ?, updated_at = ? WHERE video_id = ? AND folder_id = ?",
+                        ((index + 1) * 1000, updated_at, video_id, folder_id),
+                    )
+        return [video for video_id in ordered_ids if (video := self.get_video_asset(video_id)) is not None]
 
     def add_video_tag(self, video_id: str, tag: str, source: str = "manual", confidence: float = 1.0) -> bool:
         normalized_tag = str(tag or "").strip()
@@ -942,9 +1221,47 @@ class SqliteTaskRepository:
             latest_error_message=row["latest_error_message"],
             is_favorite=bool(row["is_favorite"]),
             favorite_updated_at=datetime.fromisoformat(row["favorite_updated_at"]) if row["favorite_updated_at"] else None,
+            folder_id=row["folder_id"],
+            global_order=float(row["global_order"] or 0),
+            folder_order=float(row["folder_order"] or 0),
+            global_pinned=bool(row["global_pinned"]),
+            folder_pinned=bool(row["folder_pinned"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
+
+    def _row_to_video_folder(self, row: sqlite3.Row) -> VideoFolderResponse:
+        return VideoFolderResponse(
+            folder_id=row["folder_id"],
+            parent_id=row["parent_id"],
+            name=row["name"],
+            position=float(row["position"] or 0),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    def _folder_exists(self, cursor: sqlite3.Cursor, folder_id: str) -> bool:
+        return cursor.execute("SELECT folder_id FROM video_folders WHERE folder_id = ?", (folder_id,)).fetchone() is not None
+
+    def _video_ids_in_scope(self, cursor: sqlite3.Cursor, folder_id: str | None) -> set[str]:
+        if folder_id == "__global__":
+            rows = cursor.execute("SELECT video_id FROM video_assets").fetchall()
+        elif folder_id is None:
+            rows = cursor.execute("SELECT video_id FROM video_assets WHERE folder_id IS NULL").fetchall()
+        else:
+            rows = cursor.execute("SELECT video_id FROM video_assets WHERE folder_id = ?", (folder_id,)).fetchall()
+        return {str(row["video_id"]) for row in rows}
+
+    def _descendant_folder_ids(self, cursor: sqlite3.Cursor, folder_id: str) -> list[str]:
+        descendants: list[str] = []
+        pending = [folder_id]
+        while pending:
+            current = pending.pop(0)
+            rows = cursor.execute("SELECT folder_id FROM video_folders WHERE parent_id = ?", (current,)).fetchall()
+            child_ids = [row["folder_id"] for row in rows]
+            descendants.extend(child_ids)
+            pending.extend(child_ids)
+        return descendants
 
     def _row_to_event(self, row: sqlite3.Row) -> TaskEventRecord:
         return TaskEventRecord(

@@ -1,5 +1,6 @@
 @media (max-width: 1200px) {
   .library-topbar,
+  .library-workbench,
   .video-detail-main {
     grid-template-columns: 1fr;
   }
@@ -156,6 +157,23 @@
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   }
 
+  .library-sidebar-panel {
+    position: static;
+  }
+
+  .library-list-item {
+    grid-template-columns: 22px 76px minmax(0, 1fr) auto;
+  }
+
+  .library-list-date {
+    display: none;
+  }
+
+  .library-list-actions {
+    grid-column: 3 / -1;
+    justify-content: flex-end;
+  }
+
   .library-pagination {
     flex-direction: column;
     align-items: stretch;
@@ -253,10 +271,19 @@
     padding: 18px;
   }
 
+  .library-list-item {
+    grid-template-columns: 18px 64px minmax(0, 1fr);
+  }
+
+  .library-list-item .task-status {
+    grid-column: 3;
+    width: fit-content;
+  }
+
   .library-pagination-button {
-    min-width: 38px;
-    height: 38px;
-    padding: 0 12px;
+    min-width: 34px;
+    height: 34px;
+    padding: 0 10px;
   }
 
   .detail-hero-actions .primary-button,

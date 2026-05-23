@@ -26,6 +26,9 @@ import type {
   TaskSummary,
   VideoKnowledgeTagListResponse,
   VideoAssetDetail,
+  VideoFolder,
+  VideoLibraryPreferences,
+  VideoLibraryState,
   VideoProbeResult,
   VideoAssetSummary,
   VideoTaskBatchRequest,
@@ -256,6 +259,33 @@ export const api = {
   listVideos() {
     return fetchJson<VideoAssetSummary[]>("/api/v1/videos");
   },
+  getVideoLibrary() {
+    return fetchJson<VideoLibraryState>("/api/v1/videos/library");
+  },
+  updateVideoLibraryPreferences(payload: VideoLibraryPreferences) {
+    return fetchJson<VideoLibraryPreferences>("/api/v1/videos/library/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  createVideoFolder(payload: { name: string; parent_id?: string | null }) {
+    return fetchJson<VideoFolder>("/api/v1/videos/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  updateVideoFolder(folderId: string, payload: { name?: string | null; parent_id?: string | null; position?: number | null }) {
+    return fetchJson<VideoFolder>(`/api/v1/videos/folders/${encodeURIComponent(folderId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteVideoFolder(folderId: string) {
+    return fetchJson<{ deleted: boolean; folder_id: string }>(`/api/v1/videos/folders/${encodeURIComponent(folderId)}`, { method: "DELETE" });
+  },
   getVideo(videoId: string) {
     return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}`);
   },
@@ -268,6 +298,27 @@ export const api = {
   },
   deleteVideo(videoId: string) {
     return fetchJson<{ deleted: boolean }>(`/api/v1/videos/${videoId}`, { method: "DELETE" });
+  },
+  moveVideoToFolder(videoId: string, payload: { folder_id?: string | null }) {
+    return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}/move`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  setVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }) {
+    return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}/pin`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  reorderVideos(payload: { video_ids: string[]; folder_id?: string | null }) {
+    return fetchJson<VideoAssetSummary[]>("/api/v1/videos/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   },
   probeVideo(payload: { url: string; force_refresh: boolean }) {
     return fetchJson<VideoProbeResult>("/api/v1/videos/probe", {

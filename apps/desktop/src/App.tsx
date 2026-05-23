@@ -190,17 +190,19 @@ export function App() {
         return;
       }
       try {
-        const [health, settings, videos] = await Promise.all([
+        const [health, settings, library] = await Promise.all([
           api.getHealth(),
           api.getSettings(),
-          api.listVideos(),
+          api.getVideoLibrary(),
         ]);
         if (!disposed) {
           setSnapshot((current) => ({
             ...current,
             serviceOnline: health.status === "ok",
             settings,
-            videos,
+            videos: library.videos,
+            folders: library.folders,
+            libraryPreferences: library.preferences,
             error: "",
           }));
         }
@@ -478,6 +480,69 @@ export function App() {
           }
         : current.systemInfo,
     }));
+  }
+
+  function mergeVideos(nextVideos: VideoAssetSummary[]) {
+    setSnapshot((current) => {
+      const updated = new Map(nextVideos.map((video) => [video.video_id, video]));
+      return {
+        ...current,
+        videos: current.videos.map((video) => updated.get(video.video_id) || video),
+      };
+    });
+  }
+
+  async function refreshLibrarySnapshot() {
+    const library = await api.getVideoLibrary();
+    setSnapshot((current) => ({
+      ...current,
+      videos: library.videos,
+      folders: library.folders,
+      libraryPreferences: library.preferences,
+    }));
+    return library;
+  }
+
+  async function handleCreateFolder(name: string, parentId?: string | null) {
+    const folder = await api.createVideoFolder({ name, parent_id: parentId ?? null });
+    setSnapshot((current) => ({ ...current, folders: [folder, ...current.folders] }));
+    return folder;
+  }
+
+  async function handleUpdateFolder(folderId: string, payload: { name?: string | null; parent_id?: string | null; position?: number | null }) {
+    const folder = await api.updateVideoFolder(folderId, payload);
+    setSnapshot((current) => ({
+      ...current,
+      folders: current.folders.map((item) => (item.folder_id === folderId ? folder : item)),
+    }));
+    return folder;
+  }
+
+  async function handleDeleteFolder(folderId: string) {
+    await api.deleteVideoFolder(folderId);
+    await refreshLibrarySnapshot();
+  }
+
+  async function handleMoveVideo(videoId: string, folderId?: string | null) {
+    const updated = await api.moveVideoToFolder(videoId, { folder_id: folderId ?? null });
+    mergeVideos([updated]);
+    return updated;
+  }
+
+  async function handleSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }) {
+    const updated = await api.setVideoPin(videoId, payload);
+    mergeVideos([updated]);
+    return updated;
+  }
+
+  async function handleReorderVideos(videoIds: string[], folderId?: string | null) {
+    const updated = await api.reorderVideos({ video_ids: videoIds, folder_id: folderId ?? null });
+    mergeVideos(updated);
+  }
+
+  async function handleUpdateLibraryPreferences(newVideoPosition: "front" | "back") {
+    const preferences = await api.updateVideoLibraryPreferences({ new_video_position: newVideoPosition });
+    setSnapshot((current) => ({ ...current, libraryPreferences: preferences }));
   }
 
   function openConfigAssist(issueKey?: string) {
@@ -836,7 +901,7 @@ export function App() {
   const pageMeta = location.pathname.startsWith("/settings")
     ? { eyebrow: "设置中心", title: "运行配置、环境检测与日志", description: "围绕本地推理环境、模型配置与桌面端服务控制，统一管理 BiliSum 的运行能力。" }
     : location.pathname.startsWith("/library")
-      ? { eyebrow: "视频库", title: "视频资产与摘要结果", description: "集中管理已抓取的视频、摘要结果与当前处理状态。" }
+      ? { eyebrow: "视频库", title: "视频库", description: "集中管理已抓取的视频、摘要结果与当前处理状态。" }
       : location.pathname.startsWith("/videos/")
         ? { eyebrow: "视频详情", title: "本地摘要结果与任务记录", description: "围绕单个视频集中查看摘要、时间轴、转写全文与任务处理进度。" }
         : { eyebrow: "BiliSum Workspace", title: "懒得看视频？一键省流！", description: "把时间留给真正有质量的视频" };
@@ -1039,6 +1104,13 @@ export function App() {
                     serviceOnline={snapshot.serviceOnline}
                     runtimeDeviceLabel={runtimeDeviceLabel}
                     onToggleFavorite={handleToggleFavorite}
+                    onCreateFolder={handleCreateFolder}
+                    onUpdateFolder={handleUpdateFolder}
+                    onDeleteFolder={handleDeleteFolder}
+                    onMoveVideo={handleMoveVideo}
+                    onSetVideoPin={handleSetVideoPin}
+                    onReorderVideos={handleReorderVideos}
+                    onUpdateLibraryPreferences={handleUpdateLibraryPreferences}
                   />
                 )}
               />

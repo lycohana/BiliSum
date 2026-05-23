@@ -98,6 +98,48 @@ class VideoProbeRequest(BaseModel):
     force_refresh: bool = False
 
 
+class VideoFolderCreateRequest(BaseModel):
+    name: str
+    parent_id: str | None = None
+
+
+class VideoFolderUpdateRequest(BaseModel):
+    name: str | None = None
+    parent_id: str | None = None
+    position: float | None = None
+
+
+class VideoLibraryPreferencesResponse(BaseModel):
+    new_video_position: Literal["front", "back"] = "front"
+
+
+class VideoLibraryPreferencesUpdateRequest(BaseModel):
+    new_video_position: Literal["front", "back"]
+
+
+class VideoMoveRequest(BaseModel):
+    folder_id: str | None = None
+
+
+class VideoPinRequest(BaseModel):
+    global_pinned: bool | None = None
+    folder_pinned: bool | None = None
+
+
+class VideoReorderRequest(BaseModel):
+    video_ids: list[str]
+    folder_id: str | None = None
+
+
+class VideoFolderResponse(BaseModel):
+    folder_id: str
+    parent_id: str | None = None
+    name: str
+    position: float = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class VideoPageOptionResponse(BaseModel):
     page: int
     title: str
@@ -120,6 +162,11 @@ class VideoAssetSummaryResponse(BaseModel):
     has_result: bool = False
     is_favorite: bool = False
     favorite_updated_at: datetime | None = None
+    folder_id: str | None = None
+    global_order: float = 0
+    folder_order: float = 0
+    global_pinned: bool = False
+    folder_pinned: bool = False
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -145,6 +192,11 @@ class VideoAssetRecord(BaseModel):
     latest_error_message: str | None = None
     is_favorite: bool = False
     favorite_updated_at: datetime | None = None
+    folder_id: str | None = None
+    global_order: float = 0
+    folder_order: float = 0
+    global_pinned: bool = False
+    folder_pinned: bool = False
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -164,6 +216,11 @@ class VideoAssetRecord(BaseModel):
             has_result=self.latest_result is not None,
             is_favorite=self.is_favorite,
             favorite_updated_at=self.favorite_updated_at,
+            folder_id=self.folder_id,
+            global_order=self.global_order,
+            folder_order=self.folder_order,
+            global_pinned=self.global_pinned,
+            folder_pinned=self.folder_pinned,
             pages=self.pages,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -182,6 +239,12 @@ class VideoProbeResponse(BaseModel):
     cached: bool = False
     requires_selection: bool = False
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
+
+
+class VideoLibraryResponse(BaseModel):
+    videos: list[VideoAssetSummaryResponse] = Field(default_factory=list)
+    folders: list[VideoFolderResponse] = Field(default_factory=list)
+    preferences: VideoLibraryPreferencesResponse = Field(default_factory=VideoLibraryPreferencesResponse)
 
 
 class TaskSummaryResponse(BaseModel):

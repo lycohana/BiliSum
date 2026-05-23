@@ -11,10 +11,11 @@ export function OverviewIcon() {
   );
 }
 
-export function FolderIcon() {
+export function FolderIcon(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3.5 7.25A2.25 2.25 0 0 1 5.75 5h4.1l2 2.45h6.4a2.25 2.25 0 0 1 2.25 2.25v7.05A2.25 2.25 0 0 1 18.25 19H5.75a2.25 2.25 0 0 1-2.25-2.25v-9.5Z" />
+      <path d="M3.75 9.25h16.5" />
     </svg>
   );
 }
@@ -101,10 +102,18 @@ export function TerminalIcon() {
 export function LibraryIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h12a2.5 2.5 0 0 1 2.5 2.5v9A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5v-9Z" />
-      <path d="M7.5 9h9" />
-      <path d="M7.5 13h6" />
-      <path d="M7.5 16h4" />
+      <rect x="4" y="5" width="16" height="14" rx="2.5" />
+      <path d="M8 9h8" />
+      <path d="M8 13h8" />
+      <path d="M8 17h5" />
+    </svg>
+  );
+}
+
+export function StarIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="m12 3.75 2.5 5.05 5.58.81-4.04 3.94.95 5.56L12 16.48l-4.99 2.63.95-5.56-4.04-3.94 5.58-.81L12 3.75Z" />
     </svg>
   );
 }
@@ -165,6 +174,47 @@ export function SearchIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <circle cx="11" cy="11" r="6.5" />
       <path d="M16 16L20 20" />
+    </svg>
+  );
+}
+
+export function GripVerticalIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="9" cy="5" r="1" />
+      <circle cx="9" cy="19" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="15" cy="5" r="1" />
+      <circle cx="15" cy="19" r="1" />
+    </svg>
+  );
+}
+
+export function PinIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  );
+}
+
+export function CornerUpLeftIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="m9 14-5-5 5-5" />
+      <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+    </svg>
+  );
+}
+
+export function ArrowUpToLineIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M5 3h14" />
+      <path d="m18 13-6-6-6 6" />
+      <path d="M12 7v14" />
     </svg>
   );
 }

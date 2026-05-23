@@ -123,7 +123,7 @@ wheels = [
 
 [[package]]
 name = "bilisum-workspace"
-version = "1.16.2"
+version = "1.16.3"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -2308,7 +2308,7 @@ wheels = [
 
 [[package]]
 name = "video-sum-core"
-version = "1.16.2"
+version = "1.16.3"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "httpx" },
@@ -2327,7 +2327,7 @@ requires-dist = [
 
 [[package]]
 name = "video-sum-infra"
-version = "1.16.2"
+version = "1.16.3"
 source = { editable = "packages/infra" }
 dependencies = [
     { name = "pydantic" },
@@ -2342,7 +2342,7 @@ requires-dist = [
 
 [[package]]
 name = "video-sum-service"
-version = "1.16.2"
+version = "1.16.3"
 source = { editable = "apps/service" }
 dependencies = [
     { name = "fastapi" },

@@ -75,9 +75,33 @@ export type VideoAssetSummary = {
   has_result: boolean;
   is_favorite: boolean;
   favorite_updated_at?: string | null;
+  folder_id?: string | null;
+  global_order: number;
+  folder_order: number;
+  global_pinned: boolean;
+  folder_pinned: boolean;
   pages: VideoPageOption[];
   created_at: string;
   updated_at: string;
+};
+
+export type VideoFolder = {
+  folder_id: string;
+  parent_id?: string | null;
+  name: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VideoLibraryPreferences = {
+  new_video_position: "front" | "back";
+};
+
+export type VideoLibraryState = {
+  videos: VideoAssetSummary[];
+  folders: VideoFolder[];
+  preferences: VideoLibraryPreferences;
 };
 
 export type VideoPageOption = {
