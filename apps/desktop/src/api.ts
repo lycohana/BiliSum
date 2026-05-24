@@ -299,7 +299,7 @@ export const api = {
   deleteVideo(videoId: string) {
     return fetchJson<{ deleted: boolean }>(`/api/v1/videos/${videoId}`, { method: "DELETE" });
   },
-  moveVideoToFolder(videoId: string, payload: { folder_id?: string | null }) {
+  moveVideoToFolder(videoId: string, payload: { folder_id?: string | null; folder_ids?: string[] | null }) {
     return fetchJson<VideoAssetDetail>(`/api/v1/videos/${videoId}/move`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

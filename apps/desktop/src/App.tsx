@@ -523,10 +523,24 @@ export function App() {
     await refreshLibrarySnapshot();
   }
 
-  async function handleMoveVideo(videoId: string, folderId?: string | null) {
-    const updated = await api.moveVideoToFolder(videoId, { folder_id: folderId ?? null });
+  async function handleMoveVideo(videoId: string, folderId?: string | null, folderIds?: string[]) {
+    const updated = await api.moveVideoToFolder(videoId, folderIds ? { folder_ids: folderIds } : { folder_id: folderId ?? null });
     mergeVideos([updated]);
     return updated;
+  }
+
+  async function handleDeleteVideo(videoId: string) {
+    const previousVideos = snapshot.videos;
+    setSnapshot((current) => ({
+      ...current,
+      videos: current.videos.filter((video) => video.video_id !== videoId),
+    }));
+    try {
+      await api.deleteVideo(videoId);
+    } catch (error) {
+      setSnapshot((current) => ({ ...current, videos: previousVideos }));
+      throw error;
+    }
   }
 
   async function handleSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }) {
@@ -1107,6 +1121,7 @@ export function App() {
                     onCreateFolder={handleCreateFolder}
                     onUpdateFolder={handleUpdateFolder}
                     onDeleteFolder={handleDeleteFolder}
+                    onDeleteVideo={handleDeleteVideo}
                     onMoveVideo={handleMoveVideo}
                     onSetVideoPin={handleSetVideoPin}
                     onReorderVideos={handleReorderVideos}

@@ -597,7 +597,10 @@ def reorder_videos(payload: VideoReorderRequest, request: Request) -> list[Video
 @router.patch("/{video_id}/move", response_model=VideoAssetDetailResponse)
 def move_video_to_folder(video_id: str, payload: VideoMoveRequest, request: Request) -> VideoAssetDetailResponse:
     task_store: SqliteTaskRepository = request.app.state.task_repository
-    updated = task_store.move_video_to_folder(video_id, payload.folder_id)
+    if payload.folder_ids is not None:
+        updated = task_store.set_video_folders(video_id, payload.folder_ids)
+    else:
+        updated = task_store.move_video_to_folder(video_id, payload.folder_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Video or folder not found.")
     return localize_video_cover(task_store, updated).to_detail()

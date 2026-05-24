@@ -83,8 +83,9 @@ export function isFolderDescendantOf(folders: VideoFolder[], possibleDescendantI
 export function countDirectVideosByFolder(videos: VideoAssetSummary[]) {
   const counts = new Map<string, number>();
   for (const video of videos) {
-    if (!video.folder_id) continue;
-    counts.set(video.folder_id, (counts.get(video.folder_id) || 0) + 1);
+    for (const folderId of getVideoFolderIds(video)) {
+      counts.set(folderId, (counts.get(folderId) || 0) + 1);
+    }
   }
   return counts;
 }
@@ -119,9 +120,14 @@ export function sortVideosForScope(videos: VideoAssetSummary[], scope: LibrarySc
 
 export function filterVideosByScope(videos: VideoAssetSummary[], scope: LibraryScope) {
   if (scope === "all") return videos;
-  if (scope === "unfiled") return videos.filter((video) => !video.folder_id);
+  if (scope === "unfiled") return videos.filter((video) => getVideoFolderIds(video).length === 0);
   if (scope === "favorite") return videos.filter((video) => video.is_favorite);
-  return videos.filter((video) => video.folder_id === scope);
+  return videos.filter((video) => getVideoFolderIds(video).includes(scope));
+}
+
+export function getVideoFolderIds(video: VideoAssetSummary) {
+  if (Array.isArray(video.folder_ids)) return video.folder_ids.filter(Boolean);
+  return video.folder_id ? [video.folder_id] : [];
 }
 
 export function getFolderAppendPosition(folders: VideoFolder[], parentId: string | null, draggedFolderId?: string | null) {

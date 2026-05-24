@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   closestCenter,
   DndContext,
@@ -25,7 +25,19 @@ import { Tree, type NodeRendererProps } from "react-arborist";
 
 import type { LibraryFilter, Snapshot } from "../appModel";
 import { platformLabel, taskStatusClass } from "../appModel";
-import { ArrowUpToLineIcon, CornerUpLeftIcon, FolderIcon, GripVerticalIcon, LibraryIcon, PinIcon, SearchIcon, StarIcon } from "../components/AppIcons";
+import {
+  ArrowRightIcon,
+  ArrowUpToLineIcon,
+  CornerUpLeftIcon,
+  ExternalLinkIcon,
+  FolderIcon,
+  GripVerticalIcon,
+  LibraryIcon,
+  PinIcon,
+  SearchIcon,
+  StarIcon,
+  TrashIcon,
+} from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { VideoCard } from "../components/VideoCard";
 import {
@@ -36,6 +48,7 @@ import {
   getFolderAncestorIds,
   getFolderMovePositionFromIndex,
   getSiblingFolderMovePayload,
+  getVideoFolderIds,
   isFolderDescendantOf,
   loadLibraryViewMode,
   saveLibraryViewMode,
@@ -78,7 +91,8 @@ type LibraryPageProps = {
   onCreateFolder(name: string, parentId?: string | null): Promise<VideoFolder>;
   onUpdateFolder(folderId: string, payload: { name?: string | null; parent_id?: string | null; position?: number | null }): Promise<VideoFolder>;
   onDeleteFolder(folderId: string): Promise<void>;
-  onMoveVideo(videoId: string, folderId?: string | null): Promise<VideoAssetDetail>;
+  onDeleteVideo(videoId: string): Promise<void>;
+  onMoveVideo(videoId: string, folderId?: string | null, folderIds?: string[]): Promise<VideoAssetDetail>;
   onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
   onReorderVideos(videoIds: string[], folderId?: string | null): Promise<void>;
   onUpdateLibraryPreferences(newVideoPosition: "front" | "back"): Promise<void>;
@@ -88,6 +102,18 @@ type OptimisticVideoOrder = {
   key: string;
   ids: string[];
 } | null;
+
+type VideoActionMenu = {
+  videoId: string;
+  x: number;
+  y: number;
+  submenuSide: "left" | "right";
+} | null;
+
+type FolderMenuItem = {
+  folder: VideoFolder;
+  depth: number;
+};
 
 export function LibraryPage({
   snapshot,
@@ -104,11 +130,13 @@ export function LibraryPage({
   onCreateFolder,
   onUpdateFolder,
   onDeleteFolder,
+  onDeleteVideo,
   onMoveVideo,
   onSetVideoPin,
   onReorderVideos,
   onUpdateLibraryPreferences,
 }: LibraryPageProps) {
+  const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(1);
   const [activeScope, setActiveScope] = useState<LibraryScope>("all");
   const [viewMode, setViewMode] = useState<LibraryViewMode>(() => loadLibraryViewMode());
@@ -122,6 +150,9 @@ export function LibraryPage({
   const [folderRenameId, setFolderRenameId] = useState<string | null>(null);
   const [folderRenameName, setFolderRenameName] = useState("");
   const [folderDeleteConfirmId, setFolderDeleteConfirmId] = useState<string | null>(null);
+  const [videoActionMenu, setVideoActionMenu] = useState<VideoActionMenu>(null);
+  const [videoDeleteConfirmId, setVideoDeleteConfirmId] = useState<string | null>(null);
+  const [videoActionBusy, setVideoActionBusy] = useState(false);
   const [libraryNotice, setLibraryNotice] = useState<{ message: string; tone: "info" | "success" | "error"; version: number }>({ message: "", tone: "info", version: 0 });
   const [newVideoSettingsOpen, setNewVideoSettingsOpen] = useState(false);
   const videoMoveBusyRef = useRef(false);
@@ -139,6 +170,7 @@ export function LibraryPage({
   const folders = useMemo(() => sortFolders(snapshot.folders), [snapshot.folders]);
   const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.folder_id, folder])), [folders]);
   const folderTreeData = useMemo(() => buildFolderTree(folders), [folders]);
+  const folderMenuItems = useMemo(() => flattenFolderMenuItems(folderTreeData), [folderTreeData]);
   const directVideoCounts = useMemo(() => countDirectVideosByFolder(snapshot.videos), [snapshot.videos]);
   const initialOpenState = useMemo(() => Object.fromEntries(
     folders
@@ -160,6 +192,7 @@ export function LibraryPage({
   const activeFolder = typeof activeScope === "string" && !["all", "unfiled", "favorite"].includes(activeScope)
     ? folderMap.get(activeScope) || null
     : null;
+  const isFolderScope = Boolean(activeFolder);
   const canReorder = canReorderLibraryView(query, activeFilter) && activeScope !== "favorite";
   const videosPerPage = viewMode === "cover" ? Math.max(1, coverColumnCount) * COVER_ROWS_PER_PAGE : LIST_VIDEOS_PER_PAGE;
   const totalPages = Math.max(1, Math.ceil(visibleBaseVideos.length / videosPerPage));
@@ -181,6 +214,14 @@ export function LibraryPage({
   const draftParentFolder = folderDraftParentId ? folderMap.get(folderDraftParentId) || null : null;
   const scopeTitle = activeScope === "all" ? "全部视频" : activeScope === "unfiled" ? "未归档" : activeScope === "favorite" ? "收藏" : activeFolder?.name || "文件夹";
   const activeDraggedVideo = activeVideoDragId ? snapshot.videos.find((video) => video.video_id === activeVideoDragId) || null : null;
+  const videoMenuVideo = videoActionMenu ? snapshot.videos.find((video) => video.video_id === videoActionMenu.videoId) || null : null;
+
+  function getFolderLabel(video: VideoAssetSummary) {
+    const names = getVideoFolderIds(video).map((folderId) => folderMap.get(folderId)?.name).filter((name): name is string => Boolean(name));
+    if (!names.length) return "未归档";
+    if (names.length === 1) return names[0];
+    return `${names[0]} +${names.length - 1}`;
+  }
 
   useEffect(() => {
     setCurrentPage(1);
@@ -261,6 +302,31 @@ export function LibraryPage({
     };
   }, [folderActionId]);
 
+  useEffect(() => {
+    if (!videoActionMenu) return;
+
+    function closeVideoActions(event?: Event) {
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest(".library-video-context-menu")) return;
+      setVideoActionMenu(null);
+      setVideoDeleteConfirmId(null);
+      setVideoActionBusy(false);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeVideoActions();
+      }
+    }
+
+    document.addEventListener("pointerdown", closeVideoActions);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeVideoActions);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [videoActionMenu]);
+
   function beginCreateFolder(parentId?: string | null) {
     setFolderDraftParentId(parentId ?? null);
     setFolderDraftName("");
@@ -318,6 +384,35 @@ export function LibraryPage({
 
   function showLibraryNotice(message: string, tone: "info" | "success" | "error" = "info") {
     setLibraryNotice((current) => ({ message, tone, version: current.version + 1 }));
+  }
+
+  function openVideoActions(event: MouseEvent, videoId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setVideoDeleteConfirmId(null);
+    setVideoActionBusy(false);
+    setVideoActionMenu({ videoId, ...resolveContextMenuPosition(event.clientX, event.clientY) });
+  }
+
+  async function runVideoAction(action: () => Promise<void>, successMessage?: string) {
+    if (videoActionBusy) return;
+    setVideoActionBusy(true);
+    try {
+      await action();
+      setVideoActionMenu(null);
+      setVideoDeleteConfirmId(null);
+      if (successMessage) showLibraryNotice(successMessage, "success");
+    } catch (error) {
+      showLibraryNotice(error instanceof Error ? error.message : "操作失败", "error");
+    } finally {
+      setVideoActionBusy(false);
+    }
+  }
+
+  function closeVideoActions() {
+    setVideoActionMenu(null);
+    setVideoDeleteConfirmId(null);
+    setVideoActionBusy(false);
   }
 
   function handleVideoDragStart(event: DragStartEvent) {
@@ -426,7 +521,7 @@ export function LibraryPage({
               icon={<FolderIcon />}
               active={activeScope === "unfiled"}
               label="未归档"
-              count={snapshot.videos.filter((video) => !video.folder_id).length}
+              count={snapshot.videos.filter((video) => getVideoFolderIds(video).length === 0).length}
               onClick={() => setActiveScope("unfiled")}
               droppableId={UNFILED_DROP_ID}
               folderId={null}
@@ -604,10 +699,11 @@ export function LibraryPage({
                       <SortableVideoCard
                         key={video.video_id}
                         video={video}
-                        folderName={video.folder_id ? folderMap.get(video.folder_id)?.name : "未归档"}
-                        canPinInFolder={activeScope !== "all" && activeScope !== "favorite"}
+                        folderName={getFolderLabel(video)}
+                        canPinInFolder={isFolderScope}
                         onToggleFavorite={onToggleFavorite}
                         onSetVideoPin={onSetVideoPin}
+                        onOpenContextMenu={openVideoActions}
                       />
                   ))}
                 </div>
@@ -619,10 +715,11 @@ export function LibraryPage({
                       <SortableVideoListItem
                         key={video.video_id}
                         video={video}
-                        folderName={video.folder_id ? folderMap.get(video.folder_id)?.name : "未归档"}
-                        canPinInFolder={activeScope !== "all" && activeScope !== "favorite"}
+                        folderName={getFolderLabel(video)}
+                        canPinInFolder={isFolderScope}
                         onToggleFavorite={onToggleFavorite}
                         onSetVideoPin={onSetVideoPin}
+                        onOpenContextMenu={openVideoActions}
                       />
                   ))}
                 </div>
@@ -663,8 +760,8 @@ export function LibraryPage({
             {viewMode === "cover" ? (
               <VideoCard
                 video={activeDraggedVideo}
-                folderName={activeDraggedVideo.folder_id ? folderMap.get(activeDraggedVideo.folder_id)?.name : "未归档"}
-                canPinInFolder={activeScope !== "all" && activeScope !== "favorite"}
+                folderName={getFolderLabel(activeDraggedVideo)}
+                canPinInFolder={isFolderScope}
                 onToggleFavorite={onToggleFavorite}
                 onToggleGlobalPin={async (videoId, nextPinned) => {
                   await onSetVideoPin(videoId, { global_pinned: nextPinned });
@@ -676,16 +773,89 @@ export function LibraryPage({
             ) : (
               <VideoListItem
                 video={activeDraggedVideo}
-                folderName={activeDraggedVideo.folder_id ? folderMap.get(activeDraggedVideo.folder_id)?.name : "未归档"}
-                canPinInFolder={activeScope !== "all" && activeScope !== "favorite"}
+                folderName={getFolderLabel(activeDraggedVideo)}
+                canPinInFolder={isFolderScope}
                 onToggleFavorite={onToggleFavorite}
                 onSetVideoPin={onSetVideoPin}
+                onOpenContextMenu={openVideoActions}
               />
             )}
           </div>
         ) : null}
       </DragOverlay>
       </DndContext>
+      {videoActionMenu && videoMenuVideo ? (
+        <VideoContextMenu
+          video={videoMenuVideo}
+          x={videoActionMenu.x}
+          y={videoActionMenu.y}
+          submenuSide={videoActionMenu.submenuSide}
+          folders={folderMenuItems}
+          currentFolderName={getFolderLabel(videoMenuVideo)}
+          canPinInFolder={getVideoFolderIds(videoMenuVideo).length > 0}
+          busy={videoActionBusy}
+          deleteConfirmOpen={videoDeleteConfirmId === videoMenuVideo.video_id}
+          onOpenDetail={() => {
+            closeVideoActions();
+            navigate(`/videos/${videoMenuVideo.video_id}`);
+          }}
+          onRevealFolder={() => {
+            const primaryFolderId = getVideoFolderIds(videoMenuVideo)[0] || null;
+            if (!primaryFolderId) {
+              setActiveScope("unfiled");
+            } else {
+              setActiveScope(primaryFolderId);
+              const ancestorIds = getFolderAncestorIds(folders, primaryFolderId);
+              if (ancestorIds.length) {
+                setCollapsedFolderIds((current) => {
+                  const next = new Set(current);
+                  for (const folderId of ancestorIds) next.delete(folderId);
+                  return next;
+                });
+              }
+            }
+            closeVideoActions();
+          }}
+          onMove={(folderId) => runVideoAction(
+            async () => {
+              await onMoveVideo(videoMenuVideo.video_id, folderId);
+            },
+            folderId ? "已移动到分组" : "已移到未归档",
+          )}
+          onSetFolders={(folderIds) => runVideoAction(
+            async () => {
+              await onMoveVideo(videoMenuVideo.video_id, undefined, folderIds);
+            },
+            folderIds.length ? "分组已更新" : "已移到未归档",
+          )}
+          onToggleFavorite={() => runVideoAction(
+            async () => {
+              await onToggleFavorite(videoMenuVideo.video_id, !videoMenuVideo.is_favorite);
+            },
+            videoMenuVideo.is_favorite ? "已取消收藏" : "已收藏",
+          )}
+          onToggleGlobalPin={() => runVideoAction(
+            async () => {
+              await onSetVideoPin(videoMenuVideo.video_id, { global_pinned: !videoMenuVideo.global_pinned });
+            },
+            videoMenuVideo.global_pinned ? "已取消全局置顶" : "已全局置顶",
+          )}
+          onToggleFolderPin={() => runVideoAction(
+            async () => {
+              await onSetVideoPin(videoMenuVideo.video_id, { folder_pinned: !videoMenuVideo.folder_pinned });
+            },
+            videoMenuVideo.folder_pinned ? "已取消文件夹置顶" : "已文件夹置顶",
+          )}
+          onRequestDelete={() => setVideoDeleteConfirmId(videoMenuVideo.video_id)}
+          onCancelDelete={() => setVideoDeleteConfirmId(null)}
+          onDelete={() => runVideoAction(
+            async () => {
+              await onDeleteVideo(videoMenuVideo.video_id);
+            },
+            "视频已删除",
+          )}
+        />
+      ) : null}
       <FloatingNoticeStack notices={[{ id: "library-action-status", message: libraryNotice.message, tone: libraryNotice.tone, version: libraryNotice.version }]} />
     </section>
   );
@@ -727,12 +897,175 @@ function ScopeButton({
   );
 }
 
+function VideoContextMenu({
+  video,
+  x,
+  y,
+  submenuSide,
+  folders,
+  currentFolderName,
+  canPinInFolder,
+  busy,
+  deleteConfirmOpen,
+  onOpenDetail,
+  onRevealFolder,
+  onMove,
+  onSetFolders,
+  onToggleFavorite,
+  onToggleGlobalPin,
+  onToggleFolderPin,
+  onRequestDelete,
+  onCancelDelete,
+  onDelete,
+}: {
+  video: VideoAssetSummary;
+  x: number;
+  y: number;
+  submenuSide: "left" | "right";
+  folders: FolderMenuItem[];
+  currentFolderName: string;
+  canPinInFolder: boolean;
+  busy: boolean;
+  deleteConfirmOpen: boolean;
+  onOpenDetail(): void;
+  onRevealFolder(): void;
+  onMove(folderId: string | null): void;
+  onSetFolders(folderIds: string[]): void;
+  onToggleFavorite(): void;
+  onToggleGlobalPin(): void;
+  onToggleFolderPin(): void;
+  onRequestDelete(): void;
+  onCancelDelete(): void;
+  onDelete(): void;
+}) {
+  const selectedFolderIds = getVideoFolderIds(video);
+  return (
+    <div
+      className={`library-video-context-menu ${deleteConfirmOpen ? "is-expanded" : ""} ${submenuSide === "left" ? "is-submenu-left" : ""}`}
+      style={{ left: x, top: y }}
+      role="menu"
+      aria-label={`${video.title} 的操作菜单`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+      <div className="library-video-menu-heading">
+        <strong>{video.title}</strong>
+        <span>{currentFolderName}</span>
+      </div>
+      <button type="button" role="menuitem" disabled={busy} onClick={onOpenDetail}>
+        <ExternalLinkIcon />
+        <span>打开详情</span>
+      </button>
+      <button type="button" role="menuitem" disabled={busy} onClick={onRevealFolder}>
+        <ArrowRightIcon />
+        <span>跳到所在分组</span>
+      </button>
+      <div className="library-video-menu-group">
+        <button className="library-video-submenu-trigger" type="button" role="menuitem" disabled={busy}>
+          <FolderIcon />
+          <span>设置分组</span>
+        </button>
+        <div className="library-video-submenu" role="menu" aria-label="设置分组">
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={selectedFolderIds.length === 0}
+            disabled={busy || selectedFolderIds.length === 0}
+            className={selectedFolderIds.length === 0 ? "is-current" : ""}
+            onClick={() => onSetFolders([])}
+          >
+            <span className="library-video-menu-check" aria-hidden="true">{selectedFolderIds.length === 0 ? "✓" : ""}</span>
+            <span>未归档</span>
+          </button>
+          <div className="library-video-folder-options">
+            {folders.map(({ folder, depth }) => {
+              const selected = selectedFolderIds.includes(folder.folder_id);
+              const nextFolderIds = selected
+                ? selectedFolderIds.filter((folderId) => folderId !== folder.folder_id)
+                : [...selectedFolderIds, folder.folder_id];
+              return (
+                <button
+                  key={folder.folder_id}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={selected}
+                  disabled={busy}
+                  className={selected ? "is-current" : ""}
+                  style={{ paddingLeft: 10 + depth * 14 }}
+                  onClick={() => onSetFolders(nextFolderIds)}
+                >
+                  <span className="library-video-menu-check" aria-hidden="true">{selected ? "✓" : ""}</span>
+                  <span>{folder.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div className="library-video-menu-divider" />
+      <button type="button" role="menuitem" disabled={busy} onClick={onToggleFavorite}>
+        <StarIcon />
+        <span>{video.is_favorite ? "取消收藏" : "收藏"}</span>
+      </button>
+      <button type="button" role="menuitem" disabled={busy} onClick={onToggleGlobalPin}>
+        <PinIcon />
+        <span>{video.global_pinned ? "取消全局置顶" : "全局置顶"}</span>
+      </button>
+      <button type="button" role="menuitem" disabled={busy || !canPinInFolder} onClick={onToggleFolderPin}>
+        <PinIcon />
+        <span>{video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}</span>
+      </button>
+      {deleteConfirmOpen ? (
+        <div className="library-video-delete-confirm">
+          <p>删除后会移除视频文件与任务记录。</p>
+          <div>
+            <button type="button" disabled={busy} onClick={onCancelDelete}>取消</button>
+            <button className="is-danger" type="button" disabled={busy} onClick={onDelete}>删除</button>
+          </div>
+        </div>
+      ) : (
+        <button className="is-danger" type="button" role="menuitem" disabled={busy} onClick={onRequestDelete}>
+          <TrashIcon />
+          <span>删除视频</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function flattenFolderMenuItems(nodes: LibraryFolderTreeNode[], depth = 0): FolderMenuItem[] {
+  return nodes.flatMap((node) => [
+    { folder: node.folder, depth },
+    ...flattenFolderMenuItems(node.children, depth + 1),
+  ]);
+}
+
+function resolveContextMenuPosition(clientX: number, clientY: number) {
+  const menuWidth = 292;
+  const submenuWidth = 248;
+  const menuHeight = 560;
+  const margin = 12;
+  const viewportWidth = globalThis.window?.innerWidth || 1280;
+  const viewportHeight = globalThis.window?.innerHeight || 720;
+  const submenuSide: "left" | "right" = clientX + menuWidth + submenuWidth + margin <= viewportWidth ? "right" : "left";
+  return {
+    x: Math.max(margin, Math.min(clientX, viewportWidth - menuWidth - margin)),
+    y: Math.max(margin, Math.min(clientY, viewportHeight - menuHeight - margin)),
+    submenuSide,
+  };
+}
+
 function VideoListItem({
   video,
   folderName,
   canPinInFolder,
   onToggleFavorite,
   onSetVideoPin,
+  onOpenContextMenu,
   className = "",
   dragHandleProps,
   style,
@@ -743,13 +1076,14 @@ function VideoListItem({
   canPinInFolder: boolean;
   onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
   onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
+  onOpenContextMenu?: (event: MouseEvent, videoId: string) => void;
   className?: string;
   dragHandleProps?: Record<string, unknown>;
   style?: React.CSSProperties;
   setNodeRef?: (node: HTMLDivElement | null) => void;
 }) {
   return (
-    <div ref={setNodeRef} style={style} className={`library-list-item ${className}`.trim()}>
+    <div ref={setNodeRef} style={style} className={`library-list-item ${className}`.trim()} onContextMenu={(event) => onOpenContextMenu?.(event, video.video_id)}>
       <span className="library-drag-handle" title="拖动排序" {...dragHandleProps}><GripVerticalIcon /></span>
       <Link className="library-list-cover" to={`/videos/${video.video_id}`} draggable={false}>
         {video.cover_url ? <img src={video.cover_url} alt={video.title} loading="lazy" draggable={false} /> : <span>VIDEO</span>}
@@ -762,16 +1096,17 @@ function VideoListItem({
       <span className="library-list-date">{formatDateTime(video.updated_at)}</span>
       <div className="library-list-actions">
         <button type="button" title={video.is_favorite ? "取消收藏" : "收藏"} onClick={() => void onToggleFavorite(video.video_id, !video.is_favorite)}>{video.is_favorite ? "★" : "☆"}</button>
-        <button className={`library-pin-button ${video.global_pinned ? "is-active" : ""}`} type="button" title={video.global_pinned ? "取消全局置顶" : "全局置顶"} onClick={() => void onSetVideoPin(video.video_id, { global_pinned: !video.global_pinned })}>
-          <PinIcon />
-          <span>全局置顶</span>
-        </button>
         {canPinInFolder ? (
           <button className={`library-pin-button ${video.folder_pinned ? "is-active" : ""}`} type="button" title={video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"} onClick={() => void onSetVideoPin(video.video_id, { folder_pinned: !video.folder_pinned })}>
             <PinIcon />
             <span>文件夹置顶</span>
           </button>
-        ) : null}
+        ) : (
+          <button className={`library-pin-button ${video.global_pinned ? "is-active" : ""}`} type="button" title={video.global_pinned ? "取消全局置顶" : "全局置顶"} onClick={() => void onSetVideoPin(video.video_id, { global_pinned: !video.global_pinned })}>
+            <PinIcon />
+            <span>全局置顶</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -783,12 +1118,14 @@ function SortableVideoCard({
   canPinInFolder,
   onToggleFavorite,
   onSetVideoPin,
+  onOpenContextMenu,
 }: {
   video: VideoAssetSummary;
   folderName?: string;
   canPinInFolder: boolean;
   onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
   onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
+  onOpenContextMenu?: (event: MouseEvent, videoId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: video.video_id,
@@ -813,6 +1150,7 @@ function SortableVideoCard({
           onToggleFolderPin={async (videoId, nextPinned) => {
             await onSetVideoPin(videoId, { folder_pinned: nextPinned });
           }}
+          onOpenContextMenu={onOpenContextMenu}
         />
       </div>
     </div>
@@ -825,12 +1163,14 @@ function SortableVideoListItem({
   canPinInFolder,
   onToggleFavorite,
   onSetVideoPin,
+  onOpenContextMenu,
 }: {
   video: VideoAssetSummary;
   folderName?: string;
   canPinInFolder: boolean;
   onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
   onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
+  onOpenContextMenu?: (event: MouseEvent, videoId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: video.video_id,
@@ -851,6 +1191,7 @@ function SortableVideoListItem({
       canPinInFolder={canPinInFolder}
       onToggleFavorite={onToggleFavorite}
       onSetVideoPin={onSetVideoPin}
+      onOpenContextMenu={onOpenContextMenu}
       dragHandleProps={{ ...attributes, ...listeners }}
     />
   );

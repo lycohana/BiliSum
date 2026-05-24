@@ -119,6 +119,7 @@ class VideoLibraryPreferencesUpdateRequest(BaseModel):
 
 class VideoMoveRequest(BaseModel):
     folder_id: str | None = None
+    folder_ids: list[str] | None = None
 
 
 class VideoPinRequest(BaseModel):
@@ -163,6 +164,7 @@ class VideoAssetSummaryResponse(BaseModel):
     is_favorite: bool = False
     favorite_updated_at: datetime | None = None
     folder_id: str | None = None
+    folder_ids: list[str] = Field(default_factory=list)
     global_order: float = 0
     folder_order: float = 0
     global_pinned: bool = False
@@ -193,6 +195,7 @@ class VideoAssetRecord(BaseModel):
     is_favorite: bool = False
     favorite_updated_at: datetime | None = None
     folder_id: str | None = None
+    folder_ids: list[str] = Field(default_factory=list)
     global_order: float = 0
     folder_order: float = 0
     global_pinned: bool = False
@@ -217,6 +220,7 @@ class VideoAssetRecord(BaseModel):
             is_favorite=self.is_favorite,
             favorite_updated_at=self.favorite_updated_at,
             folder_id=self.folder_id,
+            folder_ids=self.folder_ids,
             global_order=self.global_order,
             folder_order=self.folder_order,
             global_pinned=self.global_pinned,

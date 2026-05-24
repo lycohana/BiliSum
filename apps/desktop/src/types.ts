@@ -76,6 +76,7 @@ export type VideoAssetSummary = {
   is_favorite: boolean;
   favorite_updated_at?: string | null;
   folder_id?: string | null;
+  folder_ids?: string[];
   global_order: number;
   folder_order: number;
   global_pinned: boolean;

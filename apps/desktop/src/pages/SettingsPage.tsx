@@ -1360,6 +1360,10 @@ export function SettingsPage({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!form || isSaving) return;
+    if (!isDirty) {
+      setSaveStatus("");
+      return;
+    }
     const validationError = validateSettingsBeforeSave(form);
     if (validationError) {
       setSaveStatus(validationError.message);
@@ -1857,8 +1861,8 @@ export function SettingsPage({
           </div>
         </div>
         <div className="settings-nav-actions">
-          <button className="primary-button settings-save-btn" type="button" disabled={isSaving} onClick={async (e) => { e.preventDefault(); await save(e as FormEvent); }}>
-            {isSaving ? "保存中..." : "保存设置"}
+          <button className="primary-button settings-save-btn" type="button" disabled={isSaving || !isDirty} onClick={async (e) => { e.preventDefault(); await save(e as FormEvent); }}>
+            {isSaving ? "保存中..." : isDirty ? "保存设置" : "已保存"}
           </button>
           <div className="settings-nav-summary">
             <div className="settings-nav-summary-row">

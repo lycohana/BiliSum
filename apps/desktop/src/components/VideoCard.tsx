@@ -13,6 +13,7 @@ export function VideoCard({
   onToggleFavorite,
   onToggleGlobalPin,
   onToggleFolderPin,
+  onOpenContextMenu,
 }: {
   video: VideoAssetSummary;
   folderName?: string;
@@ -20,6 +21,7 @@ export function VideoCard({
   onToggleFavorite?: (videoId: string, nextFavorite: boolean) => Promise<void>;
   onToggleGlobalPin?: (videoId: string, nextPinned: boolean) => Promise<void>;
   onToggleFolderPin?: (videoId: string, nextPinned: boolean) => Promise<void>;
+  onOpenContextMenu?: (event: MouseEvent, videoId: string) => void;
 }) {
   const badgeClass = taskStatusClass(video.latest_status);
   const isMultiPageVideo = video.pages.length > 1;
@@ -55,7 +57,7 @@ export function VideoCard({
   }
 
   return (
-    <Link className="video-card" to={`/videos/${video.video_id}`} draggable={false}>
+    <Link className="video-card" to={`/videos/${video.video_id}`} draggable={false} onContextMenu={(event) => onOpenContextMenu?.(event, video.video_id)}>
       <div className="video-card-cover">
         <span className="video-card-drag-handle" title="拖动排序" aria-hidden="true"><GripVerticalIcon /></span>
         {video.cover_url ? (
@@ -78,18 +80,6 @@ export function VideoCard({
           </button>
         ) : null}
         <div className="video-card-pin-actions">
-          {onToggleGlobalPin ? (
-            <button
-              aria-label={video.global_pinned ? "取消全局置顶" : "全局置顶"}
-              className={`video-card-pin ${video.global_pinned ? "is-active" : ""}`}
-              title={video.global_pinned ? "取消全局置顶" : "全局置顶"}
-              type="button"
-              onClick={(event) => void handleGlobalPinClick(event)}
-            >
-              <PinIcon />
-              <span>全局置顶</span>
-            </button>
-          ) : null}
           {canPinInFolder && onToggleFolderPin ? (
             <button
               aria-label={video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}
@@ -100,6 +90,17 @@ export function VideoCard({
             >
               <PinIcon />
               <span>文件夹置顶</span>
+            </button>
+          ) : onToggleGlobalPin ? (
+            <button
+              aria-label={video.global_pinned ? "取消全局置顶" : "全局置顶"}
+              className={`video-card-pin ${video.global_pinned ? "is-active" : ""}`}
+              title={video.global_pinned ? "取消全局置顶" : "全局置顶"}
+              type="button"
+              onClick={(event) => void handleGlobalPinClick(event)}
+            >
+              <PinIcon />
+              <span>全局置顶</span>
             </button>
           ) : null}
         </div>

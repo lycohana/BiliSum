@@ -11,6 +11,7 @@ import {
   getFolderInsertPosition,
   getFolderMovePositionFromIndex,
   getSiblingFolderMovePayload,
+  getVideoFolderIds,
   isFolderDescendantOf,
   loadLibraryViewMode,
   resolveFolderMoveParentId,
@@ -155,7 +156,7 @@ run("folder sibling move payloads preserve parent scope", () => {
 
 run("library scope filters include unfiled favorite and folders", () => {
   const videos = [
-    video("a", 1000, 1000, { folder_id: "folder", is_favorite: true }),
+    video("a", 1000, 1000, { folder_id: "folder", folder_ids: ["folder", "other"], is_favorite: true }),
     video("b", 2000, 2000, { folder_id: null }),
     video("c", 3000, 3000, { folder_id: "other" }),
   ];
@@ -164,4 +165,6 @@ run("library scope filters include unfiled favorite and folders", () => {
   assert.deepEqual(filterVideosByScope(videos, "unfiled").map((item) => item.video_id), ["b"]);
   assert.deepEqual(filterVideosByScope(videos, "favorite").map((item) => item.video_id), ["a"]);
   assert.deepEqual(filterVideosByScope(videos, "folder").map((item) => item.video_id), ["a"]);
+  assert.deepEqual(filterVideosByScope(videos, "other").map((item) => item.video_id), ["a", "c"]);
+  assert.deepEqual(getVideoFolderIds(videos[0]), ["folder", "other"]);
 });

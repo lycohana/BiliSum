@@ -77,6 +77,29 @@ class SqliteTaskRepository:
             )
             cursor.execute(
                 """
+                CREATE TABLE IF NOT EXISTS video_folder_memberships (
+                    video_id TEXT NOT NULL,
+                    folder_id TEXT NOT NULL,
+                    folder_order REAL NOT NULL DEFAULT 0,
+                    folder_pinned INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (video_id, folder_id),
+                    FOREIGN KEY(video_id) REFERENCES video_assets(video_id),
+                    FOREIGN KEY(folder_id) REFERENCES video_folders(folder_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO video_folder_memberships (video_id, folder_id, folder_order, folder_pinned, created_at, updated_at)
+                SELECT video_id, folder_id, folder_order, folder_pinned, created_at, updated_at
+                FROM video_assets
+                WHERE folder_id IS NOT NULL
+                """
+            )
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS library_preferences (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -196,7 +219,7 @@ class SqliteTaskRepository:
                 row = cursor.execute("SELECT MIN(folder_order) AS min_order, MAX(folder_order) AS max_order FROM video_assets WHERE folder_id IS NULL").fetchone()
             else:
                 row = cursor.execute(
-                    "SELECT MIN(folder_order) AS min_order, MAX(folder_order) AS max_order FROM video_assets WHERE folder_id = ?",
+                    "SELECT MIN(folder_order) AS min_order, MAX(folder_order) AS max_order FROM video_folder_memberships WHERE folder_id = ?",
                     (folder_id,),
                 ).fetchone()
         else:
@@ -243,6 +266,11 @@ class SqliteTaskRepository:
                 (primary_video_id, duplicate_id),
             )
             cursor.execute("DELETE FROM video_assets WHERE video_id = ?", (duplicate_id,))
+            cursor.execute(
+                "UPDATE OR IGNORE video_folder_memberships SET video_id = ? WHERE video_id = ?",
+                (primary_video_id, duplicate_id),
+            )
+            cursor.execute("DELETE FROM video_folder_memberships WHERE video_id = ?", (duplicate_id,))
 
         return primary_video_id, created_at
 
@@ -325,6 +353,14 @@ class SqliteTaskRepository:
                     updated_at,
                 ),
             )
+            if folder_id is not None:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO video_folder_memberships (video_id, folder_id, folder_order, folder_pinned, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (video_id, folder_id, folder_order, 1 if folder_pinned else 0, created, updated_at),
+                )
         refreshed = self.get_video_asset(video_id)
         assert refreshed is not None
         return refreshed
@@ -575,6 +611,7 @@ class SqliteTaskRepository:
             for task_id in task_ids:
                 cursor.execute("DELETE FROM task_events WHERE task_id = ?", (task_id,))
                 cursor.execute("DELETE FROM task_results WHERE task_id = ?", (task_id,))
+            cursor.execute(f"DELETE FROM video_folder_memberships WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM video_tags WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM knowledge_index WHERE video_id IN ({placeholders})", tuple(video_ids))
             cursor.execute(f"DELETE FROM tasks WHERE video_id IN ({placeholders})", tuple(video_ids))
@@ -700,25 +737,101 @@ class SqliteTaskRepository:
                 """,
                 (self._next_video_order(cursor, "folder_order", None), datetime.now(timezone.utc).isoformat(), *folder_ids),
             )
+            cursor.execute(f"DELETE FROM video_folder_memberships WHERE folder_id IN ({placeholders})", tuple(folder_ids))
             cursor.execute(f"DELETE FROM video_folders WHERE folder_id IN ({placeholders})", tuple(folder_ids))
         return True
 
     def move_video_to_folder(self, video_id: str, folder_id: str | None) -> VideoAssetRecord | None:
+        return self.set_video_folders(video_id, [] if folder_id is None else [folder_id])
+
+    def add_video_to_folder(self, video_id: str, folder_id: str) -> VideoAssetRecord | None:
         updated_at = datetime.now(timezone.utc).isoformat()
         with self._lock, sqlite_cursor(self._connection) as cursor:
             row = cursor.execute("SELECT video_id FROM video_assets WHERE video_id = ?", (video_id,)).fetchone()
             if row is None:
                 return None
-            if folder_id is not None and not self._folder_exists(cursor, folder_id):
+            if not self._folder_exists(cursor, folder_id):
                 return None
+            order = self._next_video_order(cursor, "folder_order", folder_id)
+            cursor.execute(
+                """
+                INSERT INTO video_folder_memberships (video_id, folder_id, folder_order, folder_pinned, created_at, updated_at)
+                VALUES (?, ?, ?, 0, ?, ?)
+                ON CONFLICT(video_id, folder_id) DO NOTHING
+                """,
+                (video_id, folder_id, order, updated_at, updated_at),
+            )
+            primary = cursor.execute(
+                "SELECT folder_id FROM video_assets WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+            if primary is not None and primary["folder_id"] is None:
+                cursor.execute(
+                    """
+                    UPDATE video_assets
+                    SET folder_id = ?, folder_order = ?, folder_pinned = 0, updated_at = ?
+                    WHERE video_id = ?
+                    """,
+                    (folder_id, order, updated_at, video_id),
+                )
+            else:
+                cursor.execute("UPDATE video_assets SET updated_at = ? WHERE video_id = ?", (updated_at, video_id))
+        return self.get_video_asset(video_id)
+
+    def set_video_folders(self, video_id: str, folder_ids: list[str]) -> VideoAssetRecord | None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        normalized_folder_ids = [str(folder_id).strip() for folder_id in folder_ids if str(folder_id).strip()]
+        seen: set[str] = set()
+        unique_folder_ids = [folder_id for folder_id in normalized_folder_ids if not (folder_id in seen or seen.add(folder_id))]
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute("SELECT video_id FROM video_assets WHERE video_id = ?", (video_id,)).fetchone()
+            if row is None:
+                return None
+            if any(not self._folder_exists(cursor, folder_id) for folder_id in unique_folder_ids):
+                return None
+            existing_rows = cursor.execute(
+                "SELECT folder_id, folder_order, folder_pinned, created_at FROM video_folder_memberships WHERE video_id = ?",
+                (video_id,),
+            ).fetchall()
+            existing = {row["folder_id"]: row for row in existing_rows}
+            cursor.execute("DELETE FROM video_folder_memberships WHERE video_id = ?", (video_id,))
+            for folder_id in unique_folder_ids:
+                existing_row = existing.get(folder_id)
+                folder_order = (
+                    float(existing_row["folder_order"])
+                    if existing_row is not None and existing_row["folder_order"] is not None
+                    else self._next_video_order(cursor, "folder_order", folder_id)
+                )
+                folder_pinned = bool(existing_row["folder_pinned"]) if existing_row is not None else False
+                created_at = existing_row["created_at"] if existing_row is not None else updated_at
+                cursor.execute(
+                    """
+                    INSERT INTO video_folder_memberships (video_id, folder_id, folder_order, folder_pinned, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (video_id, folder_id, folder_order, 1 if folder_pinned else 0, created_at, updated_at),
+                )
+            primary_folder_id = unique_folder_ids[0] if unique_folder_ids else None
+            primary_order = (
+                float(existing[primary_folder_id]["folder_order"])
+                if primary_folder_id is not None and primary_folder_id in existing and existing[primary_folder_id]["folder_order"] is not None
+                else self._next_video_order(cursor, "folder_order", primary_folder_id)
+            )
+            primary_pinned = (
+                bool(existing[primary_folder_id]["folder_pinned"])
+                if primary_folder_id is not None and primary_folder_id in existing
+                else False
+            )
             cursor.execute(
                 """
                 UPDATE video_assets
                 SET folder_id = ?, folder_order = ?, folder_pinned = 0, updated_at = ?
                 WHERE video_id = ?
                 """,
-                (folder_id, self._next_video_order(cursor, "folder_order", folder_id), updated_at, video_id),
+                (primary_folder_id, primary_order, updated_at, video_id),
             )
+            if primary_pinned:
+                cursor.execute("UPDATE video_assets SET folder_pinned = 1 WHERE video_id = ?", (video_id,))
         return self.get_video_asset(video_id)
 
     def set_video_pin(
@@ -746,6 +859,17 @@ class SqliteTaskRepository:
             if row is None:
                 return None
             cursor.execute(f"UPDATE video_assets SET {', '.join(updates)} WHERE video_id = ?", tuple(values))
+            if folder_pinned is not None:
+                cursor.execute(
+                    """
+                    UPDATE video_folder_memberships
+                    SET folder_pinned = ?, updated_at = ?
+                    WHERE video_id = ? AND folder_id = (
+                        SELECT folder_id FROM video_assets WHERE video_id = ?
+                    )
+                    """,
+                    (1 if folder_pinned else 0, values[-2], video_id, video_id),
+                )
         return self.get_video_asset(video_id)
 
     def reorder_videos(self, video_ids: list[str], folder_id: str | None = None) -> list[VideoAssetRecord]:
@@ -772,6 +896,10 @@ class SqliteTaskRepository:
                         ((index + 1) * 1000, updated_at, video_id),
                     )
                 else:
+                    cursor.execute(
+                        "UPDATE video_folder_memberships SET folder_order = ?, updated_at = ? WHERE video_id = ? AND folder_id = ?",
+                        ((index + 1) * 1000, updated_at, video_id, folder_id),
+                    )
                     cursor.execute(
                         "UPDATE video_assets SET folder_order = ?, updated_at = ? WHERE video_id = ? AND folder_id = ?",
                         ((index + 1) * 1000, updated_at, video_id, folder_id),
@@ -1222,6 +1350,7 @@ class SqliteTaskRepository:
             is_favorite=bool(row["is_favorite"]),
             favorite_updated_at=datetime.fromisoformat(row["favorite_updated_at"]) if row["favorite_updated_at"] else None,
             folder_id=row["folder_id"],
+            folder_ids=self._folder_ids_for_video(row["video_id"]),
             global_order=float(row["global_order"] or 0),
             folder_order=float(row["folder_order"] or 0),
             global_pinned=bool(row["global_pinned"]),
@@ -1243,13 +1372,35 @@ class SqliteTaskRepository:
     def _folder_exists(self, cursor: sqlite3.Cursor, folder_id: str) -> bool:
         return cursor.execute("SELECT folder_id FROM video_folders WHERE folder_id = ?", (folder_id,)).fetchone() is not None
 
+    def _folder_ids_for_video(self, video_id: str) -> list[str]:
+        rows = self._connection.execute(
+            """
+            SELECT folder_id
+            FROM video_folder_memberships
+            WHERE video_id = ?
+            ORDER BY created_at ASC, folder_order ASC
+            """,
+            (video_id,),
+        ).fetchall()
+        return [str(row["folder_id"]) for row in rows]
+
     def _video_ids_in_scope(self, cursor: sqlite3.Cursor, folder_id: str | None) -> set[str]:
         if folder_id == "__global__":
             rows = cursor.execute("SELECT video_id FROM video_assets").fetchall()
         elif folder_id is None:
-            rows = cursor.execute("SELECT video_id FROM video_assets WHERE folder_id IS NULL").fetchall()
+            rows = cursor.execute(
+                """
+                SELECT v.video_id
+                FROM video_assets v
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM video_folder_memberships m
+                    WHERE m.video_id = v.video_id
+                )
+                """
+            ).fetchall()
         else:
-            rows = cursor.execute("SELECT video_id FROM video_assets WHERE folder_id = ?", (folder_id,)).fetchall()
+            rows = cursor.execute("SELECT video_id FROM video_folder_memberships WHERE folder_id = ?", (folder_id,)).fetchall()
         return {str(row["video_id"]) for row in rows}
 
     def _descendant_folder_ids(self, cursor: sqlite3.Cursor, folder_id: str) -> list[str]:
