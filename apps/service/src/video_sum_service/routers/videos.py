@@ -402,8 +402,8 @@ async def _cache_uploaded_media_chunks(
                     except OSError:
                         pass
                     raise HTTPException(
-                        status_code=413,
-                        detail=f"上传文件过大（上限 {MAX_UPLOAD_BYTES // (1024**3)} GB）。",
+                        status_code=400,
+                        detail=f"上传文件过大：当前上限为 {MAX_UPLOAD_BYTES // (1024**3)} GB。",
                     )
     except OSError as exc:
         raise HTTPException(status_code=500, detail="保存上传视频时失败。") from exc
@@ -516,7 +516,7 @@ async def upload_local_videos_batch(request: Request) -> list[VideoProbeResponse
     if len(upload_files) > MAX_BATCH_FILES:
         raise HTTPException(
             status_code=400,
-            detail=f"单次最多上传 {MAX_BATCH_FILES} 个文件。",
+            detail=f"批量上传文件数超出限制：单次最多 {MAX_BATCH_FILES} 个。",
         )
 
     responses: list[VideoProbeResponse] = []
