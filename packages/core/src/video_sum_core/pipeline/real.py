@@ -796,7 +796,13 @@ class RealPipelineRunner(PipelineRunner):
                 ydl.download([url])
         except DownloadError as exc:
             self._raise_ydl_error(exc)
-        candidates = sorted(task_dir.glob(f"{safe_title}.*"))
+        import glob as _glob
+        candidates = sorted(
+            task_dir / p
+            for p in _glob.glob(
+                f"{_glob.escape(str(task_dir / safe_title))}.*"
+            )
+        )
         if not candidates:
             raise VideoSumError("Audio download failed.")
         emit("downloading", 48, "音频文件已就绪")
@@ -3050,7 +3056,15 @@ P 数索引：
                 ydl.download([url])
         except DownloadError as exc:
             self._raise_ydl_error(exc)
-        candidates = sorted(output_dir.glob(f"{safe_title}.visual.*"), key=lambda item: item.stat().st_mtime, reverse=True)
+        import glob as _glob
+        from pathlib import Path as _Path
+        candidates = sorted(
+            (_Path(p) for p in _glob.glob(
+                f"{_glob.escape(str(output_dir / safe_title))}.visual.*"
+            )),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
         if not candidates:
             raise VideoSumError("图文笔记视频源下载失败。")
         return candidates[0]
