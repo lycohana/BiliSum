@@ -46,7 +46,10 @@ from video_sum_service.video_assets import (
     resolve_video_page,
 )
 
-router = APIRouter(prefix="/api/v1/videos")
+router = APIRouter(prefix="/api/v1/videos", tags=["videos"])
+
+MAX_UPLOAD_BYTES = 8 * 1024 ** 3  # 8 GB
+MAX_BATCH_FILES = 20
 AGGREGATE_SUMMARY_PAGE_NUMBER = 0
 AGGREGATE_SUMMARY_PAGE_TITLE = "全集总结"
 AGGREGATE_SUMMARY_TITLE_SUFFIX = "｜全集总结"
@@ -393,6 +396,15 @@ async def _cache_uploaded_media_chunks(
                 handle.write(chunk)
                 digest.update(chunk)
                 total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"上传文件过大（上限 {MAX_UPLOAD_BYTES // (1024**3)} GB）。",
+                    )
     except OSError as exc:
         raise HTTPException(status_code=500, detail="保存上传视频时失败。") from exc
 
@@ -501,6 +513,11 @@ async def upload_local_videos_batch(request: Request) -> list[VideoProbeResponse
     ]
     if not upload_files:
         raise HTTPException(status_code=400, detail="至少上传一个本地视频或音频文件。")
+    if len(upload_files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"单次最多上传 {MAX_BATCH_FILES} 个文件。",
+        )
 
     responses: list[VideoProbeResponse] = []
     for upload_file in upload_files:
