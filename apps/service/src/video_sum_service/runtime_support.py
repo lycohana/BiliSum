@@ -78,6 +78,8 @@ _RUNTIME_EXTENSION_PACKAGE_KEYS: set[str] = {
     "hf_xet",
     "chromadb",
     "sentence_transformers",
+    "funasr",
+    "modelscope",
 }
 _RUNTIME_ROOT_APP_DIRS: frozenset[str] = frozenset({"Lib", "lib", "Scripts", "bin", "DLLs", "stdlib"})
 _RUNTIME_ROOT_APP_FILES: frozenset[str] = frozenset({"pythonpath.pth"})
@@ -365,10 +367,22 @@ class _StreamingRunner:
         return subprocess.CompletedProcess(command, self._proc.returncode, stdout=combined, stderr="")
 
     def cancel(self):
-        """Kill the underlying subprocess if it is still running."""
+        """Kill the underlying subprocess, including its child process tree."""
         if self._proc is not None and self._proc.poll() is None:
             append_install_log(self.session_id, "\n[安装已取消]\n")
-            self._proc.kill()
+            if os.name == "nt":
+                # On Windows, TerminateProcess does not kill children.
+                # taskkill /T kills the entire process tree.
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
+                        capture_output=True,
+                        timeout=10,
+                    )
+                except subprocess.SubprocessError:
+                    self._proc.kill()
+            else:
+                self._proc.kill()
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -1294,14 +1308,10 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             payload["localAsrAvailable"] = True
         except importlib.metadata.PackageNotFoundError:
             pass
-        try:
-            payload["funasrVersion"] = importlib.metadata.version("funasr")
-            payload["funasrInstalled"] = True
-            payload["funasrAvailable"] = True
-        except importlib.metadata.PackageNotFoundError:
-            payload["funasrVersion"] = ""
-            payload["funasrInstalled"] = False
-            payload["funasrAvailable"] = False
+        funasr_installed, funasr_version, funasr_error = importable_distribution("funasr", "funasr")
+        payload["funasrVersion"] = funasr_version
+        payload["funasrInstalled"] = funasr_installed
+        payload["funasrAvailable"] = funasr_installed
         chromadb_installed, chromadb_version, chromadb_error = importable_distribution("chromadb", "chromadb")
         payload["chromadbVersion"] = chromadb_version
         payload["chromadbInstalled"] = chromadb_installed
@@ -1693,6 +1703,21 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository, *, sess
     if runtime_dir is None or python_executable is None:
         raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
 
+    # Pre-flight: disk space check for model download (~3 GB for large-v3)
+    cache_parent = Path.home() / ".cache"
+    if cache_parent.exists():
+        try:
+            free = shutil.disk_usage(cache_parent).free
+            if free < 3 * 1024 * 1024 * 1024:  # < 3 GB
+                raise HTTPException(
+                    status_code=507,
+                    detail=f"磁盘空间不足，本地 ASR 模型下载需要至少 3 GB。当前可用: {free / (1024 ** 3):.1f} GB",
+                )
+        except HTTPException:
+            raise
+        except OSError:
+            pass
+
     use_streaming = session_id is not None
     if use_streaming:
         start_install_session(session_id, "本地 ASR")
@@ -1797,10 +1822,27 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         # GPU runtimes already use --no-deps, so workspace reinstall is safe.
         install_workspace_packages(python_executable, runtime_channel=runtime_channel)
         ensure_runtime_pip(python_executable, runtime_channel)
+
+        # C1: Probe installed torch before deciding what to install.
+        # On GPU channels the user already has CUDA torch — never install
+        # PyPI CPU torch on top of it.  Only add torch/torchaudio to the
+        # install list when they are genuinely missing.
+        funasr_packages = ["funasr>=1.1.0"]
+        try:
+            result = run_command(
+                [str(python_executable), "-c", "import torch; print(torch.__version__)"],
+                runtime_channel=runtime_channel,
+                timeout=30,
+            )
+            logger.info("torch %s already installed — skipping torch/torchaudio install", result.stdout.strip())
+        except subprocess.CalledProcessError:
+            logger.info("torch not found — will install torch + torchaudio with funasr")
+            funasr_packages = ["torch", "torchaudio"] + funasr_packages
+
         result = pip_install_with_fallbacks(
             python_executable,
             runtime_channel,
-            ["torch", "torchaudio", "funasr>=1.1.0"],
+            funasr_packages,
             package_label="FunASR 依赖",
             reinstall=reinstall,
             timeout=3600,
