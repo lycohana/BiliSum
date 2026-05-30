@@ -1791,6 +1791,7 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository, *, sess
     installed = bool(environment.get("localAsrInstalled"))
     if use_streaming:
         finish_install_session(session_id, success=installed)
+    _release_channel_lock(lock)
     return {
         "installed": installed,
         "runtimeChannel": runtime_channel,
