@@ -1800,7 +1800,7 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         result = pip_install_with_fallbacks(
             python_executable,
             runtime_channel,
-            ["funasr>=1.1.0"],
+            ["torch", "torchaudio", "funasr>=1.1.0"],
             package_label="FunASR 依赖",
             reinstall=reinstall,
             timeout=3600,
