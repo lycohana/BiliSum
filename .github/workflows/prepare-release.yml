@@ -128,7 +128,7 @@ jobs:
         run: |
           $distDir = Join-Path $env:GITHUB_WORKSPACE "dist"
           $assetDir = Join-Path $env:GITHUB_WORKSPACE "dist\release-assets"
-          $installerPattern = "BiliSum-$env:RELEASE_VERSION-*-Setup.exe"
+          $installerPattern = "VidMind-$env:RELEASE_VERSION-*-Setup.exe"
 
           if (-not (Test-Path $distDir)) {
             throw "Build output directory not found: $distDir"
@@ -168,8 +168,8 @@ jobs:
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: |
-            dist/release-assets/BiliSum-*-Setup.exe
-            dist/release-assets/BiliSum-*-Setup.exe.blockmap
+            dist/release-assets/VidMind-*-Setup.exe
+            dist/release-assets/VidMind-*-Setup.exe.blockmap
             dist/release-assets/latest.yml
           if-no-files-found: error
 
@@ -246,8 +246,8 @@ jobs:
         run: |
           set -euo pipefail
           asset_dir="$GITHUB_WORKSPACE/dist/release-assets-macos"
-          dmg_pattern="BiliSum-${RELEASE_VERSION}-*mac*.dmg"
-          zip_pattern="BiliSum-${RELEASE_VERSION}-*mac*.zip"
+          dmg_pattern="VidMind-${RELEASE_VERSION}-*mac*.dmg"
+          zip_pattern="VidMind-${RELEASE_VERSION}-*mac*.zip"
 
           if [[ ! -d "$GITHUB_WORKSPACE/dist" ]]; then
             echo "Build output directory not found: $GITHUB_WORKSPACE/dist" >&2
@@ -287,8 +287,8 @@ jobs:
         with:
           name: release-assets-macos-${{ needs.detect-release.outputs.next_version }}
           path: |
-            dist/release-assets-macos/BiliSum-*.dmg
-            dist/release-assets-macos/BiliSum-*.zip
+            dist/release-assets-macos/VidMind-*.dmg
+            dist/release-assets-macos/VidMind-*.zip
             dist/release-assets-macos/latest-mac.yml
           if-no-files-found: error
 
@@ -405,10 +405,10 @@ jobs:
           tag_name: v${{ needs.detect-release.outputs.next_version }}
           body_path: dist/release-notes.md
           files: |
-            dist/release-assets/BiliSum-*-Setup.exe
-            dist/release-assets/BiliSum-*-Setup.exe.blockmap
-            dist/release-assets/BiliSum-*.dmg
-            dist/release-assets/BiliSum-*.zip
+            dist/release-assets/VidMind-*-Setup.exe
+            dist/release-assets/VidMind-*-Setup.exe.blockmap
+            dist/release-assets/VidMind-*.dmg
+            dist/release-assets/VidMind-*.zip
             dist/release-assets/latest.yml
             dist/release-assets/latest-mac.yml
 
@@ -451,7 +451,7 @@ jobs:
           if [ -n "${DOCKERHUB_REPOSITORY}" ]; then
             repository="${DOCKERHUB_REPOSITORY}"
           else
-            repository="${DOCKERHUB_USERNAME}/bilisum"
+            repository="${DOCKERHUB_USERNAME}/vidmind"
           fi
           echo "repository=$(printf '%s' "${repository}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
@@ -470,8 +470,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          cache-from: type=gha,scope=bilisum-docker
-          cache-to: type=gha,mode=max,scope=bilisum-docker
+          cache-from: type=gha,scope=vidmind-docker
+          cache-to: type=gha,mode=max,scope=vidmind-docker
           tags: |
             docker.io/${{ steps.image.outputs.repository }}:v${{ needs.detect-release.outputs.next_version }}
             docker.io/${{ steps.image.outputs.repository }}:${{ needs.detect-release.outputs.next_version }}

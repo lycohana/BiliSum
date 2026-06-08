@@ -205,7 +205,7 @@ class PipelineSettings:
     visual_evidence_base_url: str = ""
     visual_evidence_model: str = ""
     visual_evidence_api_key: str = ""
-    visual_evidence_max_frames: int = 12
+    visual_evidence_max_frames: int = 24
     visual_evidence_frame_interval_seconds: int = 10
     visual_evidence_frame_width: int = 960
     visual_evidence_vlm_image_width: int = 768
@@ -613,17 +613,17 @@ class RealPipelineRunner(PipelineRunner):
         if "Could not copy Chrome cookie database" in message:
             raise VideoSumError(
                 "无法读取 Chrome 登录态：yt-dlp 不能复制 Chrome Cookie 数据库。"
-                "请通过 BiliSum 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
+                "请通过 VidMind 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
             ) from error
         if "Failed to decrypt with DPAPI" in message:
             raise VideoSumError(
                 "无法读取浏览器登录态：yt-dlp 解密 Windows 浏览器 Cookie 失败（DPAPI）。"
-                "请通过 BiliSum 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
+                "请通过 VidMind 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
             ) from error
         if "HTTP Error 412" in message and "BiliBili" in message:
             raise VideoSumError(
                 "B 站返回 HTTP 412，当前请求可能被风控拦截。请稍后重试、切换网络/IP，"
-                "或通过 BiliSum 的 B 站登录窗口捕获登录态；也可以填写 yt-dlp Cookies 文件 "
+                "或通过 VidMind 的 B 站登录窗口捕获登录态；也可以填写 yt-dlp Cookies 文件 "
                 "/ VIDEO_SUM_YTDLP_COOKIES_FILE。"
             ) from error
         raise VideoSumError(f"Failed to read or download video with yt-dlp: {message}") from error
@@ -3259,7 +3259,7 @@ P 数索引：
         mode: str,
     ) -> dict[str, object]:
         observations_by_id = {str(item.get("frame_id") or ""): item for item in observations}
-        max_insertions = max(1, min(int(self._settings.visual_evidence_max_frames or 12), 30))
+        max_insertions = max(1, min(int(self._settings.visual_evidence_max_frames or 24), 30))
         insertions: list[dict[str, object]] = []
         for frame in frames:
             frame_id = str(frame.get("frame_id") or "")
@@ -3270,7 +3270,7 @@ P 数索引：
                     importance = float(observation.get("importance") if observation.get("importance") is not None else 0.75)
                 except (TypeError, ValueError):
                     importance = 0.75
-                if not should_insert and importance < 0.72:
+                if not should_insert and importance < 0.55:
                     continue
             chapter = self._nearest_visual_chapter(result, float(frame.get("timestamp_seconds") or 0))
             timestamp = str(frame.get("timestamp") or self._format_seconds(float(frame.get("timestamp_seconds") or 0)))
@@ -3287,12 +3287,15 @@ P 数索引：
                 or chapter.get("title")
                 or "关键画面"
             ).strip()
+            # For frame_insert mode, prioritize frame's own planned_note_hint/reason over chapter summary
+            planned_note_hint = str(frame.get("planned_note_hint") or "").strip()
+            planned_reason = str(frame.get("planned_reason") or "").strip()
             key_facts_list = observation.get("key_facts") if isinstance(observation.get("key_facts"), list) else []
             explanation = str(
                 (". ".join(str(f) for f in key_facts_list) if key_facts_list else "")
                 or observation.get("semantic_summary")
-                or frame.get("planned_note_hint")
-                or frame.get("planned_reason")
+                or planned_note_hint
+                or planned_reason
                 or chapter.get("summary")
                 or ""
             ).strip()
@@ -3307,7 +3310,7 @@ P 数索引：
                     "caption": caption,
                     "explanation": explanation[:500],
                     "concept": str(frame.get("planned_concept") or "").strip(),
-                    "selection_reason": str(frame.get("planned_reason") or "").strip(),
+                    "selection_reason": planned_reason,
                     "mode": mode,
                 }
             )
@@ -3376,8 +3379,10 @@ P 数索引：
         is_anthropic = provider == "anthropic"
         system_prompt = self._settings.visual_note_system_prompt.strip() or (
             "你是一名擅长将截图与文字深度整合的中文技术编辑。只输出 Markdown 正文。"
-            "输出必须是段落→图片→段落的交替结构，只选最重要的 3-6 张图。"
-            "绝对禁止图片堆积在末尾，禁止使用「画面呈现」「该画面」「上图」等流水账句式。"
+            "核心要求：保留原文所有段落，只在段落之间插入最相关的 3-8 张图作为辅助说明。"
+            "图片必须紧跟在相关段落后，不得堆叠在末尾。每个图片后要有 1 句自然过渡。"
+            "绝对禁止删除原文、压缩原文或省略原文段落。原文内容必须完整保留。"
+            "禁止使用「画面呈现」「该画面」「上图」等流水账句式。"
         )
         payload_observations = []
         for item in observations:
@@ -3393,7 +3398,7 @@ P 数索引：
                 importance = float(item.get("importance") if item.get("importance") is not None else 3)
             except (TypeError, ValueError):
                 importance = 3
-            if importance < 2.5:
+            if importance < 2.0:
                 continue
             payload_observations.append(
                 {
@@ -3402,10 +3407,10 @@ P 数索引：
                 }
             )
         user_template = self._settings.visual_note_user_prompt_template.strip() or (
-            "请以画面客观信息为参考重新整合知识笔记，图片链接使用 observations 中的 markdown_image。\n"
-            "核心规则：输出必须是 段落1→图1→段落2→图2 交替模式，只选 3-6 张最重要的图，禁止图片堆在末尾。\n"
-            "要求：以知识点为叙事主线；精简合并重复内容；禁止「画面呈现」「该画面」「上图」等句式；"
-            "图片插入后用 1-2 句自然过渡；key_facts/semantic_summary 转化为自己的语言。\n"
+            "请参考画面客观信息，在原文段落之间插入最相关的 4-8 张图片作为辅助说明。"
+            "核心规则：完整保留原文所有内容，不删除、不压缩、不省略任何段落。"
+            "每张图片插入到最相关的段落后，图片后跟 1 句过渡语（禁止「画面呈现」「该画面」「上图」）。"
+            "只选与知识点直接相关的图，禁止用装饰性图片填充。"
             "标题：{title}\n原始知识笔记：\n{knowledge_note_markdown}\n视觉解析 JSON：\n{visual_observations_json}"
         )
         if insert_plan:
@@ -3470,35 +3475,60 @@ P 数索引：
         insertions = [item for item in insert_plan.get("insertions", []) if isinstance(item, dict)]
         if not insertions:
             return knowledge_note_markdown
+
         lines = knowledge_note_markdown.splitlines()
         output: list[str] = []
-        insertion_index = 0
-        for line in lines:
+        used_insertions: set[int] = set()
+
+        for line_idx, line in enumerate(lines):
             stripped = line.strip()
-            is_heading = stripped.startswith("#")
             output.append(line)
-            if insertion_index >= len(insertions):
+
+            if not stripped.startswith("#"):
                 continue
-            current = insertions[insertion_index]
-            anchor = str(current.get("anchor_heading") or current.get("chapter_title") or "").strip()
-            if not is_heading or not anchor:
-                continue
+
             heading_text = re.sub(r"^#+\s*", "", stripped).strip()
-            shorter, longer = sorted((len(anchor), len(heading_text)))
-            if (anchor in heading_text or heading_text in anchor) and shorter >= longer * 0.6:
-                output.extend(self._format_visual_insertion_markdown(current))
-                insertion_index += 1
+
+            # Try to match each unused insertion to this heading
+            for ins_idx, insertion in enumerate(insertions):
+                if ins_idx in used_insertions:
+                    continue
+
+                anchor = str(insertion.get("anchor_heading") or insertion.get("chapter_title") or "").strip()
+                if not anchor:
+                    continue
+
+                shorter, longer = sorted((len(anchor), len(heading_text)))
+                # Lenient substring match — substring already indicates strong relevance
+                # ratio check only filters clear false positives (e.g., single-char anchor)
+                if shorter >= longer * 0.3 and (anchor in heading_text or heading_text in anchor):
+                    output.extend(self._format_visual_insertion_markdown(insertion))
+                    used_insertions.add(ins_idx)
+                    break  # One insertion per heading maximum
+
+        # Append any unmatched insertions at the end — better to have them than lose them
+        for ins_idx, insertion in enumerate(insertions):
+            if ins_idx not in used_insertions:
+                output.extend(self._format_visual_insertion_markdown(insertion))
+
         return "\n".join(output).strip()
 
     def _format_visual_insertion_markdown(self, insertion: dict[str, object]) -> list[str]:
         image = str(insertion.get("markdown_image") or "").strip()
-        alt = str(insertion.get("alt") or insertion.get("caption") or "关键画面").strip()
+        caption = str(insertion.get("caption") or insertion.get("alt") or "关键画面").strip()
         explanation = str(insertion.get("explanation") or "").strip()
+        concept = str(insertion.get("concept") or "").strip()
         if not image:
             return []
-        lines = ["", f"![{alt}]({image})"]
+        lines = ["", f"![{caption}]({image})"]
+        # Build richer context: combine explanation + concept for frame_insert mode
         if explanation:
-            lines.extend(["", f"> {explanation}"])
+            full_context = f"{explanation}"
+            if concept and concept not in explanation:
+                full_context = f"{concept}：{explanation}"
+            lines.extend(["", f"> *{full_context}*"])
+        elif concept:
+            lines.extend(["", f"> *{concept}*"])
         lines.append("")
         return lines
 

@@ -1457,7 +1457,7 @@ def test_asr_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> Non
     assert calls[0]["headers"]["Authorization"] == "Bearer new-key"
     assert calls[0]["data"]["model"] == "new-model"
     file_name, audio_bytes, content_type = calls[0]["files"]["file"]
-    assert file_name == "bilisum-asr-test-zh.wav"
+    assert file_name == "vidmind-asr-test-zh.wav"
     assert content_type == "audio/wav"
     assert len(audio_bytes) > 100_000
 

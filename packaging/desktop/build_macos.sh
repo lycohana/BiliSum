@@ -85,17 +85,17 @@ if [[ "$skip_prebuild" -eq 0 ]]; then
   npm run build:renderer
   "$python312" "$repo_root/packaging/pyinstaller/build_onedir.py"
 
-  backend_executable="$repo_root/dist/BiliSum/BiliSum"
+  backend_executable="$repo_root/dist/VidMind/VidMind"
   if [[ ! -f "$backend_executable" ]]; then
     echo "Packaged backend was not produced: $backend_executable" >&2
     exit 1
   fi
   chmod +x "$backend_executable"
   for executable in \
-    "$repo_root/dist/BiliSum/_internal/runtime/base/bin/python" \
-    "$repo_root/dist/BiliSum/_internal/runtime/base/bin/python3" \
-    "$repo_root/dist/BiliSum/_internal/bin/ffmpeg" \
-    "$repo_root/dist/BiliSum/_internal/bin/ffprobe"; do
+    "$repo_root/dist/VidMind/_internal/runtime/base/bin/python" \
+    "$repo_root/dist/VidMind/_internal/runtime/base/bin/python3" \
+    "$repo_root/dist/VidMind/_internal/bin/ffmpeg" \
+    "$repo_root/dist/VidMind/_internal/bin/ffprobe"; do
     if [[ -f "$executable" && ! -x "$executable" ]]; then
       echo "Packaged executable is missing execute permission: $executable" >&2
       exit 1

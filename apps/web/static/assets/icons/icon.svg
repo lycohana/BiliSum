@@ -1,17 +1,16 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="icon-bg" x1="56" y1="56" x2="456" y2="456" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FF9ABA"/>
-      <stop offset="1" stop-color="#F85D8E"/>
+      <stop stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
     </linearGradient>
   </defs>
-  <rect x="56" y="56" width="400" height="400" rx="96" fill="url(#icon-bg)"/>
-  <rect x="132" y="112" width="248" height="288" rx="42" fill="#FFFFFF"/>
-  <path d="M314 112H340C362.091 112 380 129.909 380 152V178H354C331.909 178 314 160.091 314 138V112Z" fill="#FFE6EE"/>
-  <circle cx="318" cy="172" r="32" fill="#FB7299"/>
-  <path d="M307 157L329 172L307 187V157Z" fill="#FFFFFF"/>
-  <rect x="172" y="172" width="96" height="20" rx="10" fill="#FB7299"/>
-  <rect x="172" y="222" width="160" height="20" rx="10" fill="#FB7299" opacity="0.9"/>
-  <rect x="172" y="272" width="138" height="20" rx="10" fill="#FB7299" opacity="0.72"/>
-  <rect x="172" y="322" width="112" height="20" rx="10" fill="#FB7299" opacity="0.5"/>
+  <rect x="56" y="56" width="400" height="400" rx="100" fill="url(#icon-bg)"/>
+  <rect x="120" y="120" width="272" height="272" rx="56" fill="#FFFFFF"/>
+  <path d="M220 170L310 256L220 342V170Z" fill="#6366F1" fill-opacity="0.9"/>
+  <circle cx="340" cy="162" r="6" fill="#8B5CF6" fill-opacity="0.5"/>
+  <circle cx="356" cy="146" r="4" fill="#8B5CF6" fill-opacity="0.3"/>
+  <circle cx="360" cy="176" r="3" fill="#8B5CF6" fill-opacity="0.2"/>
+  <line x1="340" y1="162" x2="356" y2="146" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+  <line x1="340" y1="162" x2="360" y2="176" stroke="#8B5CF6" stroke-width="1.5" opacity="0.3"/>
 </svg>

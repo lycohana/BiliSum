@@ -64,14 +64,7 @@ export function App() {
     }
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return localStorage.getItem("sidebar-collapsed") === "true";
-  });
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+    const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState<boolean>(() => Boolean(window.desktop));
   const [authToken, setAuthToken] = useState("");
@@ -140,10 +133,7 @@ export function App() {
     void window.desktop?.preferences?.setTheme?.(theme);
   }, [darkMode]);
 
-  useEffect(() => {
-    localStorage.setItem("sidebar-collapsed", sidebarCollapsed ? "true" : "false");
-  }, [sidebarCollapsed]);
-
+  
   useEffect(() => {
     let backendCleanup: (() => void) | undefined;
     let updateCleanup: (() => void) | undefined;
@@ -542,7 +532,7 @@ export function App() {
 
   function resolveVisualNoteModeFromPreference(): string | null {
     try {
-      const rawValue = window.localStorage.getItem("bilisum.summaryPreference");
+      const rawValue = window.localStorage.getItem("vidmind.summaryPreference");
       if (!rawValue) return null;
       const parsed = JSON.parse(rawValue) as { noteMode?: unknown };
       return parsed.noteMode === "visual" ? "frame_insert" : "text";
@@ -697,12 +687,12 @@ export function App() {
   }
 
   const pageMeta = location.pathname.startsWith("/settings")
-    ? { eyebrow: "设置中心", title: "运行配置、环境检测与日志", description: "围绕本地推理环境、模型配置与桌面端服务控制，统一管理 BiliSum 的运行能力。" }
+    ? { eyebrow: "设置中心", title: "运行配置、环境检测与日志", description: "围绕本地推理环境、模型配置与桌面端服务控制，统一管理 VidMind 的运行能力。" }
     : location.pathname.startsWith("/library")
       ? { eyebrow: "视频库", title: "视频资产与摘要结果", description: "集中管理已抓取的视频、摘要结果与当前处理状态。" }
       : location.pathname.startsWith("/videos/")
         ? { eyebrow: "视频详情", title: "本地摘要结果与任务记录", description: "围绕单个视频集中查看摘要、时间轴、转写全文与任务处理进度。" }
-        : { eyebrow: "BiliSum Workspace", title: "懒得看视频？一键省流！", description: "把时间留给真正有质量的视频" };
+        : { eyebrow: "VidMind Workspace", title: "懒得看视频？一键省流！", description: "把时间留给真正有质量的视频" };
 
   const isSettingsRoute = location.pathname.startsWith("/settings");
   const isLibraryRoute = location.pathname.startsWith("/library");
@@ -729,7 +719,7 @@ export function App() {
           <div className="auth-brand">
             <img src="/static/assets/icons/icon.svg" alt="" />
             <div>
-              <span>BiliSum</span>
+              <span>VidMind</span>
               <h1>正在检查访问权限</h1>
             </div>
           </div>
@@ -740,7 +730,7 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${mobileSidebarOpen ? "mobile-sidebar-open" : ""}`}>
+    <div className="app-shell">
       <input
         ref={localVideoInputRef}
         type="file"
@@ -762,84 +752,30 @@ export function App() {
         onOpenSettings={openConfigAssist}
         onOpenUpdateDialog={openUpdateDialog}
       />
-      <aside className="sidebar">
-        <nav className="nav">
-          <Link className={`nav-item ${location.pathname === "/" ? "active" : ""}`} to="/" aria-label="首页" title="首页" onClick={() => setMobileSidebarOpen(false)}>
-            <span className="nav-icon" aria-hidden="true"><HomeIcon /></span>
-            <span className="nav-copy">
-              <strong>首页</strong>
-              <small>工作台总览</small>
-            </span>
+      <nav className="top-nav">
+        <div className="top-nav-tabs">
+          <Link className={`top-nav-tab ${location.pathname === "/" ? "active" : ""}`} to="/">
+            <HomeIcon />
+            <span>首页</span>
           </Link>
-          <Link className={`nav-item ${location.pathname === "/library" ? "active" : ""}`} to="/library" aria-label="视频库" title="视频库" onClick={() => setMobileSidebarOpen(false)}>
-            <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
-            <span className="nav-copy">
-              <strong>视频库</strong>
-              <small>资产管理</small>
-            </span>
+          <Link className={`top-nav-tab ${location.pathname === "/library" ? "active" : ""}`} to="/library">
+            <LibraryIcon />
+            <span>视频库</span>
           </Link>
-          <Link className={`nav-item ${location.pathname === "/knowledge" ? "active" : ""}`} to="/knowledge" aria-label="知识库" title="知识库" onClick={() => setMobileSidebarOpen(false)}>
-            <span className="nav-icon" aria-hidden="true"><KnowledgeIcon /></span>
-            <span className="nav-copy">
-              <strong>知识库</strong>
-              <small>检索与问答</small>
-            </span>
+          <Link className={`top-nav-tab ${location.pathname === "/knowledge" ? "active" : ""}`} to="/knowledge">
+            <KnowledgeIcon />
+            <span>知识库</span>
           </Link>
-          <Link className={`nav-item ${location.pathname.startsWith("/settings") ? "active" : ""}`} to="/settings" aria-label="设置" title="设置" onClick={() => setMobileSidebarOpen(false)}>
-            <span className="nav-icon" aria-hidden="true"><SettingsIcon /></span>
-            <span className="nav-copy">
-              <strong>设置</strong>
-              <small>运行配置</small>
-            </span>
+        </div>
+        <div className="top-nav-actions">
+          <Link className="top-nav-action" to="/settings" aria-label="设置" title="设置">
+            <SettingsIcon />
           </Link>
-        </nav>
-
-        <div className="nav-section-divider"></div>
-        <button
-          className="sidebar-corner-toggle"
-          type="button"
-          onClick={() => setSidebarCollapsed((current) => !current)}
-          aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-          aria-pressed={sidebarCollapsed}
-          title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-        >
-          <IconSidebarToggle collapsed={sidebarCollapsed} />
-        </button>
-      </aside>
-
-      {/* 移动端菜单按钮 - 仅在竖屏显示 */}
-      <button
-        className="mobile-menu-toggle"
-        type="button"
-        onClick={() => setMobileSidebarOpen(true)}
-        aria-label="打开菜单"
-        title="打开菜单"
-      >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
-      </button>
-
-      {/* 移动端遮罩层 - 点击关闭 sidebar */}
-      {mobileSidebarOpen && (
-        <div
-          className="mobile-sidebar-overlay"
-          onClick={() => setMobileSidebarOpen(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setMobileSidebarOpen(false);
-            }
-          }}
-          role="button"
-          tabIndex={0}
-          aria-label="关闭菜单"
-        />
-      )}
+        </div>
+      </nav>
 
       <main className="content">
-        <div className={`content-frame ${isSettingsRoute ? "content-frame-settings" : ""}`}>
+        <div className={`content-frame ${isSettingsRoute ? "content-frame-settings" : ""} ${location.pathname.startsWith("/videos/") ? "content-frame-full" : ""}`}>
           {snapshot.error && !snapshot.serviceOnline ? (
             <section className="grid-card empty-state-card">
               <div className="spinner"></div>
@@ -998,16 +934,6 @@ export function App() {
   );
 }
 
-function IconSidebarToggle({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-      <path d="M9 4.5v15" />
-      {collapsed ? <path d="m13.5 12 3-3m-3 3 3 3" /> : <path d="m15.5 12-3-3m3 3-3 3" />}
-    </svg>
-  );
-}
-
 function AuthGate({
   token,
   error,
@@ -1027,12 +953,12 @@ function AuthGate({
         <div className="auth-brand">
           <img src="/static/assets/icons/icon.svg" alt="" />
           <div>
-            <span>BiliSum</span>
+            <span>VidMind</span>
             <h1>输入访问密钥</h1>
           </div>
         </div>
         <p className="auth-muted">
-          Web 端访问需要 BiliSum 服务密钥。桌面端会自动注入密钥；Docker 或 npx 部署可通过
+          Web 端访问需要 VidMind 服务密钥。桌面端会自动注入密钥；Docker 或 npx 部署可通过
           {" "}
           <code>VIDEO_SUM_ACCESS_TOKEN</code>
           {" "}
@@ -1050,7 +976,7 @@ function AuthGate({
           />
           {error ? <p className="auth-error">{error}</p> : null}
           <button type="submit" disabled={submitting}>
-            {submitting ? "正在验证..." : "进入 BiliSum"}
+            {submitting ? "正在验证..." : "进入 VidMind"}
           </button>
         </form>
       </section>

@@ -154,7 +154,7 @@ def extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, obj
                 status_code=400,
                 detail=(
                     "无法读取 Chrome 登录态：yt-dlp 不能复制 Chrome Cookie 数据库。"
-                    "请通过 BiliSum 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
+                    "请通过 VidMind 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
                 ),
             ) from exc
         if "Failed to decrypt with DPAPI" in message:
@@ -162,7 +162,7 @@ def extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, obj
                 status_code=400,
                 detail=(
                     "无法读取浏览器登录态：yt-dlp 解密 Windows 浏览器 Cookie 失败（DPAPI）。"
-                    "请通过 BiliSum 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
+                    "请通过 VidMind 的 B 站登录窗口重新捕获登录态，或按教程导出 cookies.txt 并填写 yt-dlp Cookies 文件。"
                 ),
             ) from exc
         if "HTTP Error 412" in message and "BiliBili" in message:
@@ -170,7 +170,7 @@ def extract_video_info(url: str, *, extract_flat: bool = False) -> dict[str, obj
                 status_code=400,
                 detail=(
                     "B 站返回 HTTP 412，当前请求可能被风控拦截。"
-                    "请稍后重试、切换网络，或通过 BiliSum 的 B 站登录窗口捕获登录态。"
+                    "请稍后重试、切换网络，或通过 VidMind 的 B 站登录窗口捕获登录态。"
                 ),
             ) from exc
         raise

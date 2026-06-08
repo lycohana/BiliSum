@@ -129,9 +129,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BiliSum Service",
+    title="VidMind Service",
     version=app_info.version,
-    description="Local-first backend service for BiliSum video summarization tasks.",
+    description="Local-first backend service for VidMind video summarization tasks.",
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=WEB_STATIC_DIR), name="static")

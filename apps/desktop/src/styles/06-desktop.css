@@ -29,8 +29,16 @@
   gap: 8px;
   padding: 16px;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.metric-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
 }
 
 .metric-label {
@@ -67,9 +75,10 @@
   display: grid;
   gap: 12px;
   padding: 14px 16px;
-  border-radius: 20px;
-  border: 1px solid var(--settings-border);
-  background: var(--settings-muted-bg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  box-shadow: var(--shadow-card);
 }
 
 .cuda-progress-header {
@@ -120,9 +129,16 @@
   gap: 2px 8px;
   align-items: center;
   padding: 8px 10px;
-  border-radius: 14px;
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
   background: var(--bg-card);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.cuda-step:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .cuda-step-index {
@@ -151,32 +167,32 @@
 }
 
 .cuda-step.done {
-  border-color: rgba(34, 168, 102, 0.28);
-  background: rgba(34, 168, 102, 0.08);
+  border-color: var(--success-border);
+  background: var(--success-bg);
 }
 
 .cuda-step.done .cuda-step-index {
-  background: rgba(34, 168, 102, 0.16);
+  background: var(--success-bg);
   color: var(--success);
 }
 
 .cuda-step.active {
-  border-color: rgba(251, 114, 153, 0.24);
-  background: rgba(251, 114, 153, 0.06);
+  border-color: var(--accent-border);
+  background: var(--bg-accent);
 }
 
 .cuda-step.active .cuda-step-index {
-  background: rgba(251, 114, 153, 0.14);
-  color: var(--brand-600);
+  background: var(--bg-accent-strong);
+  color: var(--accent);
 }
 
 .cuda-step.failed {
-  border-color: rgba(225, 75, 90, 0.26);
-  background: rgba(225, 75, 90, 0.06);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 
 .cuda-step.failed .cuda-step-index {
-  background: rgba(225, 75, 90, 0.14);
+  background: var(--danger-bg);
   color: var(--danger);
 }
 
@@ -204,7 +220,7 @@
 
 .cuda-status-note {
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   font-size: 0.8rem;
@@ -263,8 +279,8 @@
   text-align: center;
   padding: 40px 24px;
   border-radius: var(--radius-xl);
-  border: 1px dashed var(--border-default);
-  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
+  background: var(--bg-tertiary);
   color: var(--text-tertiary);
 }
 
@@ -272,8 +288,8 @@
   width: 40px;
   height: 40px;
   margin: 0 auto 20px;
-  border: 3px solid var(--border-subtle);
-  border-top-color: var(--brand-600);
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -300,13 +316,13 @@
   min-height: 48px;
   padding: 12px 18px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--brand-300) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 82%, rgba(255, 255, 255, 0.72) 18%);
-  color: var(--brand-700);
+  border: 1px solid var(--accent-border);
+  background: var(--bg-card);
+  color: var(--accent);
   font-size: 0.92rem;
   line-height: 1.45;
   text-align: center;
-  box-shadow: 0 18px 40px rgba(17, 24, 39, 0.12);
+  box-shadow: var(--shadow-lg);
   backdrop-filter: blur(18px) saturate(140%);
   pointer-events: auto;
   animation: floatingNoticeIn 220ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -315,20 +331,20 @@
 .floating-notice-pill.tone-info,
 .submit-status,
 .action-status {
-  border-color: color-mix(in srgb, var(--brand-300) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 80%, var(--bg-accent) 20%);
-  color: var(--brand-700);
+  border-color: var(--accent-border);
+  background: var(--bg-card);
+  color: var(--accent);
 }
 
 .floating-notice-pill.tone-success {
-  border-color: color-mix(in srgb, var(--success-border) 88%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-success) 18%);
+  border-color: var(--success-border);
+  background: var(--bg-card);
   color: var(--success);
 }
 
 .floating-notice-pill.tone-error {
-  border-color: color-mix(in srgb, var(--danger-border) 88%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 82%, var(--bg-danger) 18%);
+  border-color: var(--danger-border);
+  background: var(--bg-card);
   color: var(--danger);
 }
 
@@ -388,9 +404,16 @@
   gap: 16px;
   margin-top: 16px;
   padding: 16px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--brand-200);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--accent-border);
   background: var(--bg-accent);
+  box-shadow: var(--shadow-accent-glow);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.probe-preview:hover {
+  box-shadow: 0 0 32px rgba(251, 114, 153, 0.3);
+  transform: translateY(-2px);
 }
 
 .probe-preview img {
@@ -453,10 +476,14 @@
   min-height: 52px;
   border-radius: 0;
   box-shadow: none;
+  color: #1e1e1e;
+  background: var(--brand-500);
 }
 
 .summary-submit-main.primary-button:hover {
   box-shadow: none;
+  color: #1e1e1e;
+  background: var(--brand-600);
 }
 
 .summary-submit-menu-button {
@@ -476,6 +503,7 @@
 .summary-submit-menu-button:hover,
 .summary-submit-menu-button:focus-visible {
   background: var(--brand-600);
+  color: #1e1e1e;
   outline: none;
 }
 
@@ -760,9 +788,17 @@
   display: grid;
   gap: 8px;
   padding: 18px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
   background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.summary-metric:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
 }
 
 .summary-metric span {
@@ -786,16 +822,16 @@
 
 .summary-metric.metric-accent {
   background: var(--bg-accent);
-  border-color: var(--brand-200);
+  border-color: var(--accent-border);
 }
 
 .summary-metric.metric-accent strong {
-  color: var(--brand-600);
+  color: var(--accent);
 }
 
 .summary-metric.metric-success {
-  background: var(--bg-success);
-  border-color: rgba(34, 168, 102, 0.2);
+  background: var(--success-bg);
+  border-color: var(--success-border);
 }
 
 .summary-metric.metric-success strong {
@@ -803,8 +839,8 @@
 }
 
 .summary-metric.metric-info {
-  background: var(--bg-info);
-  border-color: rgba(86, 126, 255, 0.2);
+  background: var(--info-bg);
+  border-color: var(--info-border);
 }
 
 .summary-metric.metric-info strong {
@@ -891,8 +927,8 @@
   overflow: auto;
   padding: 16px;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 0.9rem;
@@ -906,9 +942,17 @@
 }
 
 .task-history-item {
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
   background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.task-history-item:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
 }
 
 .task-history-item summary {
@@ -981,10 +1025,17 @@
 }
 
 .progress-stage-card {
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
   background: var(--bg-card);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.progress-stage-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--border-strong);
 }
 
 .progress-stage-card summary {
@@ -1031,8 +1082,14 @@
   gap: 4px;
   padding: 12px 14px;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-subtle) 8%);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.progress-focus-card:hover {
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .progress-focus-card span {

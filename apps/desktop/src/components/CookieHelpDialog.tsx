@@ -33,7 +33,7 @@ export function CookieHelpDialog({
           <div className="cookie-help-hero">
             <span className="section-kicker">HTTP 412</span>
             <strong>当前请求可能被 B 站风控拦截</strong>
-            <p>打开 BiliSum 自带的 B 站登录窗口，登录完成后会自动捕获登录态并保存为 yt-dlp 可用的 cookies.txt。</p>
+            <p>打开 VidMind 自带的 B 站登录窗口，登录完成后会自动捕获登录态并保存为 yt-dlp 可用的 cookies.txt。</p>
           </div>
 
           <div className="cookie-help-summary">
@@ -49,7 +49,7 @@ export function CookieHelpDialog({
               <span>1</span>
               <div>
                 <strong>先在浏览器登录 B 站</strong>
-                <p>使用 BiliSum 打开的登录窗口，不再读取 Chrome/Edge/Firefox 的本机数据库。</p>
+                <p>使用 VidMind 打开的登录窗口，不再读取 Chrome/Edge/Firefox 的本机数据库。</p>
               </div>
             </div>
             <div className="cookie-help-step">

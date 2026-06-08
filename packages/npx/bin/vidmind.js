@@ -4,8 +4,8 @@ const { spawn, spawnSync } = require("node:child_process");
 const { existsSync, mkdirSync, readFileSync } = require("node:fs");
 const { dirname, join } = require("node:path");
 
-const RELEASES_URL = "https://github.com/lycohana/BiliSum/releases/latest";
-const REPO_URL = "https://github.com/lycohana/BiliSum";
+const RELEASES_URL = "https://github.com/qianshengli/vidmind/releases/latest";
+const REPO_URL = "https://github.com/qianshengli/vidmind";
 const DEFAULT_PORT = "3838";
 const PACKAGE_ROOT = join(__dirname, "..");
 const RUNTIME_ROOT = join(PACKAGE_ROOT, "runtime");
@@ -20,16 +20,16 @@ function readVersion() {
 
 function printHelp() {
   const version = readVersion();
-  console.log(`BiliSum ${version}`);
+  console.log(`VidMind ${version}`);
   console.log("");
   console.log("AI 视频总结与知识库工具，深度优化 B 站体验，同时支持 YouTube 和本地视频。");
   console.log("");
   console.log("Usage:");
-  console.log("  npx bilisum                         Start the local BiliSum service");
-  console.log("  npx bilisum start [options]          Start the local BiliSum service");
-  console.log("  npx bilisum doctor                   Check Python/runtime setup");
-  console.log("  npx bilisum --version                Print package version");
-  console.log("  npx bilisum release                  Open the latest GitHub release");
+  console.log("  npx vidmind                         Start the local VidMind service");
+  console.log("  npx vidmind start [options]          Start the local VidMind service");
+  console.log("  npx vidmind doctor                   Check Python/runtime setup");
+  console.log("  npx vidmind --version                Print package version");
+  console.log("  npx vidmind release                  Open the latest GitHub release");
   console.log("");
   console.log("Options:");
   console.log("  --host <host>                        Host, default 127.0.0.1");
@@ -46,10 +46,10 @@ function printHelp() {
 
 function parseStartOptions(args) {
   const options = {
-    host: process.env.BILISUM_HOST || "127.0.0.1",
-    port: process.env.BILISUM_PORT || DEFAULT_PORT,
-    python: process.env.BILISUM_PYTHON || "",
-    data: process.env.BILISUM_DATA || defaultDataDir(),
+    host: process.env.VIDMIND_HOST || "127.0.0.1",
+    port: process.env.VIDMIND_PORT || DEFAULT_PORT,
+    python: process.env.VIDMIND_PYTHON || "",
+    data: process.env.VIDMIND_DATA || defaultDataDir(),
     env: [],
     reinstall: false,
     open: true,
@@ -88,13 +88,13 @@ function readOptionValue(args, index, option) {
 }
 
 function defaultBaseDir() {
-  if (process.env.BILISUM_NPX_HOME) {
-    return process.env.BILISUM_NPX_HOME;
+  if (process.env.VIDMIND_NPX_HOME) {
+    return process.env.VIDMIND_NPX_HOME;
   }
   if (process.platform === "win32") {
-    return join(process.env.LOCALAPPDATA || process.env.USERPROFILE || process.cwd(), "BiliSum", "npx");
+    return join(process.env.LOCALAPPDATA || process.env.USERPROFILE || process.cwd(), "VidMind", "npx");
   }
-  return join(process.env.XDG_DATA_HOME || join(process.env.HOME || process.cwd(), ".local", "share"), "bilisum", "npx");
+  return join(process.env.XDG_DATA_HOME || join(process.env.HOME || process.cwd(), ".local", "share"), "vidmind", "npx");
 }
 
 function defaultDataDir() {
@@ -151,17 +151,17 @@ function runChecked(command, args, options = {}) {
 
 function ensureRuntime() {
   if (!existsSync(join(RUNTIME_ROOT, "apps", "service", "pyproject.toml"))) {
-    throw new Error("BiliSum runtime files are missing from this npm package. Please reinstall bilisum.");
+    throw new Error("VidMind runtime files are missing from this npm package. Please reinstall vidmind.");
   }
   if (!existsSync(join(RUNTIME_ROOT, "apps", "web", "static", "index.html"))) {
-    throw new Error("BiliSum web static files are missing from this npm package. Please reinstall bilisum.");
+    throw new Error("VidMind web static files are missing from this npm package. Please reinstall vidmind.");
   }
 }
 
 function ensureVenv(options) {
   ensureRuntime();
   const pythonPath = pythonInVenv();
-  const marker = join(venvDir(), ".bilisum-installed");
+  const marker = join(venvDir(), ".vidmind-installed");
   if (existsSync(pythonPath) && existsSync(marker) && !options.reinstall) {
     return pythonPath;
   }
@@ -169,7 +169,7 @@ function ensureVenv(options) {
   const sourcePython = findPython(options.python);
   mkdirSync(dirname(venvDir()), { recursive: true });
 
-  console.log("Preparing BiliSum Python runtime. This may take a minute on first run...");
+  console.log("Preparing VidMind Python runtime. This may take a minute on first run...");
   runChecked(sourcePython.command, [...sourcePython.args, "-m", "venv", venvDir()]);
 
   runChecked(pythonPath, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "hatchling"]);
@@ -216,7 +216,7 @@ function startService(args) {
   }
 
   const url = `http://${options.host}:${options.port}`;
-  console.log(`Starting BiliSum at ${url}`);
+  console.log(`Starting VidMind at ${url}`);
   console.log(`Data directory: ${dataDir}`);
   console.log("");
 
@@ -243,7 +243,7 @@ function doctor(args) {
   const options = parseStartOptions(args);
   ensureRuntime();
   const python = findPython(options.python);
-  console.log(`BiliSum package: ${readVersion()}`);
+  console.log(`VidMind package: ${readVersion()}`);
   console.log(`Python command: ${[python.command, ...python.args].join(" ")}`);
   console.log(`Runtime root:   ${RUNTIME_ROOT}`);
   console.log(`Venv:           ${venvDir()}`);

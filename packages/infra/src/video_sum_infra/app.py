@@ -11,7 +11,7 @@ class AppInfo:
 
     @classmethod
     def load(cls) -> "AppInfo":
-        return cls(name="BiliSum", version=_resolve_version())
+        return cls(name="VidMind", version=_resolve_version())
 
 
 def _resolve_version() -> str:

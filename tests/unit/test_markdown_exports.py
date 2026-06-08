@@ -17,7 +17,7 @@ def test_build_task_markdown_export_for_obsidian_includes_frontmatter_and_sectio
         task_id="task-1",
         created_at=datetime(2026, 4, 22, 1, 0, tzinfo=timezone.utc),
         exported_at=datetime(2026, 4, 22, 9, 30, tzinfo=timezone.utc),
-        tags=["bilisum", "bilibili", "video-summary"],
+        tags=["vidmind", "bilibili", "video-summary"],
         target="obsidian",
         mindmap_path="C:/vault/mindmaps/task-1.json",
     )
@@ -25,7 +25,7 @@ def test_build_task_markdown_export_for_obsidian_includes_frontmatter_and_sectio
     assert content.startswith("---\n")
     assert 'title: "函数专题"' in content
     assert 'canonical_id: "BV1test"' in content
-    assert '  - "bilisum"' in content
+    assert '  - "vidmind"' in content
     assert "\n# 函数专题\n" in content
     assert "## 核心概览" in content
     assert "## 关键要点" in content
@@ -49,7 +49,7 @@ def test_build_task_markdown_export_for_markdown_omits_frontmatter_and_tolerates
         task_id="task-2",
         created_at=datetime(2026, 4, 22, 1, 0, tzinfo=timezone.utc),
         exported_at=datetime(2026, 4, 22, 9, 30, tzinfo=timezone.utc),
-        tags=["bilisum"],
+        tags=["vidmind"],
         target="markdown",
         mindmap_path=None,
     )
@@ -74,7 +74,7 @@ def test_build_task_markdown_export_can_include_transcript() -> None:
         task_id="task-3",
         created_at=datetime(2026, 4, 22, 1, 0, tzinfo=timezone.utc),
         exported_at=datetime(2026, 4, 22, 9, 30, tzinfo=timezone.utc),
-        tags=["bilisum"],
+        tags=["vidmind"],
         target="markdown",
         transcript_text="[00:00] 第一条",
         include_transcript=True,

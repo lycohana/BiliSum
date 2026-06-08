@@ -1,11 +1,11 @@
-# BiliSum Light UI Spec
+# VidMind Light UI Spec
 
-> 说明：本文件保留为浅色模式视觉提案。当前开发与实现请优先参考 `docs/bilisum-ui-spec.md`。若与当前代码不一致，以 `apps/desktop/src/app.css` 和主规范为准，尤其是深色模式与平台标签实现。
+> 说明：本文件保留为浅色模式视觉提案。当前开发与实现请优先参考 `docs/vidmind-ui-spec.md`。若与当前代码不一致，以 `apps/desktop/src/app.css` 和主规范为准，尤其是深色模式与平台标签实现。
 
 ## 1. 白天模式重设计说明
 
 - 设计方向：明亮、轻专业、带一点消费级产品的精致感，避免传统后台的厚重感。
-- 品牌气质：从 BiliSum logo 提取 `#FB7299 / #F85D8E / #FF9ABA` 作为暖粉珊瑚品牌主轴，用低饱和浅底承接。
+- 品牌气质：从 VidMind logo 提取 `#FB7299 / #F85D8E / #FF9ABA` 作为暖粉珊瑚品牌主轴，用低饱和浅底承接。
 - 产品属性表达：
   - 主操作区强调“输入链接 -> 本地处理 -> AI 总结”
   - 数据概览退居第二层，不与主 CTA 抢焦点
@@ -133,7 +133,7 @@
 当前项目已直接落地为 React + 自定义 token CSS；如果前端团队要按 Tailwind 组件化继续实现，可按下列结构拆：
 
 ```tsx
-export function BiliSumHome() {
+export function VidMindHome() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
       <div className="grid min-h-screen grid-cols-[248px_minmax(0,1fr)]">

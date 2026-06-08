@@ -29,8 +29,8 @@ type SummaryPreference = {
   generateMindmap: boolean;
 };
 
-const SUMMARY_PREFERENCE_STORAGE_KEY = "bilisum.summaryPreference";
-const PREFERENCE_HINT_SEEN_KEY = "bilisum.summaryPreferenceHintSeen";
+const SUMMARY_PREFERENCE_STORAGE_KEY = "vidmind.summaryPreference";
+const PREFERENCE_HINT_SEEN_KEY = "vidmind.summaryPreferenceHintSeen";
 const DEFAULT_SUMMARY_PREFERENCE: SummaryPreference = {
   noteMode: "text",
   generateMindmap: false,

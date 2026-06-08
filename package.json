@@ -1,5 +1,5 @@
 {
-  "name": "bilisum-workspace",
+  "name": "vidmind-workspace",
   "private": true,
   "scripts": {
     "dev": "npm --prefix apps/desktop run dev",
@@ -7,8 +7,8 @@
     "build:web": "npm --prefix apps/desktop run build:renderer",
     "build": "npm --prefix apps/desktop run build",
     "build:desktop": "npm --prefix apps/desktop run build",
-    "docker:build": "npm run build:web && docker build -t bilisum:local .",
-    "npx:test": "node packages/npx/bin/bilisum.js --version && cd packages/npx && npm pack --dry-run",
+    "docker:build": "npm run build:web && docker build -t vidmind:local .",
+    "npx:test": "node packages/npx/bin/vidmind.js --version && cd packages/npx && npm pack --dry-run",
     "package:win": "npm --prefix apps/desktop run package:win",
     "package:win-notfront": "npm --prefix apps/desktop run package:win-notfront",
     "package:mac": "npm --prefix apps/desktop run package:mac",

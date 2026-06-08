@@ -144,7 +144,7 @@ const FLOATING_PLAYER_VIEWPORT_MARGIN = 20;
 const FLOATING_PLAYER_TOP_OFFSET = 92;
 const FLOATING_PLAYER_CHROME_HEIGHT = 62;
 const LOCAL_VIDEO_SUFFIXES = new Set([".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".flv", ".m4v", ".ts", ".mpeg", ".mpg"]);
-const SUMMARY_PREFERENCE_STORAGE_KEY = "bilisum.summaryPreference";
+const SUMMARY_PREFERENCE_STORAGE_KEY = "vidmind.summaryPreference";
 
 const detailTabs: Array<{ id: DetailTab; label: string; description: string }> = [
   { id: "knowledge", label: "知识卡片", description: "按概览、要点、章节整理当前任务结果。" },
@@ -368,6 +368,7 @@ export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieT
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchDialogMode, setBatchDialogMode] = useState<"create" | "resummary">("create");
   const [playerSeekTarget, setPlayerSeekTarget] = useState<PlayerSeekTarget>({ nonce: 0, seconds: null });
+  const [floatingPlayerVisible, setFloatingPlayerVisible] = useState(true);
   const [selectedMindMapNodeId, setSelectedMindMapNodeId] = useState<string | null>(null);
   const lastAutoRefreshEventRef = useRef<string | null>(null);
   const cookieHelpAutoShownRef = useRef<string | null>(null);
@@ -2908,7 +2909,7 @@ export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieT
               onSubmit={handleSubmitBatchAction}
             />
 
-            {(activeTab === "summary" || activeTab === "mindmap") && (localPlayerUrl || (playerEmbedUrl && playerDescriptor)) ? (
+            {(activeTab === "summary" || activeTab === "mindmap") && floatingPlayerVisible && (localPlayerUrl || (playerEmbedUrl && playerDescriptor)) ? (
               <FloatingVideoPlayer
                 embedUrl={playerEmbedUrl}
                 localVideoUrl={localPlayerUrl}
@@ -2916,6 +2917,7 @@ export function VideoDetailPage({ onRefresh, onOpenCookieSettings, onOpenCookieT
                 sourceUrl={playerDescriptor?.sourceUrl}
                 seekTarget={playerSeekTarget}
                 title={video.title}
+                onClose={() => setFloatingPlayerVisible(false)}
               />
             ) : null}
           </article>
@@ -3464,6 +3466,7 @@ function FloatingVideoPlayer({
   sourceUrl,
   seekTarget,
   title,
+  onClose,
 }: {
   embedUrl: string | null;
   localVideoUrl: string | null;
@@ -3471,6 +3474,7 @@ function FloatingVideoPlayer({
   sourceUrl?: string | null;
   seekTarget: PlayerSeekTarget;
   title: string;
+  onClose?: () => void;
 }) {
   const pointerStateRef = useRef<{
     mode: "drag" | "resize";
@@ -3576,6 +3580,19 @@ function FloatingVideoPlayer({
           <span className="detail-floating-player-kicker">Player</span>
           <strong>{title}</strong>
         </div>
+        {onClose && (
+          <button
+            className="detail-floating-player-close"
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onClose}
+            aria-label="关闭播放器"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </button>
+        )}
         {sourceUrl && openLabel ? (
           <a
             className="detail-floating-player-link"

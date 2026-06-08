@@ -68,7 +68,7 @@ export type BilibiliQrcodePollResponse = {
 };
 
 export class AuthRequiredError extends Error {
-  constructor(message = "需要输入 BiliSum 访问密钥。") {
+  constructor(message = "需要输入 VidMind 访问密钥。") {
     super(message);
     this.name = "AuthRequiredError";
   }

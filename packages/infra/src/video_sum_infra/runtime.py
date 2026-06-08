@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-APP_SLUG = "bilisum"
+APP_SLUG = "vidmind"
 LEGACY_APP_SLUG = "briefvid"
 DOCKER_DATA_ROOT = Path("/data")
 _DLL_DIRECTORY_HANDLES: dict[str, object] = {}

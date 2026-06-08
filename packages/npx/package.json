@@ -1,9 +1,9 @@
 {
-  "name": "bilisum",
-  "version": "1.16.2",
-  "description": "Start the local BiliSum service from npx.",
+  "name": "vidmind",
+  "version": "1.0.0",
+  "description": "Start the local VidMind service from npx.",
   "bin": {
-    "bilisum": "bin/bilisum.js"
+    "vidmind": "bin/vidmind.js"
   },
   "files": [
     "bin",
@@ -19,14 +19,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lycohana/BiliSum.git"
+    "url": "git+https://github.com/qianshengli/vidmind.git"
   },
   "bugs": {
-    "url": "https://github.com/lycohana/BiliSum/issues"
+    "url": "https://github.com/qianshengli/vidmind/issues"
   },
-  "homepage": "https://github.com/lycohana/BiliSum#readme",
+  "homepage": "https://github.com/qianshengli/vidmind#readme",
   "keywords": [
-    "bilisum",
+    "vidmind",
     "bilibili",
     "video-summary",
     "ai-summary",

@@ -1,19 +1,18 @@
+const iconIcoPath = "../../apps/desktop/build/icon.ico";
 const extraResources = [
   {
-    from: "../../dist/BiliSum",
-    to: "backend/BiliSum"
+    from: "../../dist/VidMind",
+    to: "backend/VidMind"
   },
-  process.platform === "win32"
-    ? {
-        from: "../../apps/desktop/build/icon.ico",
-        to: "icon.ico"
-      }
-    : null
-].filter(Boolean);
+  {
+    from: iconIcoPath,
+    to: "icon.ico"
+  }
+];
 
 module.exports = {
-  appId: "com.bilisum.desktop",
-  productName: "BiliSum",
+  appId: "com.vidmind.desktop",
+  productName: "VidMind",
   artifactName: "${productName}-${version}-${os}-${arch}-Setup.${ext}",
   directories: {
     output: "../../dist/desktop"
@@ -23,19 +22,6 @@ module.exports = {
     "announcement.md"
   ],
   extraResources,
-  mac: {
-    target: ["dmg", "zip"],
-    artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
-    icon: "../../apps/desktop/build/icon.icns",
-    category: "public.app-category.productivity",
-    hardenedRuntime: false,
-    gatekeeperAssess: false,
-    identity: null
-  },
-  dmg: {
-    sign: false,
-    artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
-  },
   win: {
     "target": [
       {
@@ -45,7 +31,7 @@ module.exports = {
         ]
       }
     ],
-    "icon": "../../apps/desktop/build/icon.ico",
+    "icon": iconIcoPath,
     "sign": null,
     "signAndEditExecutable": true,
     "signDlls": false,
@@ -58,17 +44,16 @@ module.exports = {
     allowElevation: true,
     createDesktopShortcut: true,
     perMachine: false,
-    shortcutName: "BiliSum",
-    uninstallDisplayName: "BiliSum",
-    installerIcon: "../../apps/desktop/build/icon.ico",
-    uninstallerIcon: "../../apps/desktop/build/icon.ico"
+    shortcutName: "VidMind",
+    uninstallDisplayName: "VidMind",
+    installerIcon: iconIcoPath,
+    uninstallerIcon: iconIcoPath
   },
   publish: {
     provider: "github",
-    owner: "lycohana",
-    repo: "BiliSum",
+    owner: "qianshengli",
+    repo: "vidmind",
     releaseType: "release"
   },
-  // Disable code signing completely
   afterSign: null
 };

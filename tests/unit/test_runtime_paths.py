@@ -44,7 +44,7 @@ def test_app_data_root_migrates_legacy_briefvid_files(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(runtime_module, "_LEGACY_APP_DATA_MIGRATION_DONE", False)
 
     legacy_root = tmp_path / "briefvid"
-    current_root = tmp_path / "bilisum"
+    current_root = tmp_path / "vidmind"
     (legacy_root / "data" / "tasks" / "task-1").mkdir(parents=True)
     (legacy_root / "runtime" / "gpu-cu128").mkdir(parents=True)
     (legacy_root / "data" / "video_sum.db").write_text("legacy-db", encoding="utf-8")

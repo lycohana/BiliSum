@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 ACCESS_TOKEN_ENV = "VIDEO_SUM_ACCESS_TOKEN"
-SESSION_COOKIE_NAME = "bilisum_session"
+SESSION_COOKIE_NAME = "vidmind_session"
 
 
 class AccessTokenManager:
@@ -102,7 +102,7 @@ def request_is_authorized(request: Request, manager: AccessTokenManager) -> bool
 def unauthorized_response() -> JSONResponse:
     return JSONResponse(
         status_code=401,
-        content={"detail": "需要输入 BiliSum 访问密钥。"},
+        content={"detail": "需要输入 VidMind 访问密钥。"},
         headers={"WWW-Authenticate": "Bearer"},
     )
 

@@ -28,7 +28,7 @@ const TOUR_STEPS: TourStep[] = [
   },
 ];
 
-const TOUR_SEEN_KEY = "bilisum.homeTourSeen";
+const TOUR_SEEN_KEY = "vidmind.homeTourSeen";
 
 function getElementRect(selector: string): DOMRect | null {
   const el = document.querySelector(selector);

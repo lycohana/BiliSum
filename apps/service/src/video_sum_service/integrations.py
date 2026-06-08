@@ -176,7 +176,7 @@ def build_test_wav_bytes(duration_ms: int = 250, sample_rate: int = 16000) -> by
 
 def load_builtin_asr_test_audio() -> tuple[str, bytes, str]:
     audio = importlib.resources.files("video_sum_service.assets").joinpath("asr_test_zh.wav")
-    return "bilisum-asr-test-zh.wav", audio.read_bytes(), "audio/wav"
+    return "vidmind-asr-test-zh.wav", audio.read_bytes(), "audio/wav"
 
 
 def load_asr_test_audio() -> tuple[str, bytes, str]:
@@ -199,7 +199,7 @@ def load_asr_test_audio() -> tuple[str, bytes, str]:
     try:
         return load_builtin_asr_test_audio()
     except (FileNotFoundError, ModuleNotFoundError):
-        return "bilisum-asr-test.wav", build_test_wav_bytes(), "audio/wav"
+        return "vidmind-asr-test.wav", build_test_wav_bytes(), "audio/wav"
 
 
 def build_effective_llm_test_settings(payload: SettingsUpdatePayload | None = None) -> ServiceSettings:
@@ -372,10 +372,10 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
 
     if test_scope == "visual":
         parsed_text = json.dumps(parsed_json, ensure_ascii=False).lower()
-        if "bilisum" not in parsed_text and "bili" not in parsed_text:
+        if "vidmind" not in parsed_text and "bili" not in parsed_text:
             raise HTTPException(
                 status_code=502,
-                detail="视觉模型测试失败：接口返回了 JSON，但未识别出测试图片中的 BiliSum 文本。",
+                detail="视觉模型测试失败：接口返回了 JSON，但未识别出测试图片中的 VidMind 文本。",
             )
 
     preview = preview[:200]

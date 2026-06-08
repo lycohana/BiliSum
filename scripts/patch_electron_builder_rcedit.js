@@ -25,7 +25,7 @@ const originalSnippet = `        // rcedit crashed of executed using wine, resou
 
 const patchedSnippet = `        // rcedit crashed of executed using wine, resourcehacker works
         if (process.platform === "win32") {
-            const localRcedit = process.env.BILISUM_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;
+            const localRcedit = process.env.VIDMIND_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;
             if (localRcedit) {
                 await (0, builder_util_1.exec)(localRcedit, args);
             }
@@ -48,17 +48,17 @@ if (!fs.existsSync(targetPath)) {
 
 const source = fs.readFileSync(targetPath, "utf8");
 
-if (source.includes("const localRcedit = process.env.BILISUM_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;")) {
+if (source.includes("const localRcedit = process.env.VIDMIND_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;")) {
   console.log(`Already patched: ${targetPath}`);
   process.exit(0);
 }
 
-if (source.includes("const localRcedit = process.env.BILISUM_RCEDIT_PATH;")) {
+if (source.includes("const localRcedit = process.env.VIDMIND_RCEDIT_PATH;")) {
   fs.writeFileSync(
     targetPath,
     source.replace(
-      "const localRcedit = process.env.BILISUM_RCEDIT_PATH;",
-      "const localRcedit = process.env.BILISUM_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;",
+      "const localRcedit = process.env.VIDMIND_RCEDIT_PATH;",
+      "const localRcedit = process.env.VIDMIND_RCEDIT_PATH || process.env.BRIEFVID_RCEDIT_PATH;",
     ),
     "utf8",
   );

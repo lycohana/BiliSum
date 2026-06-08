@@ -9,7 +9,7 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "bilisum-workspace",
+    "vidmind-workspace",
     "video-sum-core",
     "video-sum-infra",
     "video-sum-service",
@@ -122,7 +122,7 @@ wheels = [
 ]
 
 [[package]]
-name = "bilisum-workspace"
+name = "vidmind-workspace"
 version = "1.16.0"
 source = { virtual = "." }
 

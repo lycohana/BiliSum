@@ -63,7 +63,7 @@
   <!-- 右侧文字区域 - 垂直居中 -->
   <g transform="translate(540, 145)">
     <!-- 产品名称 -->
-    <text x="0" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="68" font-weight="700" fill="url(#textGradient)" filter="url(#glow)">BiliSum</text>
+    <text x="0" y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="68" font-weight="700" fill="url(#textGradient)" filter="url(#glow)">VidMind</text>
 
     <!-- 副标题/标语 -->
     <text x="0" y="95" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" fill="#d8d8e8">AI 视频总结与知识库工具</text>

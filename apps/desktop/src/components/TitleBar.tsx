@@ -113,7 +113,7 @@ export function TitleBar({
         <div className="title-bar-brand-mark">
           <img src="/static/assets/icons/icon.svg" alt="" />
         </div>
-        <span className="title-bar-brand-text">BiliSum</span>
+        <span className="title-bar-brand-text">VidMind</span>
       </div>
       <div className="title-bar-drag-region" />
       <div className="title-bar-controls">
@@ -203,20 +203,20 @@ export function TitleBar({
           </div>
         </div>
         <button
-          className="title-bar-button"
+          className="title-bar-button theme-toggle"
           type="button"
           onClick={onToggleTheme}
           aria-label={darkMode ? "切换到浅色模式" : "切换到深色模式"}
           title={darkMode ? "浅色模式" : "深色模式"}
         >
           {darkMode ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2.5v2.25M12 19.25v2.25M4.75 12H2.5M21.5 12h-2.25M5.9 5.9 4.3 4.3M19.7 19.7l-1.6-1.6M18.1 5.9l1.6-1.6M4.3 19.7l1.6-1.6" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5" />
+              <path d="M12 1.5v2M12 20.5v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1.5 12h2M20.5 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
             </svg>
           ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 15.5A8.5 8.5 0 1 1 12.5 4a6.5 6.5 0 0 0 7.5 11.5Z" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
             </svg>
           )}
         </button>

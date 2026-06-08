@@ -52,11 +52,11 @@ def export_task_markdown(
     title = (
         str(record.task_input.title or "").strip()
         or str(video.title if video else "").strip()
-        or "BiliSum 知识笔记"
+        or "VidMind 知识笔记"
     )
     preferred_file_name = build_export_filename(title, export_time)
     platform = str(video.platform if video else record.task_input.platform_hint or "").strip().lower() or "unknown"
-    tags = ["bilisum", platform, "video-summary"]
+    tags = ["vidmind", platform, "video-summary"]
     export_path, had_name_conflict = _choose_markdown_export_path(export_directory, preferred_file_name)
     note_markdown = result.knowledge_note_markdown
     enhanced_note_path = (
@@ -143,7 +143,7 @@ def export_task_transcript(
     title = (
         str(record.task_input.title or "").strip()
         or str(video.title if video else "").strip()
-        or "BiliSum transcript"
+        or "VidMind transcript"
     )
     preferred_file_name = build_transcript_export_filename(title, export_time)
     export_path, had_name_conflict = _write_markdown_export(export_directory, preferred_file_name, transcript)

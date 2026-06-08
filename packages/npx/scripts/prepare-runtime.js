@@ -61,4 +61,4 @@ copyPackage(join("apps", "service"));
 copyWebStatic();
 copyFileSync(join(repoRoot, "VERSION"), join(runtimeRoot, "VERSION"));
 
-console.log(`Prepared BiliSum npx runtime at ${runtimeRoot}`);
+console.log(`Prepared VidMind npx runtime at ${runtimeRoot}`);

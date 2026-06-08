@@ -46,19 +46,21 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
   color: var(--text-secondary);
   cursor: pointer;
   align-items: center;
   justify-content: center;
-  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .mobile-menu-toggle:hover {
-  background: var(--bg-subtle);
+  background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--border-default);
+  border-color: var(--border-strong);
+  transform: scale(1.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .mobile-menu-toggle:active {
@@ -88,14 +90,15 @@
     max-width: calc(100vw - 60px);
     height: calc(100vh - var(--title-bar-height));
     padding: 20px 16px;
-    border-right: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border);
     border-bottom: none;
     transform: translateX(-100%);
     opacity: 0;
     visibility: hidden;
     transition: transform var(--transition-sidebar-slide), opacity var(--transition-sidebar-fade), visibility var(--transition-sidebar-fade);
     z-index: 150;
-    background: var(--bg-canvas);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-lg);
   }
 
   .app-shell.mobile-sidebar-open .sidebar {
@@ -348,14 +351,14 @@
 
   .detail-tab + .detail-tab {
     border-left: none;
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--border);
   }
 
   .detail-hero-capsule {
     display: grid;
     gap: 14px;
     padding: 16px;
-    border-radius: 24px;
+    border-radius: var(--radius-lg);
   }
 
   .video-detail-hero .detail-task-float .detail-hero-capsule {
@@ -567,10 +570,10 @@
     max-width: none;
     max-height: none;
     padding: 20px;
-    border-radius: 24px;
+    border-radius: var(--radius-xl);
     overflow: auto;
     overscroll-behavior: contain;
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-xl);
   }
 
   .detail-task-panel-header,

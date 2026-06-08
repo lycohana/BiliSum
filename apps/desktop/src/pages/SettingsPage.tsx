@@ -289,8 +289,11 @@ export function SettingsPage({
     const updateStickyTop = () => {
       const bottomGap = 24;
       const topGap = 24;
-      const stickyTop = Math.min(topGap, window.innerHeight - node.offsetHeight - bottomGap);
-      node.style.setProperty("--settings-nav-sticky-top", `${Math.round(stickyTop)}px`);
+      const currentTopStr = getComputedStyle(node).top;
+      const currentTop = currentTopStr ? parseFloat(currentTopStr) : topGap;
+      const maxBottom = window.innerHeight - node.offsetHeight - bottomGap;
+      const clampedTop = isNaN(currentTop) ? topGap : Math.min(Math.max(currentTop, topGap), maxBottom);
+      node.style.setProperty("--settings-nav-sticky-top", `${Math.round(clampedTop)}px`);
     };
 
     updateStickyTop();
@@ -1346,7 +1349,7 @@ export function SettingsPage({
       />
       <aside className="settings-nav" ref={settingsNavRef}>
         <div className="settings-nav-header">
-          <span className="settings-nav-label-small">BiliSum</span>
+          <span className="settings-nav-label-small">VidMind</span>
           <div className="settings-nav-brand-card">
             <div className="settings-nav-brand-copy">
               <span className="settings-nav-brand-kicker">设置</span>
@@ -1763,8 +1766,8 @@ export function SettingsPage({
                     className="secondary-button"
                     type="button"
                     onClick={() => {
-                      window.localStorage.removeItem("bilisum.homeTourSeen");
-                      window.localStorage.removeItem("bilisum.summaryPreferenceHintSeen");
+                      window.localStorage.removeItem("vidmind.homeTourSeen");
+                      window.localStorage.removeItem("vidmind.summaryPreferenceHintSeen");
                       setSaveStatus("已清空首页引导记录，下次进入首页将重新显示。");
                     }}
                   >

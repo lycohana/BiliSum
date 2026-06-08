@@ -119,7 +119,7 @@ class KnowledgeIndexService:
                 self._chroma_path.mkdir(parents=True, exist_ok=True)
                 client = chromadb.PersistentClient(path=str(self._chroma_path))
                 self._collection = client.get_or_create_collection(
-                    name="bilisum_knowledge",
+                    name="vidmind_knowledge",
                     metadata={"hnsw:space": "cosine"},
                 )
             except Exception as exc:

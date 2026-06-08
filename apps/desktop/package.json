@@ -1,16 +1,16 @@
 {
-  "name": "bilisum-desktop",
-  "version": "1.16.2",
+  "name": "vidmind-desktop",
+  "version": "1.0.0",
   "private": true,
-  "description": "BiliSum desktop shell powered by React, Vite, and Electron.",
+  "description": "VidMind desktop shell powered by React, Vite, and Electron.",
   "main": "dist-electron/main.js",
   "author": {
-    "name": "lycohana"
+    "name": "qianshengli"
   },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --config vite.config.ts",
-    "dev:electron": "wait-on tcp:3000 && npm run build:electron && cross-env BILISUM_RENDERER_URL=http://127.0.0.1:3000 electron ./dist-electron/main.js",
+    "dev:electron": "wait-on tcp:3000 && npm run build:electron && cross-env VIDMIND_RENDERER_URL=http://127.0.0.1:3000 electron ./dist-electron/main.js",
     "test": "node --experimental-strip-types test/run.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:renderer": "vite build --config vite.config.ts",
@@ -50,8 +50,8 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "appId": "com.bilisum.desktop",
-    "productName": "BiliSum",
+    "appId": "com.vidmind.desktop",
+    "productName": "VidMind",
     "artifactName": "${productName}-${version}-${os}-${arch}-Setup.${ext}",
     "directories": {
       "output": "../../dist/desktop"
@@ -62,8 +62,8 @@
     ],
     "extraResources": [
       {
-        "from": "../../dist/BiliSum",
-        "to": "backend/BiliSum"
+        "from": "../../dist/VidMind",
+        "to": "backend/VidMind"
       },
       {
         "from": "../../apps/desktop/build/icon.ico",
@@ -108,8 +108,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "lycohana",
-      "repo": "BiliSum",
+      "owner": "qianshengli",
+      "repo": "vidmind",
       "releaseType": "release"
     }
   }

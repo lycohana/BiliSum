@@ -9,64 +9,67 @@
 @import "./styles/08-responsive.css";
 @import "./styles/09-knowledge.css";
 
+/* Auth shell - Obsidian style */
 .auth-shell {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 32px;
-  background:
-    linear-gradient(135deg, rgba(236, 123, 163, 0.16), transparent 38%),
-    var(--bg-base);
+  background: #1e1e1e;
   color: var(--text-primary);
 }
 
 .auth-panel {
-  width: min(440px, 100%);
-  padding: 28px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-lg);
+  width: min(420px, 100%);
+  padding: 24px;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  background: #252525;
 }
 
 .auth-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .auth-brand img {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
 }
 
 .auth-brand span {
   display: block;
   margin-bottom: 2px;
   color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .auth-brand h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 18px;
+  font-weight: 600;
   line-height: 1.2;
 }
 
 .auth-muted {
-  margin: 0 0 22px;
+  margin: 0 0 18px;
   color: var(--text-secondary);
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .auth-muted code {
   color: var(--text-primary);
   font-family: var(--font-mono);
+  background: #2a2a2a;
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .auth-form {
@@ -76,44 +79,51 @@
 
 .auth-form label {
   color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .auth-form input {
   width: 100%;
-  min-height: 42px;
+  min-height: 40px;
   padding: 10px 12px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
   color: var(--text-primary);
-  background: var(--bg-base);
+  background: #2a2a2a;
   outline: none;
+  font-size: 14px;
+  transition: border-color var(--transition-fast);
 }
 
 .auth-form input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-bg);
+  border-color: var(--accent);
 }
 
 .auth-error {
   margin: 2px 0 0;
-  color: var(--error);
-  font-size: 13px;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .auth-form button {
-  min-height: 42px;
+  min-height: 40px;
   margin-top: 8px;
-  border: 0;
-  border-radius: 8px;
-  color: #171013;
-  background: var(--primary);
-  font-weight: 700;
+  border: none;
+  border-radius: 4px;
+  color: #1e1e1e;
+  background: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.auth-form button:hover {
+  background: var(--accent-hover);
 }
 
 .auth-form button:disabled {
-  opacity: 0.65;
+  opacity: 0.5;
   cursor: wait;
 }

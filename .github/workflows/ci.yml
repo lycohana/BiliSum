@@ -286,6 +286,6 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          tags: bilisum:ci
-          cache-from: type=gha,scope=bilisum-docker
-          cache-to: type=gha,mode=max,scope=bilisum-docker
+          tags: vidmind:ci
+          cache-from: type=gha,scope=vidmind-docker
+          cache-to: type=gha,mode=max,scope=vidmind-docker

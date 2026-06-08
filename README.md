@@ -1,8 +1,4 @@
-<div align="center">
-
-![BiliSum Banner](docs/pic/banner.svg)
-
-# BiliSum
+# VidMind
 
 **AI 视频总结与知识库工具**
 
@@ -14,15 +10,9 @@
 
 [快速开始](#-快速开始) · [产品特性](#-产品特性) · [技术栈](#️-技术栈) · [贡献指南](#-贡献指南)
 
-</div>
- 
 ---
 
 > 深度优化 B 站体验，同时支持 YouTube 与本地视频。自动转写、总结、图文笔记、思维导图、知识库 RAG 问答，数据全部落本地。
-
-<div align="center">
-  <img src="docs/pic/mainpage.png" alt="BiliSum 首页" width="800"/>
-</div>
 
 ## 产品特性
 
@@ -45,16 +35,9 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
 
 > VLM 模式会调用多模态模型处理截图，API 费用比纯文本高。想控制成本可以把「最多截图数」调小或「截图最小间隔」调大。超长视频的笔记可能偏简略，截图逻辑还在优化中——设置页可以自定义截图规划的提示词。
 
-<div align="center">
-  <img src="docs/pic/visual-note.png" alt="VLM 理解型图文笔记" width="800"/>
-  <p><i>VLM 理解型图文笔记：段落与截图交替排列，禁止图片堆积末尾</i></p>
-</div>
-
 ### 视觉模型独立配置 `新增`
 
 画面理解和图文笔记合成可以独立配置视觉模型，不再跟随主 LLM。支持多提供商自动适配——选中 OpenAI / Anthropic / 兼容接口后，图片格式、端点、认证全部自动切换。第三方端点图片请求不兼容时也会自动回退。
-
-<!-- TODO: 待补充视觉模型设置页截图 visual-settings.png -->
 
 ### 文本笔记 / 思维导图
 
@@ -63,21 +46,11 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
 - 转写全文：章节时间轴 + 关键句定位，数学公式和代码块自动格式化
 - 重跑机制：换套模型重生成摘要，不满意就再来
 
-<div align="center">
-  <img src="docs/pic/mindmappage.png" alt="BiliSum 思维导图" width="800"/>
-  <p><i>线性视频转放射状知识网络，一眼看清内容结构和逻辑脉络</i></p>
-</div>
-
 ### 知识库
 
 - 跨视频 RAG 检索问答，语义搜索 + 关键词搜索
 - 自动/手动标签，标签关系网络可视化
 - 支持本地 LLM，断网也能用
-
-<div align="center">
-  <img src="docs/pic/knowledge.png" alt="BiliSum 知识库" width="800"/>
-  <p><i>跨视频 AI 检索与问答，标签管理，可生长的知识体系</i></p>
-</div>
 
 ### 多 P 视频与全集总结
 
@@ -131,12 +104,12 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
 ### npx 入口
 
 ```powershell
-npx bilisum
-npx bilisum start --port 3839
-npx bilisum doctor
+npx vidmind
+npx vidmind start --port 3839
+npx vidmind doctor
 ```
 
-`npx bilisum` 在本机启动浏览器版服务，默认 `http://127.0.0.1:3838`。首次运行自动创建 Python 虚拟环境，需要本机已装 Python 3.12。
+`npx vidmind` 在本机启动浏览器版服务，默认 `http://127.0.0.1:3838`。首次运行自动创建 Python 虚拟环境，需要本机已装 Python 3.12。
 
 浏览器版受访问密钥保护。未配置 `VIDEO_SUM_ACCESS_TOKEN` 时自动生成；远程部署建议手动设置长随机密钥。
 
@@ -202,30 +175,30 @@ npm run docker:build
 
 # 运行
 docker run --rm -p 3838:3838 \
-  -v bilisum-data:/data \
+  -v vidmind-data:/data \
   -e VIDEO_SUM_ACCESS_TOKEN=your-token \
   -e VIDEO_SUM_LLM_ENABLED=true \
   -e VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1 \
   -e VIDEO_SUM_LLM_MODEL=qwen3.5-plus \
   -e VIDEO_SUM_LLM_API_KEY=your-key \
   -e VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-key \
-  lycohana/bilisum:latest
+  qianshengli/vidmind:latest
 ```
 
 访问 `http://127.0.0.1:3838`。容器内服务监听 `0.0.0.0:3838`，数据目录 `/data`。
 
 ```powershell
-docker pull lycohana/bilisum:latest
+docker pull qianshengli/vidmind:latest
 ```
 
 ### 从旧版迁移
 
-首次启动自动从 BriefVid 目录迁移数据到 BiliSum 目录，只复制缺失文件，不覆盖已有数据，不删除旧目录。
+首次启动自动从 BriefVid 目录迁移数据到 VidMind 目录，只复制缺失文件，不覆盖已有数据，不删除旧目录。
 
 ## 项目结构
 
 ```
-BiliSum/
+VidMind/
 ├── apps/
 │   ├── desktop/          # Electron + React 桌面端
 │   │   └── src/
@@ -324,20 +297,20 @@ uv run --package video-sum-service python -c "import video_sum_core, video_sum_s
 
 ## Star History
 
-<a href="https://github.com/lycohana/bilisum">
+<a href="https://github.com/qianshengli/vidmind">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=lycohana/bilisum&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=lycohana/bilisum&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=lycohana/bilisum&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qianshengli/vidmind&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qianshengli/vidmind&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=qianshengli/vidmind&type=date&legend=top-left" />
  </picture>
 </a>
 
 ## License
 
-MIT License © 2026 Lycohana
+MIT License © 2026 qianshengli
 
 特别致谢：[Linux Do](https://linux.do)
 
 <div align="center">
-  <sub>Built with ❤️ by Lycohana</sub>
+  <sub>Built with ❤️ by qianshengli</sub>
 </div>
