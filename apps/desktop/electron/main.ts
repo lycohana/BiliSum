@@ -950,29 +950,29 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
         <style>
           :root {
             color-scheme: light;
-            --brand-400: #ff9aba;
-            --brand-500: #fb7299;
-            --brand-600: #f85d8e;
-            --brand-700: #d94674;
+            --brand-400: #8189ff;
+            --brand-500: #6366f1;
+            --brand-600: #5558e6;
+            --brand-700: #4447c4;
             --info: #567eff;
             --bg-base: #fafbfc;
             --bg-canvas: #ffffff;
             --bg-soft: #f5f6f8;
             --bg-subtle: #f8f9fc;
             --bg-elevated: #ffffff;
-            --bg-accent: rgba(251, 114, 153, 0.06);
-            --bg-accent-strong: rgba(251, 114, 153, 0.1);
+            --bg-accent: rgba(99, 102, 241, 0.06);
+            --bg-accent-strong: rgba(99, 102, 241, 0.1);
             --text-primary: #1a1a1a;
             --text-secondary: #3f4754;
             --text-muted: #7e8898;
             --border-subtle: rgba(0, 0, 0, 0.06);
             --border-default: rgba(0, 0, 0, 0.1);
-            --accent-border: rgba(251, 114, 153, 0.18);
+            --accent-border: rgba(99, 102, 241, 0.18);
             --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.1);
             --highlight: rgba(255, 255, 255, 0.76);
             --surface-top: rgba(255, 255, 255, 0.9);
             --surface-bottom: rgba(255, 255, 255, 0.78);
-            --accent-wash: rgba(251, 114, 153, 0.075);
+            --accent-wash: rgba(99, 102, 241, 0.075);
             --info-wash: rgba(86, 126, 255, 0.055);
           }
           :root.theme-dark {
@@ -982,19 +982,19 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
             --bg-soft: #222222;
             --bg-subtle: #282828;
             --bg-elevated: #2d2d2d;
-            --bg-accent: rgba(251, 114, 153, 0.1);
-            --bg-accent-strong: rgba(251, 114, 153, 0.16);
+            --bg-accent: rgba(99, 102, 241, 0.1);
+            --bg-accent-strong: rgba(99, 102, 241, 0.16);
             --text-primary: #f5f5f5;
             --text-secondary: #b0b0b0;
             --text-muted: #666666;
             --border-subtle: rgba(255, 255, 255, 0.08);
             --border-default: rgba(255, 255, 255, 0.12);
-            --accent-border: rgba(251, 114, 153, 0.24);
+            --accent-border: rgba(99, 102, 241, 0.24);
             --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
             --highlight: rgba(255, 255, 255, 0.06);
             --surface-top: rgba(26, 26, 26, 0.96);
             --surface-bottom: rgba(18, 18, 18, 0.92);
-            --accent-wash: rgba(251, 114, 153, 0.052);
+            --accent-wash: rgba(99, 102, 241, 0.052);
             --info-wash: rgba(86, 126, 255, 0.044);
           }
           @media (prefers-color-scheme: dark) {
@@ -1005,19 +1005,19 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
               --bg-soft: #222222;
               --bg-subtle: #282828;
               --bg-elevated: #2d2d2d;
-              --bg-accent: rgba(251, 114, 153, 0.1);
-              --bg-accent-strong: rgba(251, 114, 153, 0.16);
+              --bg-accent: rgba(99, 102, 241, 0.1);
+              --bg-accent-strong: rgba(99, 102, 241, 0.16);
               --text-primary: #f5f5f5;
               --text-secondary: #b0b0b0;
               --text-muted: #666666;
               --border-subtle: rgba(255, 255, 255, 0.08);
               --border-default: rgba(255, 255, 255, 0.12);
-              --accent-border: rgba(251, 114, 153, 0.24);
+              --accent-border: rgba(99, 102, 241, 0.24);
               --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
               --highlight: rgba(255, 255, 255, 0.06);
               --surface-top: rgba(26, 26, 26, 0.96);
               --surface-bottom: rgba(18, 18, 18, 0.92);
-              --accent-wash: rgba(251, 114, 153, 0.052);
+              --accent-wash: rgba(99, 102, 241, 0.052);
               --info-wash: rgba(86, 126, 255, 0.044);
             }
           }
@@ -1096,7 +1096,7 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
             display: grid;
             place-items: center;
             box-shadow:
-              0 18px 42px rgba(251, 114, 153, 0.14),
+              0 18px 42px rgba(99, 102, 241, 0.14),
               inset 0 1px 0 var(--highlight),
               inset 0 0 0 1px var(--accent-border);
             animation: brandFloat 3.2s ease-in-out infinite;
@@ -1104,7 +1104,7 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
           .brand-mark svg {
             width: 48px;
             height: 48px;
-            filter: drop-shadow(0 6px 10px rgba(251, 114, 153, 0.2));
+            filter: drop-shadow(0 6px 10px rgba(99, 102, 241, 0.2));
           }
           h1 {
             margin: 0 0 8px;
@@ -1148,7 +1148,7 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
             width: 44%;
             border-radius: inherit;
             background: linear-gradient(90deg, var(--brand-500), var(--brand-600), var(--info));
-            box-shadow: 0 0 18px rgba(251, 114, 153, 0.26);
+            box-shadow: 0 0 18px rgba(99, 102, 241, 0.26);
             animation: progressPulse 2.4s ease-in-out infinite;
           }
           .progress-sheen {
@@ -1217,19 +1217,18 @@ function getSplashMarkup(message = "正在启动 VidMind 服务...") {
               <svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
                   <linearGradient id="splash-icon-bg" x1="56" y1="56" x2="456" y2="456" gradientUnits="userSpaceOnUse">
-                    <stop stop-color="#FF9ABA"/>
-                    <stop offset="1" stop-color="#F85D8E"/>
+                    <stop stop-color="#6366F1"/>
+                    <stop offset="1" stop-color="#8B5CF6"/>
                   </linearGradient>
                 </defs>
-                <rect x="56" y="56" width="400" height="400" rx="96" fill="url(#splash-icon-bg)"/>
-                <rect x="132" y="112" width="248" height="288" rx="42" fill="#FFFFFF"/>
-                <path d="M314 112H340C362.091 112 380 129.909 380 152V178H354C331.909 178 314 160.091 314 138V112Z" fill="#FFE6EE"/>
-                <circle cx="318" cy="172" r="32" fill="#FB7299"/>
-                <path d="M307 157L329 172L307 187V157Z" fill="#FFFFFF"/>
-                <rect x="172" y="172" width="96" height="20" rx="10" fill="#FB7299"/>
-                <rect x="172" y="222" width="160" height="20" rx="10" fill="#FB7299" opacity="0.9"/>
-                <rect x="172" y="272" width="138" height="20" rx="10" fill="#FB7299" opacity="0.72"/>
-                <rect x="172" y="322" width="112" height="20" rx="10" fill="#FB7299" opacity="0.5"/>
+                <rect x="56" y="56" width="400" height="400" rx="100" fill="url(#splash-icon-bg)"/>
+                <rect x="120" y="120" width="272" height="272" rx="56" fill="#FFFFFF"/>
+                <path d="M220 170L310 256L220 342V170Z" fill="#6366F1" fill-opacity="0.9"/>
+                <circle cx="340" cy="162" r="6" fill="#8B5CF6" fill-opacity="0.5"/>
+                <circle cx="356" cy="146" r="4" fill="#8B5CF6" fill-opacity="0.3"/>
+                <circle cx="360" cy="176" r="3" fill="#8B5CF6" fill-opacity="0.2"/>
+                <line x1="340" y1="162" x2="356" y2="146" stroke="#8B5CF6" stroke-width="1.5" opacity="0.4"/>
+                <line x1="340" y1="162" x2="360" y2="176" stroke="#8B5CF6" stroke-width="1.5" opacity="0.3"/>
               </svg>
             </div>
             <div>

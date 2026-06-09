@@ -10,16 +10,16 @@
   --title-bar-height: 40px;
   --top-nav-height: 48px;
 
-  /* Brand Colors - warm coral pink */
-  --brand-50: #fff4f7;
-  --brand-100: #ffe8ee;
-  --brand-200: #ffd2de;
-  --brand-300: #ffb3c9;
-  --brand-400: #ff9aba;
-  --brand-500: #fb7299;
-  --brand-600: #f85d8e;
-  --brand-700: #d94674;
-  --brand-800: #c4355e;
+  /* Brand Colors - indigo purple (matches icon.svg) */
+  --brand-50: #eef0ff;
+  --brand-100: #e0e3ff;
+  --brand-200: #c7cdff;
+  --brand-300: #a5adff;
+  --brand-400: #8189ff;
+  --brand-500: #6366f1;
+  --brand-600: #5558e6;
+  --brand-700: #4447c4;
+  --brand-800: #383a99;
 
   /* Light Theme (default) */
   --bg-primary: #ffffff;
@@ -44,13 +44,13 @@
   --border-subtle: rgba(0, 0, 0, 0.06);
   --border-default: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(0, 0, 0, 0.15);
-  --border-focus: rgba(251, 114, 153, 0.4);
+  --border-focus: rgba(99, 102, 241, 0.4);
 
-  /* Accent - coral pink */
-  --accent: #fb7299;
-  --accent-hover: #f85d8e;
-  --bg-accent: rgba(251, 114, 153, 0.06);
-  --bg-accent-strong: rgba(251, 114, 153, 0.1);
+  /* Accent - indigo purple */
+  --accent: #6366f1;
+  --accent-hover: #5558e6;
+  --bg-accent: rgba(99, 102, 241, 0.06);
+  --bg-accent-strong: rgba(99, 102, 241, 0.1);
   --bg-info: rgba(86, 126, 255, 0.06);
   --bg-success: rgba(34, 168, 102, 0.06);
   --bg-warning: rgba(213, 137, 24, 0.06);
@@ -68,7 +68,7 @@
   --info: #567eff;
   --info-bg: rgba(86, 126, 255, 0.08);
   --info-border: rgba(86, 126, 255, 0.2);
-  --accent-border: rgba(251, 114, 153, 0.25);
+  --accent-border: rgba(99, 102, 241, 0.25);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -77,7 +77,7 @@
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.12);
   --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
   --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.1);
-  --shadow-accent-glow: 0 0 20px rgba(251, 114, 153, 0.2);
+  --shadow-accent-glow: 0 0 20px rgba(99, 102, 241, 0.2);
 
   /* Settings specific (light) */
   --settings-bg: #f5f6f8;
@@ -93,8 +93,8 @@
   --settings-text-soft: #3f4754;
   --settings-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
   --settings-shadow-strong: 0 8px 40px rgba(0, 0, 0, 0.08);
-  --settings-accent-bg: rgba(251, 114, 153, 0.08);
-  --settings-accent-border: rgba(251, 114, 153, 0.3);
+  --settings-accent-bg: rgba(99, 102, 241, 0.08);
+  --settings-accent-border: rgba(99, 102, 241, 0.3);
 
   /* Mindmap (light) */
   --mindmap-canvas-bg: #f8f9fc;
@@ -152,10 +152,10 @@
   --border-subtle: rgba(255, 255, 255, 0.06);
   --border-default: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.15);
-  --border-focus: rgba(251, 114, 153, 0.5);
+  --border-focus: rgba(99, 102, 241, 0.5);
 
-  --bg-accent: rgba(251, 114, 153, 0.1);
-  --bg-accent-strong: rgba(251, 114, 153, 0.16);
+  --bg-accent: rgba(99, 102, 241, 0.1);
+  --bg-accent-strong: rgba(99, 102, 241, 0.16);
   --bg-info: rgba(86, 126, 255, 0.1);
   --bg-success: rgba(34, 168, 102, 0.1);
   --bg-warning: rgba(213, 137, 24, 0.1);
@@ -173,7 +173,7 @@
   --info: #60a5fa;
   --info-bg: rgba(86, 126, 255, 0.15);
   --info-border: rgba(96, 165, 250, 0.3);
-  --accent-border: rgba(251, 114, 153, 0.35);
+  --accent-border: rgba(99, 102, 241, 0.35);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -182,7 +182,7 @@
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.55);
   --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.25);
   --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-accent-glow: 0 0 24px rgba(251, 114, 153, 0.25);
+  --shadow-accent-glow: 0 0 24px rgba(99, 102, 241, 0.25);
 
   --settings-bg: #141414;
   --settings-sidebar-bg: rgba(30, 30, 30, 0.96);
@@ -197,8 +197,8 @@
   --settings-text-soft: #b1b1b1;
   --settings-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   --settings-shadow-strong: 0 12px 48px rgba(0, 0, 0, 0.5);
-  --settings-accent-bg: rgba(251, 114, 153, 0.15);
-  --settings-accent-border: rgba(251, 114, 153, 0.35);
+  --settings-accent-bg: rgba(99, 102, 241, 0.15);
+  --settings-accent-border: rgba(99, 102, 241, 0.35);
   --mindmap-canvas-bg: #1a1a1a;
   --mindmap-canvas-border: rgba(255, 255, 255, 0.1);
   --mindmap-canvas-shadow: none;

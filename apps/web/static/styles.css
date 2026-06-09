@@ -669,7 +669,7 @@ body {
   display: grid;
   gap: 10px;
   background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.18);
   border-radius: var(--radius-lg);
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
   opacity: 0;

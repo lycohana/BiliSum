@@ -1447,7 +1447,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   background:
-    radial-gradient(circle at 50% 52%, rgba(251, 114, 153, 0.1), transparent 32%),
+    radial-gradient(circle at 50% 52%, rgba(99, 102, 241, 0.1), transparent 32%),
     linear-gradient(180deg, var(--bg-card), var(--bg-tertiary));
 }
 

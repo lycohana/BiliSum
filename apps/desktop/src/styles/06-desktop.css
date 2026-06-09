@@ -412,7 +412,7 @@
 }
 
 .probe-preview:hover {
-  box-shadow: 0 0 32px rgba(251, 114, 153, 0.3);
+  box-shadow: 0 0 32px rgba(99, 102, 241, 0.3);
   transform: translateY(-2px);
 }
 
@@ -463,12 +463,12 @@
   min-height: 52px;
   border-radius: var(--radius-md);
   background: var(--brand-500);
-  box-shadow: 0 2px 8px rgba(251, 114, 153, 0.25);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
   overflow: hidden;
 }
 
 .summary-split-button:hover {
-  box-shadow: 0 4px 12px rgba(251, 114, 153, 0.3);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
 
 .summary-submit-main.primary-button {
@@ -540,8 +540,8 @@
   position: relative;
   padding: 10px 32px 10px 12px;
   border-radius: var(--radius-md);
-  background: rgba(251, 114, 153, 0.06);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.18);
   font-size: 0.78rem;
   line-height: 1.5;
   color: var(--text-secondary);
@@ -571,7 +571,7 @@
 }
 
 .summary-preference-hint-close:hover {
-  background: rgba(251, 114, 153, 0.12);
+  background: rgba(99, 102, 241, 0.12);
   color: var(--text-primary);
 }
 
@@ -602,7 +602,7 @@
 .summary-preference-option:hover,
 .summary-preference-option:focus-within,
 .summary-preference-option.is-selected {
-  background: rgba(251, 114, 153, 0.08);
+  background: rgba(99, 102, 241, 0.08);
   color: var(--text-primary);
 }
 
@@ -658,7 +658,7 @@
 
 .summary-preference-option input[type="radio"]:checked {
   background: var(--bg-canvas);
-  box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.12);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
 }
 
 .summary-preference-option input[type="radio"]:checked::after {
@@ -672,7 +672,7 @@
 
 .summary-preference-option input:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.18);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
 }
 
 .summary-preference-option span {
@@ -860,8 +860,8 @@
 }
 
 [data-theme="dark"] .summary-metric.metric-accent {
-  border-color: rgba(251, 114, 153, 0.12);
-  background: rgba(251, 114, 153, 0.08);
+  border-color: rgba(99, 102, 241, 0.12);
+  background: rgba(99, 102, 241, 0.08);
 }
 
 [data-theme="dark"] .summary-metric.metric-success {
@@ -879,7 +879,7 @@
 }
 
 [data-theme="dark"] .filter-pill.active {
-  border-color: rgba(251, 114, 153, 0.14);
+  border-color: rgba(99, 102, 241, 0.14);
 }
 
 [data-theme="dark"] .library-pagination-button {
@@ -887,7 +887,7 @@
 }
 
 [data-theme="dark"] .library-pagination-button.is-active {
-  border-color: rgba(251, 114, 153, 0.14);
+  border-color: rgba(99, 102, 241, 0.14);
 }
 
 [data-theme="dark"] .video-platform-badge {

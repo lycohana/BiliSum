@@ -928,11 +928,11 @@
 .detail-action-button.primary {
   color: var(--text-on-brand);
   background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
-  box-shadow: 0 8px 20px rgba(251, 114, 153, 0.22);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.22);
 }
 
 .detail-action-button.primary:hover {
-  box-shadow: 0 12px 28px rgba(251, 114, 153, 0.28);
+  box-shadow: 0 12px 28px rgba(99, 102, 241, 0.28);
   transform: translateY(-2px);
 }
 
@@ -2854,7 +2854,7 @@
 
 .detail-point-marker:hover {
   transform: scale(1.08);
-  box-shadow: 0 0 28px rgba(251, 114, 153, 0.35);
+  box-shadow: 0 0 28px rgba(99, 102, 241, 0.35);
 }
 
 .detail-point-main {

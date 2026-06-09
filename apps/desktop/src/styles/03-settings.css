@@ -222,7 +222,7 @@
   justify-content: center;
   color: #ffffff;
   background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
-  box-shadow: 0 4px 16px rgba(251, 114, 153, 0.25);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
   border-radius: var(--radius-lg);
 }
 
@@ -230,20 +230,20 @@
   color: #ffffff;
   background: linear-gradient(135deg, var(--brand-600), var(--brand-700));
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(251, 114, 153, 0.35);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
 }
 
 .settings-page-wrapper .primary-button {
   color: #ffffff;
   background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
-  box-shadow: 0 4px 16px rgba(251, 114, 153, 0.25);
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
 }
 
 .settings-page-wrapper .primary-button:hover {
   color: #ffffff;
   background: linear-gradient(135deg, var(--brand-600), var(--brand-700));
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(251, 114, 153, 0.35);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
 }
 
 .settings-page-wrapper .progress-fill-simple {
@@ -1260,7 +1260,7 @@
 .settings-input-field:focus,
 .settings-select-field:focus {
   border-color: var(--brand-500);
-  box-shadow: 0 0 0 4px rgba(251, 114, 153, 0.12);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
 }
 
 .settings-input-field::placeholder {
@@ -1378,9 +1378,9 @@
   gap: 18px;
   align-items: center;
   padding: 18px 20px;
-  border: 1px solid rgba(251, 114, 153, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.2);
   border-radius: var(--radius-xl);
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.06), rgba(59, 130, 246, 0.05));
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(59, 130, 246, 0.05));
 }
 
 .settings-guide-card > div {
@@ -1623,7 +1623,7 @@
   display: grid;
   gap: 12px;
   background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.18);
   border-radius: var(--radius-xl);
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
   color: var(--text-primary);
@@ -1664,8 +1664,8 @@
 .settings-performance-tasklist-entry {
   padding: 20px;
   border-radius: var(--radius-xl);
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.08), rgba(59, 130, 246, 0.07));
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(59, 130, 246, 0.07));
+  border: 1px solid rgba(99, 102, 241, 0.18);
 }
 
 .settings-tasklist-float {
@@ -1684,7 +1684,7 @@
   gap: 16px;
   overflow: hidden;
   border-radius: var(--radius-2xl);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.18);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 28px 72px rgba(15, 23, 42, 0.2);
   backdrop-filter: blur(20px);
@@ -1778,18 +1778,18 @@
 /* ========== Dark Theme Adjustments ========== */
 [data-theme="dark"] .settings-help-popover-card {
   background: rgba(28, 28, 30, 0.98);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: rgba(99, 102, 241, 0.24);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
 }
 
 [data-theme="dark"] .settings-performance-tasklist-entry {
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.12), rgba(59, 130, 246, 0.12));
-  border-color: rgba(251, 114, 153, 0.22);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(59, 130, 246, 0.12));
+  border-color: rgba(99, 102, 241, 0.22);
 }
 
 [data-theme="dark"] .settings-tasklist-panel {
   background: rgba(24, 24, 27, 0.95);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: rgba(99, 102, 241, 0.24);
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.42);
 }
 
@@ -2013,7 +2013,7 @@
   justify-content: center;
   color: #1e1e1e;
   background: var(--brand-500);
-  box-shadow: 0 8px 20px rgba(251, 114, 153, 0.16);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.16);
 }
 
 .settings-save-btn:hover {
@@ -2024,13 +2024,13 @@
 .settings-page-wrapper .primary-button {
   color: #1e1e1e;
   background: var(--brand-500);
-  box-shadow: 0 8px 20px rgba(251, 114, 153, 0.16);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.16);
 }
 
 .settings-page-wrapper .primary-button:hover {
   color: #1e1e1e;
   background: var(--brand-600);
-  box-shadow: 0 10px 24px rgba(251, 114, 153, 0.2);
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.2);
 }
 
 .settings-page-wrapper .progress-fill-simple {
@@ -2966,7 +2966,7 @@
 .settings-input-field:focus,
 .settings-select-field:focus {
   border-color: var(--brand-500);
-  box-shadow: 0 0 0 4px rgba(251, 114, 153, 0.1);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
 }
 
 .settings-input-field::placeholder {
@@ -3079,9 +3079,9 @@
   gap: 16px;
   align-items: center;
   padding: 16px 18px;
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.16);
   border-radius: 6px;
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.08), rgba(59, 130, 246, 0.07));
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(59, 130, 246, 0.07));
 }
 
 .settings-guide-card > div {
@@ -3220,7 +3220,7 @@
   display: grid;
   gap: 10px;
   background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.18);
   border-radius: 6px;
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
   color: var(--text-primary);
@@ -3260,8 +3260,8 @@
 .settings-performance-tasklist-entry {
   padding: 18px 20px;
   border-radius: 6px;
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.09), rgba(59, 130, 246, 0.08));
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.09), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(99, 102, 241, 0.16);
 }
 
 .settings-tasklist-float {
@@ -3280,7 +3280,7 @@
   gap: 14px;
   overflow: hidden;
   border-radius: 6px;
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.16);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 28px 72px rgba(15, 23, 42, 0.2);
   backdrop-filter: blur(18px);
@@ -3368,18 +3368,18 @@
 
 [data-theme="dark"] .settings-help-popover-card {
   background: rgba(24, 24, 27, 0.98);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: rgba(99, 102, 241, 0.24);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
 }
 
 [data-theme="dark"] .settings-performance-tasklist-entry {
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.14), rgba(59, 130, 246, 0.14));
-  border-color: rgba(251, 114, 153, 0.22);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.14), rgba(59, 130, 246, 0.14));
+  border-color: rgba(99, 102, 241, 0.22);
 }
 
 [data-theme="dark"] .settings-tasklist-panel {
   background: rgba(24, 24, 27, 0.94);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: rgba(99, 102, 241, 0.24);
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.42);
 }
 
