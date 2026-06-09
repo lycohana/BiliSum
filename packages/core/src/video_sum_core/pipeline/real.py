@@ -226,6 +226,9 @@ class PipelineSettings:
     summary_chunk_overlap_segments: int = 2
     summary_chunk_concurrency: int = 2
     summary_chunk_retry_count: int = 2
+    knowledge_note_max_tokens: int = 8192
+    knowledge_note_min_chars: int = 1500
+    knowledge_note_min_sections: int = 5
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 
@@ -2355,6 +2358,8 @@ P 数索引：
         knowledge_note_markdown: str = "",
     ) -> str:
         rendered = template
+        min_chars = max(0, int(self._settings.knowledge_note_min_chars or 0))
+        min_sections = max(1, int(self._settings.knowledge_note_min_sections or 1))
         replacements = {
             "title": title,
             "transcript": transcript_excerpt,
@@ -2363,6 +2368,8 @@ P 数索引：
             "segments_excerpt": segments_excerpt,
             "summary_json": summary_json,
             "knowledge_note_markdown": knowledge_note_markdown,
+            "min_chars": str(min_chars),
+            "min_sections": str(min_sections),
         }
         for key, value in replacements.items():
             rendered = rendered.replace(f"{{{key}}}", value)
@@ -2386,9 +2393,11 @@ P 数索引：
         else:
             messages = self._build_knowledge_note_messages(title, transcript_excerpt, segments_excerpt, summary_json)
         messages = self._ensure_json_keyword_in_messages(messages)
+        max_tokens = max(1024, int(self._settings.knowledge_note_max_tokens or 8192))
         return {
             "model": self._settings.llm_model,
             "messages": messages,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},

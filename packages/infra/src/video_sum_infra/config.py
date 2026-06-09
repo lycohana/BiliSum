@@ -141,13 +141,21 @@ DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE = """请阅读下面的视频资料�
 7. 不要照抄转写全文，不要把原始 transcript 直接拼进笔记主体。
 8. 不要补充外部背景，不要编造例子，不要猜测说话者未表达的动机。
 
+篇幅硬性要求（必须满足，否则视为不合格）：
+- 笔记正文（中文字符，不含标题前的元信息）必须 >= {min_chars} 个字符。
+- 笔记必须包含 >= {min_sections} 个二级标题（## ...），且这些二级标题覆盖核心结论、关键概念、章节展开等不同维度。
+- 遇到长视频/密集信息视频时，应在 {min_sections} 个二级标题下继续用三级标题（### ...）拆分更细的主题；不要把全部内容压在一个章节下。
+- 笔记的“核心结论 / 关键概念 / 章节展开”部分每个二级章节正文不少于 200 字。
+- 笔记结尾给一个 2-4 句的“复盘小结”二级章节，便于快速回顾。
+
 写作要求：
 - 标题层级清楚，便于长文阅读。
 - 保留定义、条件、因果、例子、结论、限制、争议等高价值信息。
 - 如果结构化摘要过于简略，应优先参考转写和分段把笔记写得更完整。
+- 不要因为凑字数而重复相同观点；优先扩写“推理/方法/条件/例子/限制”等维度。
 
 输出格式示例：
-{{"knowledgeNoteMarkdown":"# 标题\n\n## 核心结论\n\n..."}}
+{{"knowledgeNoteMarkdown":"# 标题\n\n## 核心结论\n\n...\n\n## 关键概念\n\n...\n\n## 章节展开\n\n..."}}
 
 视频标题：
 {title}
@@ -528,6 +536,9 @@ class ServiceSettings(BaseSettings):
     mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
     summary_chunk_retry_count: int = 2
+    knowledge_note_max_tokens: int = 8192
+    knowledge_note_min_chars: int = 1500
+    knowledge_note_min_sections: int = 5
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 
