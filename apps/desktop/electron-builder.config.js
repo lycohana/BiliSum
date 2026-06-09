@@ -29,27 +29,20 @@ module.exports = {
     icon: "../../apps/desktop/build/icon.icns",
     category: "public.app-category.productivity",
     hardenedRuntime: false,
-    gatekeeperAssess: false,
-    identity: null
+    gatekeeperAssess: false
   },
   dmg: {
     sign: false,
     artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
   },
   win: {
-    "target": [
+    target: [
       {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
+        target: "nsis",
+        arch: ["x64"]
       }
     ],
-    "icon": "../../apps/desktop/build/icon.ico",
-    "signAndEditExecutable": false,
-    "signDlls": false,
-    "requestedExecutionLevel": "asInvoker",
-    "fileAssociations": []
+    icon: "../../apps/desktop/build/icon.ico"
   },
   nsis: {
     oneClick: false,
@@ -67,7 +60,5 @@ module.exports = {
     owner: "lycohana",
     repo: "BiliSum",
     releaseType: "release"
-  },
-  // Disable code signing completely
-  afterSign: null
+  }
 };
