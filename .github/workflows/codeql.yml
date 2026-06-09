@@ -26,7 +26,7 @@ jobs:
 
     steps:
     - name: Checkout 代码
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: 初始化 CodeQL
       uses: github/codeql-action/init@v4

@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Checkout 代码
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: 设置 Python 3.12
       uses: actions/setup-python@v6
