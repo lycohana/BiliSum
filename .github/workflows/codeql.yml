@@ -29,16 +29,16 @@ jobs:
       uses: actions/checkout@v4
 
     - name: 初始化 CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: ${{ matrix.language }}
         # 自定义查询（可选）
         queries: security-extended,security-and-quality
 
     - name: 自动构建
-      uses: github/codeql-action/autobuild@v3
+      uses: github/codeql-action/autobuild@v4
 
     - name: 执行 CodeQL 分析
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
