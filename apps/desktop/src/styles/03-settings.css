@@ -2374,7 +2374,6 @@
   flex-direction: column;
   gap: 20px;
 }
-}
 
 .settings-grid {
   grid-template-columns: 1fr;
