@@ -4162,6 +4162,13 @@ export function SettingsPage({
                     <span className="settings-input-caption">
                       当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
                     </span>
+                    {knowledgeDepsStatus && (
+                      <div style={{ marginTop: "0.5rem" }}>
+                        <span className={`helper-chip ${knowledgeDepsStatus.includes("成功") || knowledgeDepsStatus.includes("就绪") ? "status-success" : knowledgeDepsStatus.includes("失败") ? "status-error" : "status-info"}`}>
+                          {knowledgeDepsStatus}
+                        </span>
+                      </div>
+                    )}
                     {knowledgeRequirements && (
                       <div style={{ marginTop: "1rem" }}>
                         <DependencyTree
@@ -4175,6 +4182,35 @@ export function SettingsPage({
                     {knowledgeDepsOutput ? (
                       <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
                     ) : null}
+                    {environment?.knowledgeDependenciesError && (
+                      <div style={{ marginTop: "1rem" }}>
+                        <span className="settings-input-label" style={{ color: "var(--color-error, #ef4444)" }}>知识库依赖错误</span>
+                        <textarea className="textarea-field log-viewer" rows={6} readOnly value={environment.knowledgeDependenciesError} style={{ borderColor: "var(--color-error, #ef4444)" }} />
+                      </div>
+                    )}
+                    {(environment?.chromadbError || environment?.sentenceTransformersError || environment?.modelscopeError) && (
+                      <div style={{ marginTop: "1rem" }}>
+                        <span className="settings-input-label" style={{ color: "var(--color-warning, #f59e0b)" }}>包导入错误</span>
+                        {environment.chromadbError && (
+                          <div style={{ marginTop: "0.5rem" }}>
+                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>chromadb:</span>
+                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.chromadbError} style={{ marginTop: "0.25rem" }} />
+                          </div>
+                        )}
+                        {environment.sentenceTransformersError && (
+                          <div style={{ marginTop: "0.5rem" }}>
+                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>sentence-transformers:</span>
+                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.sentenceTransformersError} style={{ marginTop: "0.25rem" }} />
+                          </div>
+                        )}
+                        {environment.modelscopeError && (
+                          <div style={{ marginTop: "0.5rem" }}>
+                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>modelscope:</span>
+                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.modelscopeError} style={{ marginTop: "0.25rem" }} />
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

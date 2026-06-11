@@ -33,6 +33,7 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [dependencies, setDependencies] = useState<string[]>([]);
   const [operationStatus, setOperationStatus] = useState<string>("");
+  const [installLog, setInstallLog] = useState<string>("");
 
   const connector = isLast ? "└" : "├";
   const childPrefix = isLast ? "    " : "│   ";
@@ -41,9 +42,11 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
   async function handleInstall() {
     setInstalling(true);
     setOperationStatus("安装中...");
+    setInstallLog("");
     try {
-      await api.installKnowledgeDependencies({ runtime_channel: runtimeChannel, reinstall: false });
+      const response = await api.installKnowledgeDependencies({ runtime_channel: runtimeChannel, reinstall: false });
       setOperationStatus("安装成功");
+      setInstallLog(response.stdoutTail || "");
       setTimeout(() => setOperationStatus(""), 2000);
       onStatusChange();
     } catch (error) {
@@ -136,6 +139,11 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
                 </span>
               )}
             </div>
+            {installLog && (
+              <div className="dependency-log-viewer" style={{ marginTop: "0.5rem" }}>
+                <textarea className="textarea-field log-viewer" rows={6} readOnly value={installLog} style={{ fontSize: "0.85em" }}></textarea>
+              </div>
+            )}
           </div>
         </div>
         {expanded && hasChildren && (
