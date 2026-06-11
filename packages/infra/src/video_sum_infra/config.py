@@ -483,6 +483,8 @@ def normalize_knowledge_embedding_provider(value: str | None, default: str = "lo
         return "local_huggingface"
     if normalized in ("local_modelscope", "modelscope", "ms"):
         return "local_modelscope"
+    if normalized in ("siliconflow", "silicon-flow", "silicon_flow"):
+        return "siliconflow"
     if normalized in ("online", "api"):
         return "online"
     return default
@@ -597,6 +599,9 @@ class ServiceSettings(BaseSettings):
     knowledge_embedding_provider: str = "local_huggingface"
     knowledge_embedding_model: str = "BAAI/bge-small-zh-v1.5"
     hf_endpoint: str = ""
+    siliconflow_embedding_api_key: str = ""
+    siliconflow_embedding_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_embedding_model: str = "BAAI/bge-large-zh-v1.5"
     knowledge_index_auto_rebuild: str = "disabled"
     summary_system_prompt: str = DEFAULT_SUMMARY_SYSTEM_PROMPT
     summary_user_prompt_template: str = DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE

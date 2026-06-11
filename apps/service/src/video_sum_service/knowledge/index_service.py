@@ -93,8 +93,12 @@ class KnowledgeIndexService:
         if provider == "online":
             raise HTTPException(
                 status_code=501,
-                detail="在线 Embedding API 暂未支持，请切换为本地 HuggingFace 或 ModelScope 源。",
+                detail="在线 Embedding API 暂未支持，请切换为本地 HuggingFace、ModelScope 或硅基流动。",
             )
+
+        if provider == "siliconflow":
+            self._embedder = "siliconflow"
+            return self._embedder
 
         sentence_transformers = self._import_runtime_dependency(
             "sentence_transformers",
@@ -148,7 +152,12 @@ class KnowledgeIndexService:
                 # Determine embedding dimension from the model before creating
                 # the collection, so chromadb can validate vector dimensions.
                 embedder = self._get_embedder()
-                dim = embedder.get_sentence_embedding_dimension() or 0
+                if embedder == "siliconflow":
+                    # Get dimension by calling API with a test query
+                    test_embedding = self._embed_texts_siliconflow(["test"])
+                    dim = len(test_embedding[0]) if test_embedding else 1024
+                else:
+                    dim = embedder.get_sentence_embedding_dimension() or 0
                 existing = None
                 try:
                     existing = client.get_collection("bilisum_knowledge")
@@ -181,8 +190,70 @@ class KnowledgeIndexService:
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        vectors = self._get_embedder().encode(texts, normalize_embeddings=True)
+
+        embedder = self._get_embedder()
+        if embedder == "siliconflow":
+            return self._embed_texts_siliconflow(texts)
+
+        vectors = embedder.encode(texts, normalize_embeddings=True)
         return [list(map(float, vector)) for vector in vectors]
+
+    def _embed_texts_siliconflow(self, texts: list[str]) -> list[list[float]]:
+        import httpx
+
+        api_key = self._settings.siliconflow_embedding_api_key
+        if not api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="硅基流动 Embedding API Key 未配置。请在设置中填写 siliconflow_embedding_api_key。",
+            )
+
+        base_url = self._settings.siliconflow_embedding_base_url.rstrip("/")
+        model = self._settings.siliconflow_embedding_model or self._model_name
+
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{base_url}/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "input": texts,
+                        "encoding_format": "float",
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                data = result.get("data", [])
+                if not data:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="硅基流动 Embedding API 返回数据为空。",
+                    )
+                embeddings = [item["embedding"] for item in sorted(data, key=lambda x: x["index"])]
+                return embeddings
+        except httpx.HTTPStatusError as exc:
+            logger.exception(
+                "siliconflow embedding API error status=%s model=%s",
+                exc.response.status_code,
+                model,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"硅基流动 Embedding API 请求失败（HTTP {exc.response.status_code}）。",
+            ) from exc
+        except Exception as exc:
+            logger.exception(
+                "siliconflow embedding API error model=%s",
+                model,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"硅基流动 Embedding API 调用异常：{self._short_error(exc)}。",
+            ) from exc
 
     def _split_markdown_sections(self, markdown: str) -> list[tuple[str, str]]:
         content = str(markdown or "").strip()
