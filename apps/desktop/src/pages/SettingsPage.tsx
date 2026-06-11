@@ -1567,21 +1567,35 @@ export function SettingsPage({
 
   async function installKnowledgeDependencies() {
     if (!form) return;
+    const sessionId = `knowledge-deps-${Date.now()}`;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     try {
       setKnowledgeDepsInstalling(true);
       setKnowledgeDepsStatus("正在安装知识库依赖...");
       setKnowledgeDepsOutput("");
+      // Start polling install log
+      pollTimer = setInterval(async () => {
+        try {
+          const log = await api.getInstallLog(sessionId);
+          if (log.log) setKnowledgeDepsOutput(log.log);
+          if (log.done && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        } catch { /* ignore poll errors */ }
+      }, 1500);
       const response = await api.installKnowledgeDependencies({
         runtime_channel: form.runtime_channel,
         reinstall: Boolean(knowledgeDepsReady) || hasKnowledgeBrokenDeps,
+        install_session_id: sessionId,
       });
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      // Final log fetch
+      try { const log = await api.getInstallLog(sessionId); if (log.log) setKnowledgeDepsOutput(log.log); } catch { /* ignore */ }
       setKnowledgeDepsStatus(response.installed ? "知识库依赖已安装并完成检测" : "知识库依赖安装后仍未完全就绪");
-      setKnowledgeDepsOutput(response.stdoutTail || "");
       const nextEnvironment = response.environment || (await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true }));
       setEnvironment(nextEnvironment);
       await fetchKnowledgeRequirements();
       onRefresh();
     } catch (error) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       setKnowledgeDepsStatus(error instanceof Error ? error.message : "安装知识库依赖失败");
     } finally {
       setKnowledgeDepsInstalling(false);
