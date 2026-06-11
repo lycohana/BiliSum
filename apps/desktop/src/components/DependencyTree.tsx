@@ -32,6 +32,7 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
   const [expanded, setExpanded] = useState(true);
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [dependencies, setDependencies] = useState<string[]>([]);
+  const [operationStatus, setOperationStatus] = useState<string>("");
 
   const connector = isLast ? "└" : "├";
   const childPrefix = isLast ? "    " : "│   ";
@@ -39,11 +40,16 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
 
   async function handleInstall() {
     setInstalling(true);
+    setOperationStatus("安装中...");
     try {
       await api.installKnowledgeDependencies({ runtime_channel: runtimeChannel, reinstall: false });
+      setOperationStatus("安装成功");
+      setTimeout(() => setOperationStatus(""), 2000);
       onStatusChange();
     } catch (error) {
+      setOperationStatus("安装失败");
       console.error("Install failed:", error);
+      setTimeout(() => setOperationStatus(""), 3000);
     } finally {
       setInstalling(false);
     }
@@ -61,17 +67,23 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
 
   async function handleUninstallConfirm() {
     setInstalling(true);
+    setOperationStatus("卸载中...");
     try {
       await api.uninstallPackages({ packages: [item.packageName], runtime_channel: runtimeChannel });
       setUninstallDialogOpen(false);
+      setOperationStatus("卸载成功");
+      setTimeout(() => setOperationStatus(""), 2000);
       onStatusChange();
     } catch (error) {
+      setOperationStatus("卸载失败");
       console.error("Uninstall failed:", error);
+      setTimeout(() => setOperationStatus(""), 3000);
     } finally {
       setInstalling(false);
     }
   }
 
+  const statusIcon = item.status === "installed" ? "✓" : item.status === "preinstalled" ? "✓" : "✗";
   const statusClass = item.status === "installed" ? "status-success" : item.status === "preinstalled" ? "status-info" : "status-warning";
   const statusLabel = item.status === "installed" ? "已安装" : item.status === "preinstalled" ? "已预装" : "缺失";
 
@@ -94,7 +106,10 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
               )}
               <span className="dependency-name">{item.packageName}</span>
               {item.version && <span className="dependency-version">{item.version}</span>}
-              <span className={`helper-chip ${statusClass}`}>{statusLabel}</span>
+              <span className={`helper-chip dependency-status-chip ${statusClass}`}>
+                <span className="dependency-status-icon">{statusIcon}</span>
+                {statusLabel}
+              </span>
             </div>
             {(item.purpose || item.dependsOn) && (
               <div className="dependency-tree-meta">
@@ -106,7 +121,7 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
             )}
             <div className="dependency-actions">
               {item.status === "missing" && (
-                <button className="secondary-button" type="button" disabled={installing} onClick={handleInstall}>
+                <button className="primary-button install-button" type="button" disabled={installing} onClick={handleInstall}>
                   {installing ? "安装中..." : "安装"}
                 </button>
               )}
@@ -114,6 +129,11 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
                 <button className="secondary-button danger-button" type="button" disabled={installing} onClick={handleUninstallClick}>
                   卸载
                 </button>
+              )}
+              {operationStatus && (
+                <span className={`dependency-operation-status ${operationStatus.includes("成功") ? "success" : operationStatus.includes("失败") ? "error" : ""}`}>
+                  {operationStatus}
+                </span>
               )}
             </div>
           </div>

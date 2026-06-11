@@ -3309,51 +3309,43 @@ export function SettingsPage({
                       <span className="settings-tree-index">03</span>
                       <div>
                         <h3>运行依赖</h3>
-                        <p>知识库依赖（chromadb、sentence-transformers）按需安装，不会随应用更新被覆盖。</p>
+                        <p>知识库依赖（chromadb、sentence-transformers）需要到"运行环境"页面统一安装管理。</p>
                       </div>
                     </header>
                     <div className="settings-tree-grid">
-                      <div
-                        className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                        ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
-                      >
-                        <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : "知识库依赖未安装"}</strong>
-                        <span>
-                          {knowledgeDepsReady
-                            ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
-                            : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
+                      <div className={`knowledge-deps-status-card ${knowledgeDepsReady ? "status-ready" : "status-missing"}`}>
+                        <div className="knowledge-deps-status-icon">
+                          {knowledgeDepsReady ? "✓" : "⚠"}
+                        </div>
+                        <div className="knowledge-deps-status-content">
+                          <strong className="knowledge-deps-status-title">
+                            {knowledgeDepsReady ? "依赖已就绪" : `缺失 ${missingKnowledgeDeps.length} 个依赖`}
+                          </strong>
+                          <p className="knowledge-deps-status-desc">
+                            {knowledgeDepsReady
+                              ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
+                              : `需要安装：${missingKnowledgeDeps.join("、") || "chromadb、sentence-transformers"}。`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="knowledge-deps-navigate">
+                        <button
+                          className="primary-button"
+                          type="button"
+                          onClick={() => {
+                            setActiveCategory("runtime");
+                            setTimeout(() => {
+                              const target = document.querySelector('[data-focus-key="knowledge_runtime"]');
+                              target?.scrollIntoView({ behavior: "smooth", block: "center" });
+                            }, 100);
+                          }}
+                        >
+                          前往运行环境管理
+                        </button>
+                        <span className="settings-input-caption">
+                          在运行环境页面可以查看完整依赖树、安装/卸载单个依赖包、查看安装日志。
                         </span>
                       </div>
-                      <label className="settings-input-group">
-                        <span className="settings-input-label">运行环境依赖</span>
-                        <div
-                          className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
-                        >
-                          <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                            {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
-                            {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
-                          </button>
-                        </div>
-                        <span className="settings-input-caption">
-                          依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
-                        </span>
-                      </label>
-                      {knowledgeRequirements && (
-                        <div style={{ gridColumn: "1 / -1", marginTop: "1rem" }}>
-                          <DependencyTree
-                            title="知识库依赖"
-                            items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
-                            runtimeChannel={form.runtime_channel}
-                            onStatusChange={handleDependencyStatusChange}
-                          />
-                        </div>
-                      )}
-                      {knowledgeDepsOutput ? (
-                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput} style={{ gridColumn: "1 / -1" }}></textarea>
-                      ) : null}
                     </div>
                   </section>
                 ) : null}
@@ -4141,6 +4133,7 @@ export function SettingsPage({
               <div className="settings-form-group">
                 <div
                   className="runtime-subsection-header"
+                  data-focus-key="knowledge_runtime"
                   onClick={() => setKnowledgeSectionOpen(!knowledgeSectionOpen)}
                   aria-expanded={knowledgeSectionOpen}
                   role="button"
