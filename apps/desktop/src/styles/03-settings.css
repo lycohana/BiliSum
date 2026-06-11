@@ -1871,13 +1871,13 @@
 }
 
 .knowledge-deps-status-card.status-ready {
-  background: var(--success-50, #f0fdf4);
-  border-color: var(--success-500, #22c55e);
+  background: var(--success-bg, #f0fdf4);
+  border-color: var(--success-border, #22c55e);
 }
 
 .knowledge-deps-status-card.status-missing {
-  background: var(--warning-50, #fefce8);
-  border-color: var(--warning-500, #eab308);
+  background: var(--warning-bg, #fefce8);
+  border-color: var(--warning-border, #eab308);
 }
 
 .knowledge-deps-status-icon {
@@ -1893,13 +1893,13 @@
 }
 
 .knowledge-deps-status-card.status-ready .knowledge-deps-status-icon {
-  background: var(--success-100, #dcfce7);
-  color: var(--success-700, #15803d);
+  background: var(--success-icon-bg, #dcfce7);
+  color: var(--success-icon-fg, #15803d);
 }
 
 .knowledge-deps-status-card.status-missing .knowledge-deps-status-icon {
-  background: var(--warning-100, #fef9c3);
-  color: var(--warning-700, #a16207);
+  background: var(--warning-icon-bg, #fef9c3);
+  color: var(--warning-icon-fg, #a16207);
 }
 
 .knowledge-deps-status-content {
