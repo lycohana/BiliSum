@@ -2064,7 +2064,7 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         # On GPU channels the user already has CUDA torch — never install
         # PyPI CPU torch on top of it.  Only add torch/torchaudio to the
         # install list when they are genuinely missing.
-        funasr_packages = ["funasr>=1.1.0"]
+        funasr_packages = ["transformers>=4.0,<5.0", "funasr>=1.1.0"]
         try:
             result = runner(
                 [str(python_executable), "-c", "import torch; print(torch.__version__)"],
@@ -2219,7 +2219,7 @@ def install_knowledge_dependencies(
 
     packages = ["chromadb>=1.0.0"]
     if "sentence-transformers" in required_packages:
-        packages.append("sentence-transformers>=3.0")
+        packages.extend(["transformers>=4.0,<5.0", "sentence-transformers>=3.0"])
     if "modelscope" in required_packages:
         packages.append("modelscope")
 
