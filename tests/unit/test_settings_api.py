@@ -667,7 +667,7 @@ def test_install_knowledge_dependencies_repairs_broken_imports(monkeypatch, tmp_
 
     assert response["installed"] is True
     assert response["repairReinstall"] is True
-    assert commands == [(["chromadb>=1.0.0", "transformers>=4.0,<5.0", "sentence-transformers>=3.0"], True)]
+    assert commands == [(["chromadb>=1.0.0", "transformers>=4.0,<4.50", "sentence-transformers>=3.0"], True)]
 
 
 def test_install_knowledge_dependencies_can_target_runtime_channel(monkeypatch, tmp_path: Path) -> None:
