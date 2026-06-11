@@ -365,6 +365,9 @@ export function SettingsPage({
   const [presetDeleteConfirm, setPresetDeleteConfirm] = useState<string | null>(null);
   const [presetsSectionOpen, setPresetsSectionOpen] = useState(false);
   const [undoPromptValues, setUndoPromptValues] = useState<Record<string, string> | null>(null);
+  const [localAsrSectionOpen, setLocalAsrSectionOpen] = useState(false);
+  const [funasrSectionOpen, setFunasrSectionOpen] = useState(false);
+  const [knowledgeSectionOpen, setKnowledgeSectionOpen] = useState(false);
 
   function emptyPresetForm(): PromptPresetCreateRequest {
     return { name: "", system_prompt: "", user_prompt_template: "", description: "", category: "", auto_match_keywords: [] };
@@ -4030,109 +4033,163 @@ export function SettingsPage({
                 </span>
               </div>
               <div className="settings-form-group">
-                <div className="settings-input-group">
-                  <span className="settings-input-label">本地 ASR 运行环境</span>
-                  <div
-                    className={`settings-actions settings-focus-target ${activeFocusTarget === "local_asr_runtime" ? "is-highlighted" : ""}`}
-                    ref={registerFocusTarget("local_asr_runtime") as (node: HTMLDivElement | null) => void}
-                  >
-                    <button className="secondary-button" type="button" disabled={localAsrInstalling} onClick={() => void installLocalAsr()}>
-                      {localAsrInstalling ? "安装中..." : localAsrInstalled ? "重新安装本地 ASR" : "安装本地 ASR"}
-                    </button>
-                  </div>
-                  <span className="settings-input-caption">
-                    {localAsrInstalled
-                      ? `当前已安装${environment?.localAsrVersion ? `（${environment.localAsrVersion}）` : ""}，安装后会自动切换到本地模式。`
-                      : "正式安装包默认不包含本地 ASR；安装到当前运行环境后会自动切换到本地模式。"}
-                  </span>
-                  {localAsrOutput ? (
-                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
-                  ) : null}
+                <div
+                  className="runtime-subsection-header"
+                  onClick={() => setLocalAsrSectionOpen(!localAsrSectionOpen)}
+                  aria-expanded={localAsrSectionOpen}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setLocalAsrSectionOpen(!localAsrSectionOpen); }}
+                >
+                  <span className="runtime-subsection-chevron">▶</span>
+                  <span className="runtime-subsection-title">本地 ASR 运行环境</span>
+                  {localAsrInstalled && (
+                    <span className="runtime-subsection-badge status-installed">已安装</span>
+                  )}
+                  {!localAsrInstalled && (
+                    <span className="runtime-subsection-badge status-missing">未安装</span>
+                  )}
                 </div>
+                {localAsrSectionOpen && (
+                  <div className="runtime-subsection-content">
+                    <div
+                      className={`settings-actions settings-focus-target ${activeFocusTarget === "local_asr_runtime" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("local_asr_runtime") as (node: HTMLDivElement | null) => void}
+                    >
+                      <button className="secondary-button" type="button" disabled={localAsrInstalling} onClick={() => void installLocalAsr()}>
+                        {localAsrInstalling ? "安装中..." : localAsrInstalled ? "重新安装本地 ASR" : "安装本地 ASR"}
+                      </button>
+                    </div>
+                    <span className="settings-input-caption">
+                      {localAsrInstalled
+                        ? `当前已安装${environment?.localAsrVersion ? `（${environment.localAsrVersion}）` : ""}，安装后会自动切换到本地模式。`
+                        : "正式安装包默认不包含本地 ASR；安装到当前运行环境后会自动切换到本地模式。"}
+                    </span>
+                    {localAsrOutput ? (
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
+                    ) : null}
+                  </div>
+                )}
               </div>
               <div className="settings-form-group">
-                <div className="settings-input-group">
-                  <span className="settings-input-label">FunASR 运行环境</span>
-                  <div
-                    className={`settings-actions settings-focus-target ${activeFocusTarget === "funasr_runtime" ? "is-highlighted" : ""}`}
-                    ref={registerFocusTarget("funasr_runtime") as (node: HTMLDivElement | null) => void}
-                  >
-                    <button className="secondary-button" type="button" disabled={funasrInstalling} onClick={() => void installFunAsr()}>
-                      {funasrInstalling ? "安装中..." : funasrInstalled ? "重新安装 FunASR" : "安装 FunASR"}
-                    </button>
-                  </div>
-                  <span className="settings-input-caption">
-                    {funasrInstalled
-                      ? `当前已安装${environment?.funasrVersion ? `（${environment.funasrVersion}）` : ""}，中文识别效果优于 Whisper。安装后会自动切换到 FunASR 模式。`
-                      : "FunASR 是阿里开源语音识别引擎，中文效果优于 Whisper，CPU 速度约为 Whisper 的 34 倍。依赖包含 PyTorch，安装体积较大，请耐心等待。"}
-                  </span>
-                  {funasrOutput ? (
-                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
-                  ) : null}
+                <div
+                  className="runtime-subsection-header"
+                  onClick={() => setFunasrSectionOpen(!funasrSectionOpen)}
+                  aria-expanded={funasrSectionOpen}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFunasrSectionOpen(!funasrSectionOpen); }}
+                >
+                  <span className="runtime-subsection-chevron">▶</span>
+                  <span className="runtime-subsection-title">FunASR 运行环境</span>
+                  {funasrInstalled && (
+                    <span className="runtime-subsection-badge status-installed">已安装</span>
+                  )}
+                  {!funasrInstalled && (
+                    <span className="runtime-subsection-badge status-missing">未安装</span>
+                  )}
                 </div>
+                {funasrSectionOpen && (
+                  <div className="runtime-subsection-content">
+                    <div
+                      className={`settings-actions settings-focus-target ${activeFocusTarget === "funasr_runtime" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("funasr_runtime") as (node: HTMLDivElement | null) => void}
+                    >
+                      <button className="secondary-button" type="button" disabled={funasrInstalling} onClick={() => void installFunAsr()}>
+                        {funasrInstalling ? "安装中..." : funasrInstalled ? "重新安装 FunASR" : "安装 FunASR"}
+                      </button>
+                    </div>
+                    <span className="settings-input-caption">
+                      {funasrInstalled
+                        ? `当前已安装${environment?.funasrVersion ? `（${environment.funasrVersion}）` : ""}，中文识别效果优于 Whisper。安装后会自动切换到 FunASR 模式。`
+                        : "FunASR 是阿里开源语音识别引擎，中文效果优于 Whisper，CPU 速度约为 Whisper 的 34 倍。依赖包含 PyTorch，安装体积较大，请耐心等待。"}
+                    </span>
+                    {funasrOutput ? (
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
+                    ) : null}
+                  </div>
+                )}
               </div>
               <div className="settings-form-group">
-                <div className="settings-input-group">
-                  <span className="settings-input-label">知识库运行环境</span>
-                  <div
-                    className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
-                    ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
-                  >
-                    <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                      {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                    </button>
-                  </div>
-                  <span className="settings-input-caption">
-                    当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
-                  </span>
-                  {knowledgeRequirements && (
-                    <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                      {knowledgeRequirements.preinstalled.map((pkg) => (
-                        <DependencyNode
-                          key={pkg}
-                          packageName={pkg}
-                          version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
-                          status="preinstalled"
-                          isRequired={false}
-                          runtimeChannel={form.runtime_channel}
-                          onStatusChange={handleDependencyStatusChange}
-                        />
-                      ))}
-                      {knowledgeRequirements.required.map((pkg) => {
-                        const isInstalled = pkg === "sentence-transformers"
-                          ? environment?.sentenceTransformersInstalled
-                          : pkg === "modelscope"
-                          ? (environment as any)?.modelscopeInstalled
-                          : false;
-                        const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
-                        return (
+                <div
+                  className="runtime-subsection-header"
+                  onClick={() => setKnowledgeSectionOpen(!knowledgeSectionOpen)}
+                  aria-expanded={knowledgeSectionOpen}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setKnowledgeSectionOpen(!knowledgeSectionOpen); }}
+                >
+                  <span className="runtime-subsection-chevron">▶</span>
+                  <span className="runtime-subsection-title">知识库运行环境</span>
+                  {knowledgeDepsReady && (
+                    <span className="runtime-subsection-badge status-installed">已安装</span>
+                  )}
+                  {!knowledgeDepsReady && (
+                    <span className="runtime-subsection-badge status-missing">未安装</span>
+                  )}
+                </div>
+                {knowledgeSectionOpen && (
+                  <div className="runtime-subsection-content">
+                    <div
+                      className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
+                      ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
+                    >
+                      <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                        {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
+                      </button>
+                    </div>
+                    <span className="settings-input-caption">
+                      当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
+                    </span>
+                    {knowledgeRequirements && (
+                      <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                        {knowledgeRequirements.preinstalled.map((pkg) => (
                           <DependencyNode
                             key={pkg}
                             packageName={pkg}
-                            version={version}
-                            status={isInstalled ? "installed" : "missing"}
-                            isRequired={true}
+                            version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
+                            status="preinstalled"
+                            isRequired={false}
                             runtimeChannel={form.runtime_channel}
                             onStatusChange={handleDependencyStatusChange}
                           />
-                        );
-                      })}
-                      {knowledgeRequirements.optional.map((pkg) => (
-                        <DependencyNode
-                          key={pkg}
-                          packageName={pkg}
-                          status="missing"
-                          isRequired={false}
-                          runtimeChannel={form.runtime_channel}
-                          onStatusChange={handleDependencyStatusChange}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {knowledgeDepsOutput ? (
-                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                  ) : null}
-                </div>
+                        ))}
+                        {knowledgeRequirements.required.map((pkg) => {
+                          const isInstalled = pkg === "sentence-transformers"
+                            ? environment?.sentenceTransformersInstalled
+                            : pkg === "modelscope"
+                            ? (environment as any)?.modelscopeInstalled
+                            : false;
+                          const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
+                          return (
+                            <DependencyNode
+                              key={pkg}
+                              packageName={pkg}
+                              version={version}
+                              status={isInstalled ? "installed" : "missing"}
+                              isRequired={true}
+                              runtimeChannel={form.runtime_channel}
+                              onStatusChange={handleDependencyStatusChange}
+                            />
+                          );
+                        })}
+                        {knowledgeRequirements.optional.map((pkg) => (
+                          <DependencyNode
+                            key={pkg}
+                            packageName={pkg}
+                            status="missing"
+                            isRequired={false}
+                            runtimeChannel={form.runtime_channel}
+                            onStatusChange={handleDependencyStatusChange}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {knowledgeDepsOutput ? (
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
+                    ) : null}
+                  </div>
+                )}
               </div>
               {environment?.runtimeError ? (
                 <div className="settings-form-group">

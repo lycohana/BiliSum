@@ -2178,6 +2178,91 @@
   font-size: 0.8rem;
 }
 
+.runtime-subsection-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all var(--transition-base);
+  user-select: none;
+}
+
+.runtime-subsection-header:hover {
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--brand-500) 6%);
+  border-color: var(--border-default);
+  box-shadow: var(--shadow-xs);
+}
+
+.runtime-subsection-header:active {
+  transform: scale(0.995);
+}
+
+.runtime-subsection-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-tertiary);
+  transition: transform var(--transition-base), color var(--transition-base);
+}
+
+.runtime-subsection-header:hover .runtime-subsection-chevron {
+  color: var(--text-secondary);
+}
+
+.runtime-subsection-header[aria-expanded="true"] .runtime-subsection-chevron {
+  transform: rotate(90deg);
+  color: var(--brand-600);
+}
+
+.runtime-subsection-title {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.runtime-subsection-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.runtime-subsection-badge.status-installed {
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid var(--success-border);
+}
+
+.runtime-subsection-badge.status-missing {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
+
+.runtime-subsection-badge.status-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+}
+
+.runtime-subsection-content {
+  margin-top: 12px;
+  padding: 20px;
+  border-radius: 12px;
+  background: var(--settings-muted-bg);
+  border: 1px solid var(--border-subtle);
+}
+
 .settings-grid {
   grid-template-columns: 1fr;
   gap: 24px;
