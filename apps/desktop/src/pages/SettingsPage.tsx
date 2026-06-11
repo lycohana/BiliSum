@@ -212,6 +212,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "runtime", targetKey: "runtime_status", title: "运行环境状态", description: "检查 Python、Torch、CUDA 与扩展依赖。", keywords: ["运行环境", "环境", "torch", "python", "cuda"] },
   { category: "runtime", targetKey: "local_asr_runtime", title: "本地 ASR 运行环境", description: "安装或检查本地 ASR 依赖。", keywords: ["本地", "asr", "whisper", "安装"] },
   { category: "runtime", targetKey: "funasr_runtime", title: "FunASR 运行环境", description: "安装或检查 FunASR 依赖（中文效果优于 Whisper）。", keywords: ["funasr", "qwen", "asr", "安装", "中文"] },
+  { category: "runtime", targetKey: "knowledge_runtime", title: "知识库运行环境", description: "安装或检查知识库依赖（chromadb、sentence-transformers）。", keywords: ["知识库", "依赖", "chromadb", "sentence", "transformers", "向量"] },
   { category: "logs", targetKey: "service_logs", title: "服务日志", description: "查看后端服务日志。", keywords: ["日志", "log", "报错", "服务"] },
   { category: "updates", targetKey: "app_updates", title: "应用更新", description: "检查桌面应用新版本。", keywords: ["更新", "版本", "update", "release"] },
 ];
@@ -4043,6 +4044,29 @@ export function SettingsPage({
                   </span>
                   {funasrOutput ? (
                     <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
+                  ) : null}
+                </div>
+              </div>
+              <div className="settings-form-group">
+                <div className="settings-input-group">
+                  <span className="settings-input-label">知识库运行环境</span>
+                  <div
+                    className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
+                    ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
+                  >
+                    <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                      {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
+                    </button>
+                  </div>
+                  <span className="settings-input-caption">
+                    {knowledgeDepsReady
+                      ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已安装。`
+                      : form.knowledge_embedding_provider === "siliconflow"
+                      ? "使用硅基流动在线 API，chromadb 已预装，无需安装额外依赖。"
+                      : "知识库依赖（chromadb、sentence-transformers）按需安装，根据向量模型配置智能决定所需依赖。"}
+                  </span>
+                  {knowledgeDepsOutput ? (
+                    <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
                   ) : null}
                 </div>
               </div>
