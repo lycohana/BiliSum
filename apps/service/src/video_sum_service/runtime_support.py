@@ -2194,7 +2194,7 @@ def install_knowledge_dependencies(
 
     packages = ["chromadb>=1.0.0"]
     if "sentence-transformers" in required_packages:
-        packages.append("sentence-transformers>=3.0")
+        packages.extend(["transformers>=4.0", "sentence-transformers>=3.0"])
     if "modelscope" in required_packages:
         packages.append("modelscope")
 
