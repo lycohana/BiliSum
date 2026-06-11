@@ -3338,10 +3338,54 @@ export function SettingsPage({
                         <span className="settings-input-caption">
                           依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
                         </span>
-                        {knowledgeDepsOutput ? (
-                          <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                        ) : null}
                       </label>
+                      {knowledgeRequirements && (
+                        <div style={{ gridColumn: "1 / -1", marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                          {knowledgeRequirements.preinstalled.map((pkg) => (
+                            <DependencyNode
+                              key={pkg}
+                              packageName={pkg}
+                              version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
+                              status="preinstalled"
+                              isRequired={false}
+                              runtimeChannel={form.runtime_channel}
+                              onStatusChange={handleDependencyStatusChange}
+                            />
+                          ))}
+                          {knowledgeRequirements.required.map((pkg) => {
+                            const isInstalled = pkg === "sentence-transformers"
+                              ? environment?.sentenceTransformersInstalled
+                              : pkg === "modelscope"
+                              ? (environment as any)?.modelscopeInstalled
+                              : false;
+                            const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
+                            return (
+                              <DependencyNode
+                                key={pkg}
+                                packageName={pkg}
+                                version={version}
+                                status={isInstalled ? "installed" : "missing"}
+                                isRequired={true}
+                                runtimeChannel={form.runtime_channel}
+                                onStatusChange={handleDependencyStatusChange}
+                              />
+                            );
+                          })}
+                          {knowledgeRequirements.optional.map((pkg) => (
+                            <DependencyNode
+                              key={pkg}
+                              packageName={pkg}
+                              status="missing"
+                              isRequired={false}
+                              runtimeChannel={form.runtime_channel}
+                              onStatusChange={handleDependencyStatusChange}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {knowledgeDepsOutput ? (
+                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput} style={{ gridColumn: "1 / -1" }}></textarea>
+                      ) : null}
                     </div>
                   </section>
                 ) : null}

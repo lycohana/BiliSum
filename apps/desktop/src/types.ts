@@ -303,6 +303,9 @@ export type EnvironmentInfo = {
   sentenceTransformersInstalled?: boolean;
   sentenceTransformersVersion?: string;
   sentenceTransformersError?: string;
+  modelscopeInstalled?: boolean;
+  modelscopeVersion?: string;
+  modelscopeError?: string;
   knowledgeDependenciesReady?: boolean;
   knowledgeDependenciesError?: string;
   ffmpegLocation?: string;

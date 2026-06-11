@@ -88,6 +88,9 @@ def probe() -> dict:
         "sentenceTransformersVersion": "",
         "sentenceTransformersInstalled": False,
         "sentenceTransformersError": "",
+        "modelscopeVersion": "",
+        "modelscopeInstalled": False,
+        "modelscopeError": "",
         "knowledgeDependenciesReady": False,
         "knowledgeDependenciesError": "",
         "ffmpegLocation": "",
@@ -123,6 +126,13 @@ def probe() -> dict:
     payload["sentenceTransformersVersion"] = st_version
     payload["sentenceTransformersInstalled"] = st_installed
     payload["sentenceTransformersError"] = st_error
+
+    modelscope_installed, modelscope_version, modelscope_error = importable_distribution(
+        "modelscope", "modelscope"
+    )
+    payload["modelscopeVersion"] = modelscope_version
+    payload["modelscopeInstalled"] = modelscope_installed
+    payload["modelscopeError"] = modelscope_error
 
     payload["knowledgeDependenciesReady"] = bool(
         payload.get("chromadbInstalled") and payload.get("sentenceTransformersInstalled")
