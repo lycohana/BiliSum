@@ -3110,53 +3110,6 @@ export function SettingsPage({
                   <header className="settings-tree-panel-header">
                     <span className="settings-tree-index">02</span>
                     <div>
-                      <h3>运行依赖</h3>
-                      <p>知识库依赖（chromadb、sentence-transformers）按需安装，不会随应用更新被覆盖。</p>
-                    </div>
-                  </header>
-                  <div className="settings-tree-grid">
-                    <div
-                      className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                      ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
-                    >
-                      <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : form.knowledge_embedding_provider === "siliconflow" ? "chromadb 已内置" : "知识库依赖未安装"}</strong>
-                      <span>
-                        {knowledgeDepsReady
-                          ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
-                          : form.knowledge_embedding_provider === "siliconflow"
-                          ? "chromadb 已随应用预装，使用硅基流动在线 API 无需安装额外依赖。"
-                          : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
-                      </span>
-                    </div>
-                    {form.knowledge_embedding_provider !== "siliconflow" ? (
-                      <label className="settings-input-group">
-                        <span className="settings-input-label">运行环境依赖</span>
-                        <div
-                          className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                          ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
-                        >
-                          <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                            {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                          </button>
-                          <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
-                            {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
-                          </button>
-                        </div>
-                        <span className="settings-input-caption">
-                          依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
-                        </span>
-                        {knowledgeDepsOutput ? (
-                          <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                        ) : null}
-                      </label>
-                    ) : null}
-                  </div>
-                </section>
-
-                <section className="settings-tree-panel">
-                  <header className="settings-tree-panel-header">
-                    <span className="settings-tree-index">02</span>
-                    <div>
                       <h3>向量模型</h3>
                       <p>选择 Embedding 模型的下载源和模型名。国内用户建议使用 ModelScope 源或 HuggingFace 镜像。</p>
                     </div>
@@ -3309,18 +3262,58 @@ export function SettingsPage({
                           <textarea className="textarea-field log-viewer" rows={10} readOnly value={embeddingOutput}></textarea>
                         ) : null}
                       </>
-                    ) : (
-                      <div className="settings-inline-alert warning">
-                        <strong>在线 Embedding API 暂不可用</strong>
-                        <span>在线 API 模式仍在开发中，请切换为本地 HuggingFace 或 ModelScope 源。</span>
-                      </div>
-                    )}
+                    ) : null}
                   </div>
                 </section>
 
+                {form.knowledge_embedding_provider !== "siliconflow" ? (
+                  <section className="settings-tree-panel">
+                    <header className="settings-tree-panel-header">
+                      <span className="settings-tree-index">03</span>
+                      <div>
+                        <h3>运行依赖</h3>
+                        <p>知识库依赖（chromadb、sentence-transformers）按需安装，不会随应用更新被覆盖。</p>
+                      </div>
+                    </header>
+                    <div className="settings-tree-grid">
+                      <div
+                        className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
+                        ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
+                      >
+                        <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : "知识库依赖未安装"}</strong>
+                        <span>
+                          {knowledgeDepsReady
+                            ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
+                            : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
+                        </span>
+                      </div>
+                      <label className="settings-input-group">
+                        <span className="settings-input-label">运行环境依赖</span>
+                        <div
+                          className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
+                          ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
+                        >
+                          <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                            {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
+                            {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
+                          </button>
+                        </div>
+                        <span className="settings-input-caption">
+                          依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
+                        </span>
+                        {knowledgeDepsOutput ? (
+                          <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
+                        ) : null}
+                      </label>
+                    </div>
+                  </section>
+                ) : null}
+
                 <section className="settings-tree-panel">
                   <header className="settings-tree-panel-header">
-                    <span className="settings-tree-index">03</span>
+                    <span className="settings-tree-index">{form.knowledge_embedding_provider !== "siliconflow" ? "04" : "03"}</span>
                     <div>
                       <h3>知识库 LLM</h3>
                       <p>自动打标和知识库问答可以跟随主 LLM，也可以使用独立配置。</p>
