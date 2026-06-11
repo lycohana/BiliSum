@@ -2433,3 +2433,66 @@ def verify_embedding_model(
 def get_embedding_model_presets() -> dict[str, str]:
     """Return the available embedding model presets."""
     return dict(_EMBEDDING_MODEL_PRESETS)
+
+
+# -- Smart knowledge dependency management -----------------------------------
+
+def get_knowledge_requirements(provider: str) -> dict[str, object]:
+    """Get required packages based on embedding provider."""
+    provider = str(provider or "").strip().lower()
+    
+    if provider == "siliconflow":
+        return {"required": [], "optional": [], "preinstalled": ["chromadb"]}
+    elif provider == "local_modelscope":
+        return {"required": ["sentence-transformers", "modelscope"], "optional": [], "preinstalled": ["chromadb"]}
+    else:
+        return {"required": ["sentence-transformers"], "optional": [], "preinstalled": ["chromadb"]}
+
+
+def check_package_dependencies(package: str) -> list[str]:
+    """Check what features depend on this package."""
+    dependencies = []
+    settings = settings_manager.current
+    
+    if package == "sentence-transformers":
+        provider = str(getattr(settings, "knowledge_embedding_provider", "")).lower()
+        if provider in ("local_huggingface", "local_modelscope"):
+            dependencies.append("知识库（本地向量模型）")
+    
+    if package == "modelscope":
+        provider = str(getattr(settings, "knowledge_embedding_provider", "")).lower()
+        if provider == "local_modelscope":
+            dependencies.append("知识库（ModelScope 向量模型）")
+        funasr_hub = str(getattr(settings, "funasr_hub", "")).lower()
+        if funasr_hub == "ms":
+            dependencies.append("FunASR（ModelScope Hub）")
+    
+    if package == "chromadb":
+        if getattr(settings, "knowledge_enabled", False):
+            dependencies.append("知识库（向量数据库）")
+    
+    return dependencies
+
+
+def uninstall_packages(packages: list[str], runtime_channel: str | None = None) -> dict[str, object]:
+    """Uninstall specified packages from runtime."""
+    runtime_channel = normalize_runtime_channel(runtime_channel or settings_manager.current.runtime_channel, allow_unknown_gpu=True)
+    
+    use_current_python = uses_current_service_python(runtime_channel)
+    if use_current_python:
+        python_executable = Path(sys.executable)
+        runner = lambda command, runtime_channel, timeout=1800: run_host_command(command, timeout=timeout)
+    else:
+        ensure_runtime_channel(runtime_channel)
+        python_executable = runtime_python_executable(runtime_channel)
+        runner = run_command
+    
+    if python_executable is None:
+        raise HTTPException(status_code=500, detail="Runtime unavailable.")
+    
+    try:
+        result = runner([str(python_executable), "-m", "pip", "uninstall", "-y", *packages], runtime_channel, timeout=600)
+        clear_environment_probe_cache(runtime_channel)
+        return {"success": True, "packages": packages, "stdout": result.stdout or "", "stderr": result.stderr or ""}
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"卸载失败：{(exc.stderr or exc.stdout or str(exc))[-1000:]}") from exc

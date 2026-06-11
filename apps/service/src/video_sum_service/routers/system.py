@@ -44,11 +44,13 @@ from video_sum_service.runtime_startup import get_runtime_startup_state, mark_ru
 from video_sum_service.runtime_support import (
     _load_cached_environment_probe,
     build_worker,
+    check_package_dependencies,
     clear_environment_probe_cache,
     detect_environment,
     download_embedding_model,
     ensure_runtime_channel,
     get_embedding_model_presets,
+    get_knowledge_requirements,
     inspect_runtime_channels,
     install_cuda_support,
     install_funasr,
@@ -60,6 +62,7 @@ from video_sum_service.runtime_support import (
     serialize_settings,
     sync_all_runtime_channels,
     sync_runtime_channel,
+    uninstall_packages,
     verify_embedding_model,
 )
 from video_sum_service.schemas import (
@@ -623,3 +626,26 @@ def post_embedding_test(payload: dict[str, object]) -> dict[str, object]:
 @router.get("/knowledge/embedding/presets")
 def get_embedding_presets() -> dict[str, object]:
     return {"presets": get_embedding_model_presets()}
+
+
+@router.get("/runtime/knowledge-requirements")
+def get_runtime_knowledge_requirements(provider: str = "local_huggingface") -> dict[str, object]:
+    """Get required packages based on embedding provider."""
+    return get_knowledge_requirements(provider)
+
+
+@router.get("/runtime/package-dependencies")
+def get_runtime_package_dependencies(package: str) -> dict[str, object]:
+    """Check what features depend on this package."""
+    return {"package": package, "dependencies": check_package_dependencies(package)}
+
+
+@router.post("/runtime/uninstall-packages")
+def post_runtime_uninstall_packages(payload: dict[str, object]) -> dict[str, object]:
+    """Uninstall specified packages from runtime."""
+    packages = payload.get("packages", [])
+    if not isinstance(packages, list) or not packages:
+        raise HTTPException(status_code=400, detail="packages 参数必须是非空列表")
+    
+    runtime_channel = payload.get("runtime_channel") or payload.get("runtimeChannel") or None
+    return uninstall_packages(packages, runtime_channel)
