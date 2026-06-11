@@ -299,12 +299,15 @@ export type EnvironmentInfo = {
   funasrVersion?: string;
   chromadbInstalled?: boolean;
   chromadbVersion?: string;
+  chromadbBroken?: boolean;
   chromadbError?: string;
   sentenceTransformersInstalled?: boolean;
   sentenceTransformersVersion?: string;
+  sentenceTransformersBroken?: boolean;
   sentenceTransformersError?: string;
   modelscopeInstalled?: boolean;
   modelscopeVersion?: string;
+  modelscopeBroken?: boolean;
   modelscopeError?: string;
   knowledgeDependenciesReady?: boolean;
   knowledgeDependenciesError?: string;

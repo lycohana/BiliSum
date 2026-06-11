@@ -1152,9 +1152,14 @@ export function SettingsPage({
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
 
   const knowledgeDepsReady = Boolean(environment?.knowledgeDependenciesReady);
+  const hasKnowledgeBrokenDeps = Boolean(
+    environment?.chromadbBroken ||
+    environment?.sentenceTransformersBroken ||
+    environment?.modelscopeBroken
+  );
   const missingKnowledgeDeps = [
-    environment?.chromadbInstalled ? null : "chromadb",
-    environment?.sentenceTransformersInstalled ? null : "sentence-transformers",
+    environment?.chromadbInstalled || environment?.chromadbBroken ? null : "chromadb",
+    environment?.sentenceTransformersInstalled || environment?.sentenceTransformersBroken ? null : "sentence-transformers",
   ].filter(Boolean) as string[];
   const outdatedRuntimeChannels = runtimeStatus?.channels.filter((channel) => channel.needsUpdate) || [];
   const activeRuntimeStatus = runtimeStatus?.channels.find(
@@ -1568,7 +1573,7 @@ export function SettingsPage({
       setKnowledgeDepsOutput("");
       const response = await api.installKnowledgeDependencies({
         runtime_channel: form.runtime_channel,
-        reinstall: Boolean(knowledgeDepsReady),
+        reinstall: Boolean(knowledgeDepsReady) || hasKnowledgeBrokenDeps,
       });
       setKnowledgeDepsStatus(response.installed ? "知识库依赖已安装并完成检测" : "知识库依赖安装后仍未完全就绪");
       setKnowledgeDepsOutput(response.stdoutTail || "");
@@ -3313,18 +3318,20 @@ export function SettingsPage({
                       </div>
                     </header>
                     <div className="settings-tree-grid">
-                      <div className={`knowledge-deps-status-card ${knowledgeDepsReady ? "status-ready" : "status-missing"}`}>
+                      <div className={`knowledge-deps-status-card ${knowledgeDepsReady ? "status-ready" : hasKnowledgeBrokenDeps ? "status-missing" : "status-missing"}`}>
                         <div className="knowledge-deps-status-icon">
-                          {knowledgeDepsReady ? "✓" : "⚠"}
+                          {knowledgeDepsReady ? "\u2713" : hasKnowledgeBrokenDeps ? "\u26A0" : "\u26A0"}
                         </div>
                         <div className="knowledge-deps-status-content">
                           <strong className="knowledge-deps-status-title">
-                            {knowledgeDepsReady ? "依赖已就绪" : `缺失 ${missingKnowledgeDeps.length} 个依赖`}
+                            {knowledgeDepsReady ? "依赖已就绪" : hasKnowledgeBrokenDeps ? "依赖损坏" : `缺失 ${missingKnowledgeDeps.length} 个依赖`}
                           </strong>
                           <p className="knowledge-deps-status-desc">
                             {knowledgeDepsReady
                               ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
-                              : `需要安装：${missingKnowledgeDeps.join("、") || "chromadb、sentence-transformers"}。`}
+                              : hasKnowledgeBrokenDeps
+                                ? `部分依赖包已安装但无法正常导入，需要重新安装。`
+                                : `需要安装：${missingKnowledgeDeps.join("、") || "chromadb、sentence-transformers"}。`}
                           </p>
                         </div>
                       </div>
@@ -4145,32 +4152,44 @@ export function SettingsPage({
                   {knowledgeDepsReady && (
                     <span className="runtime-subsection-badge status-installed">已安装</span>
                   )}
-                  {!knowledgeDepsReady && (
+                  {!knowledgeDepsReady && hasKnowledgeBrokenDeps && (
+                    <span className="runtime-subsection-badge status-error">部分损坏</span>
+                  )}
+                  {!knowledgeDepsReady && !hasKnowledgeBrokenDeps && (
                     <span className="runtime-subsection-badge status-missing">未安装</span>
                   )}
                 </div>
                 {knowledgeSectionOpen && (
                   <div className="runtime-subsection-content">
-                    <div
-                      className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
-                      ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
-                    >
-                      <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                        {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                      </button>
-                    </div>
-                    <span className="settings-input-caption">
-                      当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
-                    </span>
-                    {knowledgeDepsStatus && (
-                      <div style={{ marginTop: "0.5rem" }}>
-                        <span className={`helper-chip ${knowledgeDepsStatus.includes("成功") || knowledgeDepsStatus.includes("就绪") ? "status-success" : knowledgeDepsStatus.includes("失败") ? "status-error" : "status-info"}`}>
-                          {knowledgeDepsStatus}
-                        </span>
+                    <div className="runtime-subsection-group">
+                      <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
+                        批量操作
+                      </span>
+                      <div
+                        className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
+                        ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
+                      >
+                        <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                          {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : hasKnowledgeBrokenDeps ? "重新安装知识库依赖" : "安装知识库依赖"}
+                        </button>
                       </div>
-                    )}
+                      <span className="settings-input-caption">
+                        当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
+                      </span>
+                      {knowledgeDepsStatus && (
+                        <div style={{ marginTop: "0.5rem" }}>
+                          <span className={`helper-chip ${knowledgeDepsStatus.includes("成功") || knowledgeDepsStatus.includes("就绪") ? "status-success" : knowledgeDepsStatus.includes("失败") ? "status-error" : "status-info"}`}>
+                            {knowledgeDepsStatus}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
                     {knowledgeRequirements && (
-                      <div style={{ marginTop: "1rem" }}>
+                      <div className="runtime-subsection-group">
+                        <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
+                          依赖状态
+                        </span>
                         <DependencyTree
                           title="知识库依赖"
                           items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
@@ -4179,22 +4198,25 @@ export function SettingsPage({
                         />
                       </div>
                     )}
+
                     {knowledgeDepsOutput ? (
-                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                    ) : null}
-                    {environment?.knowledgeDependenciesError && (
-                      <div style={{ marginTop: "1rem" }}>
-                        <span className="settings-input-label" style={{ color: "var(--color-error, #ef4444)" }}>知识库依赖错误</span>
-                        <textarea className="textarea-field log-viewer" rows={6} readOnly value={environment.knowledgeDependenciesError} style={{ borderColor: "var(--color-error, #ef4444)" }} />
+                      <div className="runtime-subsection-group">
+                        <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
+                          安装输出
+                        </span>
+                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
                       </div>
-                    )}
+                    ) : null}
+
                     {(environment?.chromadbError || environment?.sentenceTransformersError || environment?.modelscopeError) && (
-                      <div style={{ marginTop: "1rem" }}>
+                      <div className="runtime-subsection-group">
                         <div className="settings-inline-alert warning" style={{ marginBottom: "0.75rem" }}>
                           <strong>依赖损坏，需要重新安装</strong>
-                          <span>部分依赖包已安装但无法正常导入，请点击"重新安装知识库依赖"自动修复。</span>
+                          <span>部分依赖包已安装但无法正常导入，请点击上方"重新安装知识库依赖"自动修复。</span>
                         </div>
-                        <span className="settings-input-label" style={{ color: "var(--color-warning, #f59e0b)" }}>包导入错误</span>
+                        <span className="settings-input-label" style={{ color: "var(--color-warning, #f59e0b)", fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
+                          包导入错误
+                        </span>
                         {environment.chromadbError && (
                           <div style={{ marginTop: "0.5rem" }}>
                             <span style={{ fontSize: "0.9em", fontWeight: 500 }}>chromadb:</span>
@@ -4213,6 +4235,15 @@ export function SettingsPage({
                             <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.modelscopeError} style={{ marginTop: "0.25rem" }} />
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {environment?.knowledgeDependenciesError && !environment?.chromadbError && !environment?.sentenceTransformersError && !environment?.modelscopeError && (
+                      <div className="runtime-subsection-group">
+                        <span className="settings-input-label" style={{ color: "var(--color-error, #ef4444)", fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
+                          知识库依赖错误
+                        </span>
+                        <textarea className="textarea-field log-viewer" rows={6} readOnly value={environment.knowledgeDependenciesError} style={{ borderColor: "var(--color-error, #ef4444)" }} />
                       </div>
                     )}
                   </div>

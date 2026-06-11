@@ -2375,6 +2375,15 @@
   gap: 20px;
 }
 
+.runtime-subsection-group {
+  /* children of runtime-subsection-content, separated by the parent's gap */
+}
+
+.runtime-subsection-group + .runtime-subsection-group {
+  padding-top: 20px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 .settings-grid {
   grid-template-columns: 1fr;
   gap: 24px;

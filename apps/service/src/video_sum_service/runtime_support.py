@@ -1435,10 +1435,16 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
                 "localAsrVersion": "",
                 "chromadbInstalled": False,
                 "chromadbVersion": "",
+                "chromadbBroken": False,
                 "chromadbError": "",
                 "sentenceTransformersInstalled": False,
                 "sentenceTransformersVersion": "",
+                "sentenceTransformersBroken": False,
                 "sentenceTransformersError": "",
+                "modelscopeInstalled": False,
+                "modelscopeVersion": "",
+                "modelscopeBroken": False,
+                "modelscopeError": "",
                 "knowledgeDependenciesReady": False,
                 "knowledgeDependenciesError": "Runtime Python executable is missing.",
                 "ffmpegLocation": "",
@@ -1501,10 +1507,16 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
             "funasrError": failure_detail[-1200:],
             "chromadbInstalled": False,
             "chromadbVersion": "",
+            "chromadbBroken": False,
             "chromadbError": "",
             "sentenceTransformersInstalled": False,
             "sentenceTransformersVersion": "",
+            "sentenceTransformersBroken": False,
             "sentenceTransformersError": "",
+            "modelscopeInstalled": False,
+            "modelscopeVersion": "",
+            "modelscopeBroken": False,
+            "modelscopeError": "",
             "knowledgeDependenciesReady": False,
             "knowledgeDependenciesError": failure_detail[-1200:],
             "ffmpegLocation": "",
@@ -1531,10 +1543,16 @@ def detect_environment(runtime_channel: str | None = None) -> dict[str, object]:
     payload["funasrError"] = str(payload.get("funasrError") or "")
     payload["chromadbInstalled"] = bool(payload.get("chromadbInstalled"))
     payload["chromadbVersion"] = str(payload.get("chromadbVersion") or "")
+    payload["chromadbBroken"] = bool(payload.get("chromadbBroken"))
     payload["chromadbError"] = str(payload.get("chromadbError") or "")
     payload["sentenceTransformersInstalled"] = bool(payload.get("sentenceTransformersInstalled"))
     payload["sentenceTransformersVersion"] = str(payload.get("sentenceTransformersVersion") or "")
+    payload["sentenceTransformersBroken"] = bool(payload.get("sentenceTransformersBroken"))
     payload["sentenceTransformersError"] = str(payload.get("sentenceTransformersError") or "")
+    payload["modelscopeInstalled"] = bool(payload.get("modelscopeInstalled"))
+    payload["modelscopeVersion"] = str(payload.get("modelscopeVersion") or "")
+    payload["modelscopeBroken"] = bool(payload.get("modelscopeBroken"))
+    payload["modelscopeError"] = str(payload.get("modelscopeError") or "")
     payload["knowledgeDependenciesReady"] = bool(payload.get("knowledgeDependenciesReady"))
     payload["knowledgeDependenciesError"] = str(payload.get("knowledgeDependenciesError") or "")
     payload["runtimeError"] = str(payload.get("runtimeError") or "")
@@ -2173,8 +2191,13 @@ def install_knowledge_dependencies(
                     "python": str(python_executable),
                     "chromadbInstalled": True,
                     "chromadbVersion": str(environment.get("chromadbVersion") or ""),
+                    "chromadbBroken": False,
                     "sentenceTransformersInstalled": True,
                     "sentenceTransformersVersion": str(environment.get("sentenceTransformersVersion") or ""),
+                    "sentenceTransformersBroken": False,
+                    "modelscopeInstalled": bool(environment.get("modelscopeInstalled")),
+                    "modelscopeVersion": str(environment.get("modelscopeVersion") or ""),
+                    "modelscopeBroken": bool(environment.get("modelscopeBroken")),
                     "knowledgeDependenciesReady": True,
                 },
             )
@@ -2238,8 +2261,13 @@ def install_knowledge_dependencies(
             "python": str(python_executable),
             "chromadbInstalled": bool(environment.get("chromadbInstalled")),
             "chromadbVersion": str(environment.get("chromadbVersion") or ""),
+            "chromadbBroken": bool(environment.get("chromadbBroken")),
             "sentenceTransformersInstalled": bool(environment.get("sentenceTransformersInstalled")),
             "sentenceTransformersVersion": str(environment.get("sentenceTransformersVersion") or ""),
+            "sentenceTransformersBroken": bool(environment.get("sentenceTransformersBroken")),
+            "modelscopeInstalled": bool(environment.get("modelscopeInstalled")),
+            "modelscopeVersion": str(environment.get("modelscopeVersion") or ""),
+            "modelscopeBroken": bool(environment.get("modelscopeBroken")),
             "knowledgeDependenciesReady": bool(environment.get("knowledgeDependenciesReady")),
         },
     )

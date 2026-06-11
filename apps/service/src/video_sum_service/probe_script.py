@@ -84,12 +84,15 @@ def probe() -> dict:
         "localAsrAvailable": False,
         "chromadbVersion": "",
         "chromadbInstalled": False,
+        "chromadbBroken": False,
         "chromadbError": "",
         "sentenceTransformersVersion": "",
         "sentenceTransformersInstalled": False,
+        "sentenceTransformersBroken": False,
         "sentenceTransformersError": "",
         "modelscopeVersion": "",
         "modelscopeInstalled": False,
+        "modelscopeBroken": False,
         "modelscopeError": "",
         "knowledgeDependenciesReady": False,
         "knowledgeDependenciesError": "",
@@ -116,22 +119,28 @@ def probe() -> dict:
     chromadb_installed, chromadb_version, chromadb_error = importable_distribution(
         "chromadb", "chromadb"
     )
+    chromadb_broken = bool(chromadb_version and chromadb_error)
     payload["chromadbVersion"] = chromadb_version
     payload["chromadbInstalled"] = chromadb_installed
+    payload["chromadbBroken"] = chromadb_broken
     payload["chromadbError"] = chromadb_error
 
     st_installed, st_version, st_error = importable_distribution(
         "sentence-transformers", "sentence_transformers"
     )
+    st_broken = bool(st_version and st_error)
     payload["sentenceTransformersVersion"] = st_version
     payload["sentenceTransformersInstalled"] = st_installed
+    payload["sentenceTransformersBroken"] = st_broken
     payload["sentenceTransformersError"] = st_error
 
     modelscope_installed, modelscope_version, modelscope_error = importable_distribution(
         "modelscope", "modelscope"
     )
+    modelscope_broken = bool(modelscope_version and modelscope_error)
     payload["modelscopeVersion"] = modelscope_version
     payload["modelscopeInstalled"] = modelscope_installed
+    payload["modelscopeBroken"] = modelscope_broken
     payload["modelscopeError"] = modelscope_error
 
     payload["knowledgeDependenciesReady"] = bool(

@@ -1,4 +1,4 @@
-type DependencyStatus = "preinstalled" | "installed" | "missing";
+type DependencyStatus = "preinstalled" | "installed" | "missing" | "broken";
 
 export type DependencyItem = {
   packageName: string;
@@ -18,20 +18,43 @@ type KnowledgeRequirements = {
 type Environment = {
   chromadbInstalled?: boolean;
   chromadbVersion?: string;
+  chromadbBroken?: boolean;
+  chromadbError?: string;
   sentenceTransformersInstalled?: boolean;
   sentenceTransformersVersion?: string;
+  sentenceTransformersBroken?: boolean;
+  sentenceTransformersError?: string;
   modelscopeInstalled?: boolean;
+  modelscopeVersion?: string;
+  modelscopeBroken?: boolean;
+  modelscopeError?: string;
   funasrInstalled?: boolean;
   funasrVersion?: string;
+  funasrError?: string;
   localAsrInstalled?: boolean;
   localAsrVersion?: string;
 };
+
+function resolveStatus(
+  installed: boolean | undefined,
+  broken: boolean | undefined,
+  preinstalled: boolean
+): DependencyStatus {
+  if (broken) return "broken";
+  if (installed) return "installed";
+  if (preinstalled) return "preinstalled";
+  return "missing";
+}
 
 export function buildKnowledgeDependencyTree(
   requirements: KnowledgeRequirements,
   environment: Environment | null
 ): DependencyItem[] {
-  const chromadbStatus: DependencyStatus = "preinstalled";
+  const chromadbStatus: DependencyStatus = environment?.chromadbBroken
+    ? "broken"
+    : environment?.chromadbInstalled
+      ? "installed"
+      : "preinstalled";
   const chromadb: DependencyItem = {
     packageName: "chromadb",
     version: environment?.chromadbVersion,
@@ -41,7 +64,11 @@ export function buildKnowledgeDependencyTree(
   };
 
   if (requirements.required.includes("sentence-transformers")) {
-    const stStatus: DependencyStatus = environment?.sentenceTransformersInstalled ? "installed" : "missing";
+    const stStatus: DependencyStatus = resolveStatus(
+      environment?.sentenceTransformersInstalled,
+      environment?.sentenceTransformersBroken,
+      false
+    );
     const sentenceTransformers: DependencyItem = {
       packageName: "sentence-transformers",
       version: environment?.sentenceTransformersVersion,
@@ -52,9 +79,14 @@ export function buildKnowledgeDependencyTree(
     };
 
     if (requirements.required.includes("modelscope")) {
-      const msStatus: DependencyStatus = environment?.modelscopeInstalled ? "installed" : "missing";
+      const msStatus: DependencyStatus = resolveStatus(
+        environment?.modelscopeInstalled,
+        environment?.modelscopeBroken,
+        false
+      );
       sentenceTransformers.children!.push({
         packageName: "modelscope",
+        version: environment?.modelscopeVersion,
         status: msStatus,
         purpose: "ModelScope 向量模型",
         dependsOn: ["sentence-transformers"]
@@ -72,7 +104,11 @@ export function buildAsrDependencyTree(
   asrType: "funasr" | "local"
 ): DependencyItem[] {
   if (asrType === "funasr") {
-    const funasrStatus: DependencyStatus = environment?.funasrInstalled ? "installed" : "missing";
+    const funasrStatus: DependencyStatus = resolveStatus(
+      environment?.funasrInstalled,
+      false,
+      false
+    );
     return [{
       packageName: "funasr",
       version: environment?.funasrVersion,
@@ -83,7 +119,11 @@ export function buildAsrDependencyTree(
   }
 
   if (asrType === "local") {
-    const localAsrStatus: DependencyStatus = environment?.localAsrInstalled ? "installed" : "missing";
+    const localAsrStatus: DependencyStatus = resolveStatus(
+      environment?.localAsrInstalled,
+      false,
+      false
+    );
     return [{
       packageName: "faster-whisper",
       version: environment?.localAsrVersion,

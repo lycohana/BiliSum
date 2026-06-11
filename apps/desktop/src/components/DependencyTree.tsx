@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 
-type DependencyStatus = "preinstalled" | "installed" | "missing";
+type DependencyStatus = "preinstalled" | "installed" | "missing" | "broken";
 
 type DependencyItem = {
   packageName: string;
@@ -35,16 +35,16 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
   const [operationStatus, setOperationStatus] = useState<string>("");
   const [installLog, setInstallLog] = useState<string>("");
 
-  const connector = isLast ? "└" : "├";
-  const childPrefix = isLast ? "    " : "│   ";
+  const connector = isLast ? "\u2514" : "\u251C";
+  const childPrefix = isLast ? "    " : "\u2502   ";
   const hasChildren = item.children && item.children.length > 0;
 
-  async function handleInstall() {
+  async function handleBulkInstall(reinstall: boolean) {
     setInstalling(true);
     setOperationStatus("安装中...");
     setInstallLog("");
     try {
-      const response = await api.installKnowledgeDependencies({ runtime_channel: runtimeChannel, reinstall: false });
+      const response = await api.installKnowledgeDependencies({ runtime_channel: runtimeChannel, reinstall });
       setOperationStatus("安装成功");
       setInstallLog(response.stdoutTail || "");
       setTimeout(() => setOperationStatus(""), 2000);
@@ -86,9 +86,27 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
     }
   }
 
-  const statusIcon = item.status === "installed" ? "✓" : item.status === "preinstalled" ? "✓" : "✗";
-  const statusClass = item.status === "installed" ? "status-success" : item.status === "preinstalled" ? "status-info" : "status-warning";
-  const statusLabel = item.status === "installed" ? "已安装" : item.status === "preinstalled" ? "已预装" : "缺失";
+  let statusIcon: string;
+  let statusClass: string;
+  let statusLabel: string;
+
+  if (item.status === "installed") {
+    statusIcon = "\u2713";
+    statusClass = "status-success";
+    statusLabel = "已安装";
+  } else if (item.status === "preinstalled") {
+    statusIcon = "\u2713";
+    statusClass = "status-info";
+    statusLabel = "已预装";
+  } else if (item.status === "broken") {
+    statusIcon = "\u26A0";
+    statusClass = "status-error";
+    statusLabel = "损坏";
+  } else {
+    statusIcon = "\u2717";
+    statusClass = "status-warning";
+    statusLabel = "缺失";
+  }
 
   return (
     <>
@@ -104,7 +122,7 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
                   aria-label={expanded ? "收起" : "展开"}
                   type="button"
                 >
-                  {expanded ? "▼" : "▶"}
+                  {expanded ? "\u25BC" : "\u25B6"}
                 </button>
               )}
               <span className="dependency-name">{item.packageName}</span>
@@ -123,9 +141,14 @@ function DependencyTreeNode({ item, isLast, prefix, runtimeChannel, onStatusChan
               </div>
             )}
             <div className="dependency-actions">
-              {item.status === "missing" && (
-                <button className="primary-button install-button" type="button" disabled={installing} onClick={handleInstall}>
-                  {installing ? "安装中..." : "安装"}
+              {(item.status === "missing" || item.status === "broken") && (
+                <button
+                  className="primary-button install-button"
+                  type="button"
+                  disabled={installing}
+                  onClick={() => handleBulkInstall(item.status === "broken")}
+                >
+                  {installing ? "安装中..." : item.status === "broken" ? "重新安装" : "安装"}
                 </button>
               )}
               {item.status === "installed" && (
