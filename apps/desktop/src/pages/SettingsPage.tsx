@@ -3119,35 +3119,37 @@ export function SettingsPage({
                       className={`settings-inline-alert ${knowledgeDepsReady ? "success" : "warning"} settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
                       ref={registerFocusTarget("knowledge_dependencies_alert") as (node: HTMLDivElement | null) => void}
                     >
-                      <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : "知识库依赖未安装"}</strong>
+                      <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : form.knowledge_embedding_provider === "siliconflow" ? "chromadb 已内置" : "知识库依赖未安装"}</strong>
                       <span>
                         {knowledgeDepsReady
                           ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
                           : form.knowledge_embedding_provider === "siliconflow"
-                          ? `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源安装 chromadb（使用在线 API 无需安装 sentence-transformers）。`
+                          ? "chromadb 已随应用预装，使用硅基流动在线 API 无需安装额外依赖。"
                           : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
                       </span>
                     </div>
-                    <label className="settings-input-group">
-                      <span className="settings-input-label">运行环境依赖</span>
-                      <div
-                        className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
-                        ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
-                      >
-                        <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                          {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
-                        </button>
-                        <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
-                          {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
-                        </button>
-                      </div>
-                      <span className="settings-input-caption">
-                        依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
-                      </span>
-                      {knowledgeDepsOutput ? (
-                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                      ) : null}
-                    </label>
+                    {form.knowledge_embedding_provider !== "siliconflow" ? (
+                      <label className="settings-input-group">
+                        <span className="settings-input-label">运行环境依赖</span>
+                        <div
+                          className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_dependencies" ? "is-highlighted" : ""}`}
+                          ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
+                        >
+                          <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                            {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : "安装知识库依赖"}
+                          </button>
+                          <button className="secondary-button" type="button" disabled={runtimeStatusLoading} onClick={() => void refreshRuntimeStatus()}>
+                            {runtimeStatusLoading ? "检查中..." : "检查运行环境"}
+                          </button>
+                        </div>
+                        <span className="settings-input-caption">
+                          依赖只安装到当前 runtime，不会写入默认安装包；更新应用时已安装的 runtime 会保留。
+                        </span>
+                        {knowledgeDepsOutput ? (
+                          <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
+                        ) : null}
+                      </label>
+                    ) : null}
                   </div>
                 </section>
 

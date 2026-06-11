@@ -110,6 +110,7 @@ def create_runtime_seed() -> None:
             str(ROOT / "packages" / "infra"),
             str(ROOT / "packages" / "core"),
             str(ROOT / "apps" / "service"),
+            "chromadb>=1.0.0",
         ]
     )
     # 清理运行时环境中不必要的包，减小打包体积
