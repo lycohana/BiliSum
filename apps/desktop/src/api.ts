@@ -535,6 +535,19 @@ export const api = {
   getEmbeddingPresets() {
     return fetchJson<{ presets: Record<string, string> }>("/api/v1/knowledge/embedding/presets");
   },
+  getKnowledgeRequirements(provider: string) {
+    return fetchJson<{ required: string[]; optional: string[]; preinstalled: string[] }>(`/api/v1/runtime/knowledge-requirements?provider=${encodeURIComponent(provider)}`);
+  },
+  getPackageDependencies(packageName: string) {
+    return fetchJson<{ package: string; dependencies: string[] }>(`/api/v1/runtime/package-dependencies?package=${encodeURIComponent(packageName)}`);
+  },
+  uninstallPackages(payload: { packages: string[]; runtime_channel?: string; runtimeChannel?: string }) {
+    return fetchJson<{ success: boolean; packages: string[]; stdout: string; stderr: string }>("/api/v1/runtime/uninstall-packages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
   createTaskEventSource(taskId: string, after?: string | null) {
     const url = new URL(`/api/v1/tasks/${taskId}/events/stream`, window.location.origin);
     if (after) {

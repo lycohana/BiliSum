@@ -18,6 +18,7 @@ import {
 import { api } from "../api";
 import { SearchIcon } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
+import { DependencyNode } from "../components/DependencyNode";
 import type { EnvironmentInfo, PromptPreset, PromptPresetCreateRequest, RuntimeStatus, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview, TaskSummary } from "../types";
 
 import { formatDateTime, taskStatusLabel } from "../utils";
@@ -291,6 +292,10 @@ export function SettingsPage({
     })();
   }, []);
 
+  useEffect(() => {
+    void fetchKnowledgeRequirements();
+  }, [form?.knowledge_embedding_provider]);
+
   const [localAsrStatus, setLocalAsrStatus] = useState("");
   const [localAsrOutput, setLocalAsrOutput] = useState("");
   const [localAsrInstalling, setLocalAsrInstalling] = useState(false);
@@ -304,6 +309,7 @@ export function SettingsPage({
   const [knowledgeDepsStatus, setKnowledgeDepsStatus] = useState("");
   const [knowledgeDepsOutput, setKnowledgeDepsOutput] = useState("");
   const [knowledgeDepsInstalling, setKnowledgeDepsInstalling] = useState(false);
+  const [knowledgeRequirements, setKnowledgeRequirements] = useState<{ required: string[]; optional: string[]; preinstalled: string[] } | null>(null);
   const [embeddingDownloading, setEmbeddingDownloading] = useState(false);
   const [embeddingTesting, setEmbeddingTesting] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState("");
@@ -1563,12 +1569,30 @@ export function SettingsPage({
       setKnowledgeDepsOutput(response.stdoutTail || "");
       const nextEnvironment = response.environment || (await api.getEnvironment({ runtimeChannel: form.runtime_channel, refresh: true }));
       setEnvironment(nextEnvironment);
+      await fetchKnowledgeRequirements();
       onRefresh();
     } catch (error) {
       setKnowledgeDepsStatus(error instanceof Error ? error.message : "安装知识库依赖失败");
     } finally {
       setKnowledgeDepsInstalling(false);
     }
+  }
+
+  async function fetchKnowledgeRequirements() {
+    if (!form) return;
+    try {
+      const result = await api.getKnowledgeRequirements(form.knowledge_embedding_provider || "local_huggingface");
+      setKnowledgeRequirements(result);
+    } catch (error) {
+      console.error("Failed to fetch knowledge requirements:", error);
+    }
+  }
+
+  async function handleDependencyStatusChange() {
+    const nextEnvironment = await api.getEnvironment({ runtimeChannel: form?.runtime_channel, refresh: true });
+    setEnvironment(nextEnvironment);
+    await fetchKnowledgeRequirements();
+    onRefresh();
   }
 
   async function downloadEmbeddingModel() {
@@ -4059,12 +4083,52 @@ export function SettingsPage({
                     </button>
                   </div>
                   <span className="settings-input-caption">
-                    {knowledgeDepsReady
-                      ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已安装。`
-                      : form.knowledge_embedding_provider === "siliconflow"
-                      ? "使用硅基流动在线 API，chromadb 已预装，无需安装额外依赖。"
-                      : "知识库依赖（chromadb、sentence-transformers）按需安装，根据向量模型配置智能决定所需依赖。"}
+                    当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
                   </span>
+                  {knowledgeRequirements && (
+                    <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                      {knowledgeRequirements.preinstalled.map((pkg) => (
+                        <DependencyNode
+                          key={pkg}
+                          packageName={pkg}
+                          version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
+                          status="preinstalled"
+                          isRequired={false}
+                          runtimeChannel={form.runtime_channel}
+                          onStatusChange={handleDependencyStatusChange}
+                        />
+                      ))}
+                      {knowledgeRequirements.required.map((pkg) => {
+                        const isInstalled = pkg === "sentence-transformers"
+                          ? environment?.sentenceTransformersInstalled
+                          : pkg === "modelscope"
+                          ? (environment as any)?.modelscopeInstalled
+                          : false;
+                        const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
+                        return (
+                          <DependencyNode
+                            key={pkg}
+                            packageName={pkg}
+                            version={version}
+                            status={isInstalled ? "installed" : "missing"}
+                            isRequired={true}
+                            runtimeChannel={form.runtime_channel}
+                            onStatusChange={handleDependencyStatusChange}
+                          />
+                        );
+                      })}
+                      {knowledgeRequirements.optional.map((pkg) => (
+                        <DependencyNode
+                          key={pkg}
+                          packageName={pkg}
+                          status="missing"
+                          isRequired={false}
+                          runtimeChannel={form.runtime_channel}
+                          onStatusChange={handleDependencyStatusChange}
+                        />
+                      ))}
+                    </div>
+                  )}
                   {knowledgeDepsOutput ? (
                     <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
                   ) : null}
