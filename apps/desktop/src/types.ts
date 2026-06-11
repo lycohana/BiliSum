@@ -427,6 +427,10 @@ export type ServiceSettings = {
   knowledge_embedding_provider: string;
   knowledge_embedding_model: string;
   hf_endpoint: string;
+  siliconflow_embedding_api_key: string;
+  siliconflow_embedding_api_key_configured?: boolean;
+  siliconflow_embedding_base_url: string;
+  siliconflow_embedding_model: string;
   knowledge_index_auto_rebuild: string;
   summary_system_prompt: string;
   summary_user_prompt_template: string;

@@ -180,7 +180,8 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "llm_model", title: "LLM 模型名称", description: "主摘要使用的模型名。", keywords: ["model", "模型", "gpt", "qwen", "mimo", "claude"] },
   { category: "knowledge", targetKey: "knowledge_enabled", title: "启用知识库", description: "开启知识库索引和问答能力。", keywords: ["知识库", "knowledge", "rag", "索引", "问答"] },
   { category: "knowledge", targetKey: "knowledge_dependencies", title: "知识库依赖", description: "安装和检查知识库扩展依赖。", keywords: ["依赖", "安装", "runtime", "faiss", "向量"] },
-  { category: "knowledge", targetKey: "knowledge_embedding_provider", title: "Embedding 模型来源", description: "选择向量模型的下载源：本地 HuggingFace（支持镜像）、本地 ModelScope 或在线 API。", keywords: ["embedding", "bge", "向量", "huggingface", "modelscope"] },
+  { category: "knowledge", targetKey: "knowledge_embedding_provider", title: "Embedding 模型来源", description: "选择向量模型的下载源：本地 HuggingFace（支持镜像）、本地 ModelScope 或硅基流动在线 API。", keywords: ["embedding", "bge", "向量", "huggingface", "modelscope", "siliconflow", "硅基流动"] },
+  { category: "knowledge", targetKey: "siliconflow_embedding_api_key", title: "硅基流动 Embedding API Key", description: "硅基流动在线向量模型 API 密钥。", keywords: ["siliconflow", "硅基流动", "embedding", "api key", "密钥"] },
   { category: "knowledge", targetKey: "knowledge_llm_mode", title: "知识库 LLM 来源", description: "跟随主 LLM 或使用独立配置。", keywords: ["知识库", "llm", "来源", "独立配置"] },
   { category: "knowledge", targetKey: "knowledge_llm_provider", title: "知识库 LLM 提供商", description: "独立知识库 LLM 服务类型。", keywords: ["知识库", "provider", "openai", "anthropic", "提供商"] },
   { category: "knowledge", targetKey: "knowledge_llm_base_url", title: "知识库 API Base URL", description: "独立知识库 LLM API 地址。", keywords: ["知识库", "base url", "api", "openai"] },
@@ -3122,6 +3123,8 @@ export function SettingsPage({
                       <span>
                         {knowledgeDepsReady
                           ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
+                          : form.knowledge_embedding_provider === "siliconflow"
+                          ? `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源安装 chromadb（使用在线 API 无需安装 sentence-transformers）。`
                           : `默认安装包不包含知识库重依赖。将使用 ${pipIndexSummary} 源依次尝试安装 ${missingKnowledgeDeps.join("、") || "chromadb 与 sentence-transformers"}。`}
                       </span>
                     </div>
@@ -3168,13 +3171,54 @@ export function SettingsPage({
                         disabled={!form.knowledge_enabled}
                         onChange={(e) => updateForm({ ...form, knowledge_embedding_provider: e.target.value })}
                       >
+                        <option value="siliconflow">硅基流动在线 API</option>
                         <option value="local_huggingface">本地 HuggingFace</option>
                         <option value="local_modelscope">本地 ModelScope</option>
-                        <option value="online" disabled>在线 API（暂不可用）</option>
                       </select>
-                      <span className="settings-input-caption">向量模型从哪个源下载和加载。</span>
+                      <span className="settings-input-caption">
+                        {form.knowledge_embedding_provider === "siliconflow" ? "使用在线 API，无需本地 GPU 和依赖。" : "向量模型从哪个源下载和加载。"}
+                      </span>
                     </label>
-                    {form.knowledge_embedding_provider !== "online" ? (
+                    {form.knowledge_embedding_provider === "siliconflow" ? (
+                      <>
+                        <label className="settings-input-group">
+                          <span className="settings-input-label">API Key</span>
+                          <input
+                            className="settings-input-field"
+                            type="password"
+                            value={form.siliconflow_embedding_api_key || ""}
+                            disabled={!form.knowledge_enabled}
+                            onChange={(e) => updateForm({ ...form, siliconflow_embedding_api_key: e.target.value })}
+                            placeholder="sk-..."
+                          />
+                          <SiliconFlowApiKeyHelp />
+                        </label>
+                        <label className="settings-input-group">
+                          <span className="settings-input-label">Base URL</span>
+                          <input
+                            className="settings-input-field"
+                            value={form.siliconflow_embedding_base_url || "https://api.siliconflow.cn/v1"}
+                            disabled={!form.knowledge_enabled}
+                            onChange={(e) => updateForm({ ...form, siliconflow_embedding_base_url: e.target.value })}
+                            placeholder="https://api.siliconflow.cn/v1"
+                          />
+                          <span className="settings-input-caption">硅基流动 API 端点，通常不需要修改。</span>
+                        </label>
+                        <label className="settings-input-group">
+                          <span className="settings-input-label">模型名称</span>
+                          <input
+                            className="settings-input-field"
+                            value={form.siliconflow_embedding_model || "BAAI/bge-large-zh-v1.5"}
+                            disabled={!form.knowledge_enabled}
+                            onChange={(e) => updateForm({ ...form, siliconflow_embedding_model: e.target.value })}
+                            placeholder="BAAI/bge-large-zh-v1.5"
+                          />
+                          <span className="settings-input-caption">
+                            推荐使用 BAAI/bge-large-zh-v1.5 或 BAAI/bge-small-zh-v1.5。
+                          </span>
+                        </label>
+                      </>
+                    ) : form.knowledge_embedding_provider !== "online" ? (
                       <>
                         {Object.keys(embeddingPresets).length > 0 ? (
                           <label className="settings-input-group">
