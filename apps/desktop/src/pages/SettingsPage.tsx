@@ -19,9 +19,11 @@ import { api } from "../api";
 import { SearchIcon } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { DependencyNode } from "../components/DependencyNode";
+import { DependencyTree } from "../components/DependencyTree";
 import type { EnvironmentInfo, PromptPreset, PromptPresetCreateRequest, RuntimeStatus, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview, TaskSummary } from "../types";
 
 import { formatDateTime, taskStatusLabel } from "../utils";
+import { buildKnowledgeDependencyTree, buildAsrDependencyTree } from "../utils/dependencyTreeBuilder";
 import { settingsCategories, type SettingsCategory } from "./settingsConfig";
 
 const HIDDEN_PROMPT_PRESETS_STORAGE_KEY = "bilisum.hiddenPromptPresetIds";
@@ -3340,47 +3342,13 @@ export function SettingsPage({
                         </span>
                       </label>
                       {knowledgeRequirements && (
-                        <div style={{ gridColumn: "1 / -1", marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                          {knowledgeRequirements.preinstalled.map((pkg) => (
-                            <DependencyNode
-                              key={pkg}
-                              packageName={pkg}
-                              version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
-                              status="preinstalled"
-                              isRequired={false}
-                              runtimeChannel={form.runtime_channel}
-                              onStatusChange={handleDependencyStatusChange}
-                            />
-                          ))}
-                          {knowledgeRequirements.required.map((pkg) => {
-                            const isInstalled = pkg === "sentence-transformers"
-                              ? environment?.sentenceTransformersInstalled
-                              : pkg === "modelscope"
-                              ? (environment as any)?.modelscopeInstalled
-                              : false;
-                            const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
-                            return (
-                              <DependencyNode
-                                key={pkg}
-                                packageName={pkg}
-                                version={version}
-                                status={isInstalled ? "installed" : "missing"}
-                                isRequired={true}
-                                runtimeChannel={form.runtime_channel}
-                                onStatusChange={handleDependencyStatusChange}
-                              />
-                            );
-                          })}
-                          {knowledgeRequirements.optional.map((pkg) => (
-                            <DependencyNode
-                              key={pkg}
-                              packageName={pkg}
-                              status="missing"
-                              isRequired={false}
-                              runtimeChannel={form.runtime_channel}
-                              onStatusChange={handleDependencyStatusChange}
-                            />
-                          ))}
+                        <div style={{ gridColumn: "1 / -1", marginTop: "1rem" }}>
+                          <DependencyTree
+                            title="知识库依赖"
+                            items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
+                            runtimeChannel={form.runtime_channel}
+                            onStatusChange={handleDependencyStatusChange}
+                          />
                         </div>
                       )}
                       {knowledgeDepsOutput ? (
@@ -4109,6 +4077,14 @@ export function SettingsPage({
                         ? `当前已安装${environment?.localAsrVersion ? `（${environment.localAsrVersion}）` : ""}，安装后会自动切换到本地模式。`
                         : "正式安装包默认不包含本地 ASR；安装到当前运行环境后会自动切换到本地模式。"}
                     </span>
+                    <div style={{ marginTop: "1rem" }}>
+                      <DependencyTree
+                        title="本地 ASR 依赖"
+                        items={buildAsrDependencyTree(environment, "local")}
+                        runtimeChannel={form.runtime_channel}
+                        onStatusChange={handleDependencyStatusChange}
+                      />
+                    </div>
                     {localAsrOutput ? (
                       <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
                     ) : null}
@@ -4148,6 +4124,14 @@ export function SettingsPage({
                         ? `当前已安装${environment?.funasrVersion ? `（${environment.funasrVersion}）` : ""}，中文识别效果优于 Whisper。安装后会自动切换到 FunASR 模式。`
                         : "FunASR 是阿里开源语音识别引擎，中文效果优于 Whisper，CPU 速度约为 Whisper 的 34 倍。依赖包含 PyTorch，安装体积较大，请耐心等待。"}
                     </span>
+                    <div style={{ marginTop: "1rem" }}>
+                      <DependencyTree
+                        title="FunASR 依赖"
+                        items={buildAsrDependencyTree(environment, "funasr")}
+                        runtimeChannel={form.runtime_channel}
+                        onStatusChange={handleDependencyStatusChange}
+                      />
+                    </div>
                     {funasrOutput ? (
                       <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
                     ) : null}
@@ -4186,47 +4170,13 @@ export function SettingsPage({
                       当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
                     </span>
                     {knowledgeRequirements && (
-                      <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                        {knowledgeRequirements.preinstalled.map((pkg) => (
-                          <DependencyNode
-                            key={pkg}
-                            packageName={pkg}
-                            version={pkg === "chromadb" ? environment?.chromadbVersion : undefined}
-                            status="preinstalled"
-                            isRequired={false}
-                            runtimeChannel={form.runtime_channel}
-                            onStatusChange={handleDependencyStatusChange}
-                          />
-                        ))}
-                        {knowledgeRequirements.required.map((pkg) => {
-                          const isInstalled = pkg === "sentence-transformers"
-                            ? environment?.sentenceTransformersInstalled
-                            : pkg === "modelscope"
-                            ? (environment as any)?.modelscopeInstalled
-                            : false;
-                          const version = pkg === "sentence-transformers" ? environment?.sentenceTransformersVersion : undefined;
-                          return (
-                            <DependencyNode
-                              key={pkg}
-                              packageName={pkg}
-                              version={version}
-                              status={isInstalled ? "installed" : "missing"}
-                              isRequired={true}
-                              runtimeChannel={form.runtime_channel}
-                              onStatusChange={handleDependencyStatusChange}
-                            />
-                          );
-                        })}
-                        {knowledgeRequirements.optional.map((pkg) => (
-                          <DependencyNode
-                            key={pkg}
-                            packageName={pkg}
-                            status="missing"
-                            isRequired={false}
-                            runtimeChannel={form.runtime_channel}
-                            onStatusChange={handleDependencyStatusChange}
-                          />
-                        ))}
+                      <div style={{ marginTop: "1rem" }}>
+                        <DependencyTree
+                          title="知识库依赖"
+                          items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
+                          runtimeChannel={form.runtime_channel}
+                          onStatusChange={handleDependencyStatusChange}
+                        />
                       </div>
                     )}
                     {knowledgeDepsOutput ? (
