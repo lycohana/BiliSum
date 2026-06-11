@@ -2187,8 +2187,10 @@ def install_knowledge_dependencies(
         repair_reinstall = bool(
             environment.get("chromadbVersion")
             or environment.get("sentenceTransformersVersion")
+            or environment.get("modelscopeVersion")
             or environment.get("chromadbError")
             or environment.get("sentenceTransformersError")
+            or environment.get("modelscopeError")
             or environment.get("knowledgeDependenciesError")
         )
 

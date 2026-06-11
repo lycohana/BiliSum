@@ -4190,6 +4190,10 @@ export function SettingsPage({
                     )}
                     {(environment?.chromadbError || environment?.sentenceTransformersError || environment?.modelscopeError) && (
                       <div style={{ marginTop: "1rem" }}>
+                        <div className="settings-inline-alert warning" style={{ marginBottom: "0.75rem" }}>
+                          <strong>依赖损坏，需要重新安装</strong>
+                          <span>部分依赖包已安装但无法正常导入，请点击"重新安装知识库依赖"自动修复。</span>
+                        </div>
                         <span className="settings-input-label" style={{ color: "var(--color-warning, #f59e0b)" }}>包导入错误</span>
                         {environment.chromadbError && (
                           <div style={{ marginTop: "0.5rem" }}>
