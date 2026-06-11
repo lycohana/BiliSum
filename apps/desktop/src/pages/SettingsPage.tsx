@@ -3136,7 +3136,10 @@ export function SettingsPage({
                     </label>
                     {form.knowledge_embedding_provider === "siliconflow" ? (
                       <>
-                        <label className="settings-input-group">
+                        <label
+                          className={`settings-input-group settings-focus-target ${activeFocusTarget === "siliconflow_embedding_api_key" ? "is-highlighted" : ""}`}
+                          ref={registerFocusTarget("siliconflow_embedding_api_key") as (node: HTMLLabelElement | null) => void}
+                        >
                           <span className="settings-input-label">API Key</span>
                           <input
                             className="settings-input-field"
