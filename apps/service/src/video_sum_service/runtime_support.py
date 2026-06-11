@@ -2117,8 +2117,30 @@ def install_knowledge_dependencies(
     reinstall: bool,
     repository: SqliteTaskRepository,
     runtime_channel: str | None = None,
+    provider: str | None = None,
 ) -> tuple[dict[str, object], TaskWorker | None]:
     current_settings = settings_manager.current
+
+    # Determine provider
+    if provider is None:
+        provider = str(getattr(current_settings, "knowledge_embedding_provider", "local_huggingface"))
+    provider = provider.strip().lower()
+
+    # Get required packages based on provider
+    requirements = get_knowledge_requirements(provider)
+    required_packages = requirements["required"]
+
+    # If using siliconflow, no installation needed (chromadb is preinstalled)
+    if provider == "siliconflow" or not required_packages:
+        runtime_channel = normalize_runtime_channel(runtime_channel or current_settings.runtime_channel, allow_unknown_gpu=True)
+        environment = detect_environment(runtime_channel)
+        return {
+            "installed": True,
+            "runtimeChannel": runtime_channel,
+            "stdoutTail": "使用硅基流动在线 API，chromadb 已预装，无需安装额外依赖。",
+            "environment": environment,
+        }, None
+
     runtime_channel = normalize_runtime_channel(runtime_channel or current_settings.runtime_channel, allow_unknown_gpu=True)
     current_runtime_channel = normalize_runtime_channel(current_settings.runtime_channel, allow_unknown_gpu=True)
     should_refresh_worker = runtime_channel == current_runtime_channel
@@ -2170,10 +2192,11 @@ def install_knowledge_dependencies(
             or environment.get("knowledgeDependenciesError")
         )
 
-    packages = [
-        "chromadb>=1.0.0",
-        "sentence-transformers>=3.0",
-    ]
+    packages = ["chromadb>=1.0.0"]
+    if "sentence-transformers" in required_packages:
+        packages.append("sentence-transformers>=3.0")
+    if "modelscope" in required_packages:
+        packages.append("modelscope")
 
     try:
         if not use_current_python:

@@ -578,10 +578,12 @@ def post_knowledge_install(request: Request, payload: dict[str, object] | None =
     reinstall = bool(payload.get("reinstall"))
     runtime_channel_raw = str(payload.get("runtime_channel") or payload.get("runtimeChannel") or "").strip()
     runtime_channel = normalize_runtime_channel(runtime_channel_raw, allow_unknown_gpu=True) if runtime_channel_raw else None
+    provider = str(payload.get("provider") or "").strip() or None
     result, worker = install_knowledge_dependencies(
         reinstall=reinstall,
         repository=request.app.state.task_repository,
         runtime_channel=runtime_channel,
+        provider=provider,
     )
     if worker is not None:
         _clear_knowledge_service_cache(request.app.state)
