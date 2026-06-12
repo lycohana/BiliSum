@@ -5,6 +5,7 @@ export type DependencyItem = {
   version?: string;
   status: DependencyStatus;
   purpose?: string;
+  error?: string;
   dependsOn?: string[];
   children?: DependencyItem[];
 };
@@ -16,6 +17,17 @@ type KnowledgeRequirements = {
 };
 
 type Environment = {
+  torchInstalled?: boolean;
+  torchVersion?: string;
+  torchError?: string;
+  torchvisionInstalled?: boolean;
+  torchvisionVersion?: string;
+  torchvisionBroken?: boolean;
+  torchvisionError?: string;
+  torchaudioInstalled?: boolean;
+  torchaudioVersion?: string;
+  torchaudioBroken?: boolean;
+  torchaudioError?: string;
   chromadbInstalled?: boolean;
   chromadbVersion?: string;
   chromadbBroken?: boolean;
@@ -30,6 +42,7 @@ type Environment = {
   modelscopeError?: string;
   funasrInstalled?: boolean;
   funasrVersion?: string;
+  funasrBroken?: boolean;
   funasrError?: string;
   localAsrInstalled?: boolean;
   localAsrVersion?: string;
@@ -50,16 +63,18 @@ export function buildKnowledgeDependencyTree(
   requirements: KnowledgeRequirements,
   environment: Environment | null
 ): DependencyItem[] {
-  const chromadbStatus: DependencyStatus = environment?.chromadbBroken
-    ? "broken"
-    : environment?.chromadbInstalled
-      ? "installed"
-      : "preinstalled";
+  const preinstalled = new Set(requirements.preinstalled || []);
+  const chromadbStatus: DependencyStatus = resolveStatus(
+    environment?.chromadbInstalled,
+    environment?.chromadbBroken,
+    preinstalled.has("chromadb")
+  );
   const chromadb: DependencyItem = {
     packageName: "chromadb",
     version: environment?.chromadbVersion,
     status: chromadbStatus,
     purpose: "向量数据库",
+    error: environment?.chromadbError,
     children: []
   };
 
@@ -67,13 +82,14 @@ export function buildKnowledgeDependencyTree(
     const stStatus: DependencyStatus = resolveStatus(
       environment?.sentenceTransformersInstalled,
       environment?.sentenceTransformersBroken,
-      false
+      preinstalled.has("sentence-transformers")
     );
     const sentenceTransformers: DependencyItem = {
       packageName: "sentence-transformers",
       version: environment?.sentenceTransformersVersion,
       status: stStatus,
       purpose: "向量模型",
+      error: environment?.sentenceTransformersError,
       dependsOn: ["chromadb"],
       children: []
     };
@@ -82,13 +98,14 @@ export function buildKnowledgeDependencyTree(
       const msStatus: DependencyStatus = resolveStatus(
         environment?.modelscopeInstalled,
         environment?.modelscopeBroken,
-        false
+        preinstalled.has("modelscope")
       );
       sentenceTransformers.children!.push({
         packageName: "modelscope",
         version: environment?.modelscopeVersion,
         status: msStatus,
         purpose: "ModelScope 向量模型",
+        error: environment?.modelscopeError,
         dependsOn: ["sentence-transformers"]
       });
     }
@@ -106,7 +123,7 @@ export function buildAsrDependencyTree(
   if (asrType === "funasr") {
     const funasrStatus: DependencyStatus = resolveStatus(
       environment?.funasrInstalled,
-      false,
+      Boolean(environment?.funasrBroken || environment?.funasrError),
       false
     );
     return [{
@@ -114,7 +131,45 @@ export function buildAsrDependencyTree(
       version: environment?.funasrVersion,
       status: funasrStatus,
       purpose: "阿里开源语音识别引擎",
-      children: []
+      error: environment?.funasrError,
+      children: [
+        {
+          packageName: "torch",
+          version: environment?.torchVersion,
+          status: resolveStatus(
+            environment?.torchInstalled,
+            Boolean(environment?.torchError),
+            false
+          ),
+          purpose: "深度学习运行时",
+          error: environment?.torchError,
+          dependsOn: ["funasr"]
+        },
+        {
+          packageName: "torchvision",
+          version: environment?.torchvisionVersion,
+          status: resolveStatus(
+            environment?.torchvisionInstalled,
+            Boolean(environment?.torchvisionBroken || environment?.torchvisionError),
+            false
+          ),
+          purpose: "Transformers 图像算子依赖",
+          error: environment?.torchvisionError,
+          dependsOn: ["torch"]
+        },
+        {
+          packageName: "torchaudio",
+          version: environment?.torchaudioVersion,
+          status: resolveStatus(
+            environment?.torchaudioInstalled,
+            Boolean(environment?.torchaudioBroken || environment?.torchaudioError),
+            false
+          ),
+          purpose: "音频算子依赖",
+          error: environment?.torchaudioError,
+          dependsOn: ["torch"]
+        }
+      ]
     }];
   }
 

@@ -76,6 +76,14 @@ def probe() -> dict:
         "torchInstalled": torch is not None,
         "torchVersion": torch.__version__ if torch is not None else "",
         "torchError": torch_error,
+        "torchvisionInstalled": False,
+        "torchvisionVersion": "",
+        "torchvisionBroken": False,
+        "torchvisionError": "",
+        "torchaudioInstalled": False,
+        "torchaudioVersion": "",
+        "torchaudioBroken": False,
+        "torchaudioError": "",
         "cudaAvailable": cuda_available,
         "gpuName": gpu_name,
         "ytDlpVersion": importlib.metadata.version("yt-dlp"),
@@ -101,6 +109,24 @@ def probe() -> dict:
         "recommendedDevice": "cuda" if cuda_available else "cpu",
     }
 
+    torchvision_installed, torchvision_version, torchvision_error = importable_distribution(
+        "torchvision", "torchvision"
+    )
+    torchvision_broken = bool(torchvision_version and torchvision_error)
+    payload["torchvisionVersion"] = torchvision_version
+    payload["torchvisionInstalled"] = torchvision_installed
+    payload["torchvisionBroken"] = torchvision_broken
+    payload["torchvisionError"] = torchvision_error
+
+    torchaudio_installed, torchaudio_version, torchaudio_error = importable_distribution(
+        "torchaudio", "torchaudio"
+    )
+    torchaudio_broken = bool(torchaudio_version and torchaudio_error)
+    payload["torchaudioVersion"] = torchaudio_version
+    payload["torchaudioInstalled"] = torchaudio_installed
+    payload["torchaudioBroken"] = torchaudio_broken
+    payload["torchaudioError"] = torchaudio_error
+
     try:
         payload["localAsrVersion"] = importlib.metadata.version("faster-whisper")
         payload["localAsrInstalled"] = True
@@ -114,6 +140,7 @@ def probe() -> dict:
     payload["funasrVersion"] = funasr_version
     payload["funasrInstalled"] = funasr_installed
     payload["funasrAvailable"] = funasr_installed
+    payload["funasrBroken"] = bool(funasr_version and funasr_error)
     payload["funasrError"] = funasr_error
 
     chromadb_installed, chromadb_version, chromadb_error = importable_distribution(

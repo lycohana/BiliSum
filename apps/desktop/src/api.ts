@@ -495,7 +495,13 @@ export const api = {
       log: string;
     }>(`/api/v1/asr/install-log?session_id=${encodeURIComponent(sessionId)}`);
   },
-  installKnowledgeDependencies(payload?: { reinstall?: boolean; runtime_channel?: string; runtimeChannel?: string }) {
+  installKnowledgeDependencies(payload?: {
+    reinstall?: boolean;
+    runtime_channel?: string;
+    runtimeChannel?: string;
+    provider?: string;
+    installSessionId?: string;
+  }) {
     return fetchJson<{
       installed: boolean;
       runtimeChannel?: string;
@@ -520,7 +526,7 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     });
   },
-  testEmbeddingModel(payload: { provider?: string; model?: string; hf_endpoint?: string }) {
+  testEmbeddingModel(payload: { provider?: string; model?: string; hf_endpoint?: string; api_key?: string; base_url?: string }) {
     return fetchJson<{
       verified: boolean;
       dimension?: number;

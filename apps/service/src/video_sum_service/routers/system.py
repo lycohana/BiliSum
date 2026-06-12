@@ -579,11 +579,13 @@ def post_knowledge_install(request: Request, payload: dict[str, object] | None =
     runtime_channel_raw = str(payload.get("runtime_channel") or payload.get("runtimeChannel") or "").strip()
     runtime_channel = normalize_runtime_channel(runtime_channel_raw, allow_unknown_gpu=True) if runtime_channel_raw else None
     provider = str(payload.get("provider") or "").strip() or None
+    session_id = str(payload.get("installSessionId") or "") or None
     result, worker = install_knowledge_dependencies(
         reinstall=reinstall,
         repository=request.app.state.task_repository,
         runtime_channel=runtime_channel,
         provider=provider,
+        session_id=session_id,
     )
     if worker is not None:
         _clear_knowledge_service_cache(request.app.state)
@@ -613,15 +615,19 @@ def post_embedding_download(payload: dict[str, object]) -> dict[str, object]:
 
 
 @router.post("/knowledge/embedding/test")
-def post_embedding_test(payload: dict[str, object]) -> dict[str, object]:
+def post_embedding_test(payload: dict[str, object], request: Request) -> dict[str, object]:
     provider = str(payload.get("provider") or "local_huggingface")
     model_name = str(payload.get("model") or "BAAI/bge-small-zh-v1.5")
     hf_endpoint = str(payload.get("hf_endpoint") or "")
+    api_key = str(payload.get("api_key") or "")
+    base_url = str(payload.get("base_url") or "")
     return verify_embedding_model(
-        None,  # type: ignore
+        request.app.state.task_repository,
         provider=provider,
         model_name=model_name,
         hf_endpoint=hf_endpoint,
+        api_key=api_key,
+        base_url=base_url,
     )
 
 

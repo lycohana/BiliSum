@@ -30,6 +30,7 @@ SECRET_SETTINGS_FIELDS = {
     "multimodal_asr_api_key",
     "llm_api_key",
     "knowledge_llm_api_key",
+    "siliconflow_embedding_api_key",
     "visual_evidence_api_key",
     "siliconflow_embedding_api_key",
 }
@@ -119,6 +120,9 @@ class SettingsUpdatePayload(BaseModel):
     siliconflow_embedding_base_url: str | None = None
     siliconflow_embedding_model: str | None = None
     hf_endpoint: str | None = None
+    siliconflow_embedding_api_key: str | None = None
+    siliconflow_embedding_base_url: str | None = None
+    siliconflow_embedding_model: str | None = None
     summary_system_prompt: str | None = None
     summary_user_prompt_template: str | None = None
     knowledge_note_system_prompt: str | None = None

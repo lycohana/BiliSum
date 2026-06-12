@@ -414,6 +414,22 @@
   transform: translateY(0);
 }
 
+.primary-button:disabled,
+.secondary-button:disabled,
+.tertiary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
+}
+
+.primary-button:disabled:hover,
+.secondary-button:disabled:hover,
+.tertiary-button:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 .primary-button-hero {
   min-width: 140px;
   min-height: 52px;
@@ -451,6 +467,26 @@
 
 .danger-button:hover {
   background: rgba(239, 68, 68, 0.12);
+}
+
+.primary-button.danger-button {
+  color: var(--text-inverse);
+  background: var(--danger);
+  border-color: var(--danger);
+  box-shadow: 0 8px 20px rgba(225, 75, 90, 0.18);
+}
+
+.primary-button.danger-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 86%, black 14%);
+  border-color: color-mix(in srgb, var(--danger) 86%, black 14%);
+  box-shadow: 0 10px 24px rgba(225, 75, 90, 0.22);
+}
+
+.primary-button.danger-button:disabled {
+  color: color-mix(in srgb, var(--text-inverse) 78%, transparent);
+  background: color-mix(in srgb, var(--danger) 56%, var(--bg-card) 44%);
+  border-color: color-mix(in srgb, var(--danger-border) 68%, transparent);
+  opacity: 0.72;
 }
 
 .helper-chip,
@@ -506,6 +542,16 @@
 .status-info {
   color: var(--brand-500, #0ea5e9);
   background: rgba(14, 165, 233, 0.1);
+}
+
+.status-warning {
+  color: var(--warning);
+  background: var(--bg-warning);
+}
+
+.status-error {
+  color: var(--danger);
+  background: var(--bg-danger);
 }
 
 .status-muted {

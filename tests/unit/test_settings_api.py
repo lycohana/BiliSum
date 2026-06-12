@@ -174,6 +174,9 @@ def test_serialize_settings_masks_provider_api_keys(tmp_path: Path) -> None:
         siliconflow_asr_api_key="asr-secret",
         llm_api_key="llm-secret",
         knowledge_llm_api_key="knowledge-secret",
+        siliconflow_embedding_api_key="embedding-secret",
+        siliconflow_embedding_base_url="https://api.siliconflow.cn/v1",
+        siliconflow_embedding_model="BAAI/bge-large-zh-v1.5",
         visual_evidence_api_key="visual-secret",
     )
 
@@ -182,10 +185,14 @@ def test_serialize_settings_masks_provider_api_keys(tmp_path: Path) -> None:
     assert payload["siliconflow_asr_api_key"] == ""
     assert payload["llm_api_key"] == ""
     assert payload["knowledge_llm_api_key"] == ""
+    assert payload["siliconflow_embedding_api_key"] == ""
     assert payload["visual_evidence_api_key"] == ""
     assert payload["siliconflow_asr_api_key_configured"] is True
     assert payload["llm_api_key_configured"] is True
     assert payload["knowledge_llm_api_key_configured"] is True
+    assert payload["siliconflow_embedding_api_key_configured"] is True
+    assert payload["siliconflow_embedding_base_url"] == "https://api.siliconflow.cn/v1"
+    assert payload["siliconflow_embedding_model"] == "BAAI/bge-large-zh-v1.5"
     assert payload["visual_evidence_api_key_configured"] is True
 
 
@@ -198,6 +205,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_blank(tmp
         siliconflow_asr_api_key="saved-asr-key",
         llm_api_key="saved-llm-key",
         knowledge_llm_api_key="saved-knowledge-key",
+        siliconflow_embedding_api_key="saved-embedding-key",
     )
     settings_manager._settings = current
     settings_manager._settings_path = tmp_path / "settings.json"
@@ -207,6 +215,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_blank(tmp
             siliconflow_asr_api_key="",
             llm_api_key="",
             knowledge_llm_api_key="",
+            siliconflow_embedding_api_key="",
             llm_model="new-model",
         )
     )
@@ -214,6 +223,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_blank(tmp
     assert next_settings.siliconflow_asr_api_key == "saved-asr-key"
     assert next_settings.llm_api_key == "saved-llm-key"
     assert next_settings.knowledge_llm_api_key == "saved-knowledge-key"
+    assert next_settings.siliconflow_embedding_api_key == "saved-embedding-key"
     assert next_settings.llm_model == "new-model"
 
 
@@ -226,6 +236,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_masked(tm
         siliconflow_asr_api_key="saved-asr-key",
         llm_api_key="saved-llm-key",
         knowledge_llm_api_key="saved-knowledge-key",
+        siliconflow_embedding_api_key="saved-embedding-key",
     )
     settings_manager._settings = current
     settings_manager._settings_path = tmp_path / "settings.json"
@@ -235,6 +246,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_masked(tm
             siliconflow_asr_api_key="******",
             llm_api_key="******",
             knowledge_llm_api_key="******",
+            siliconflow_embedding_api_key="******",
             llm_model="new-model",
         )
     )
@@ -242,6 +254,7 @@ def test_update_settings_preserves_configured_api_keys_when_payload_is_masked(tm
     assert next_settings.siliconflow_asr_api_key == "saved-asr-key"
     assert next_settings.llm_api_key == "saved-llm-key"
     assert next_settings.knowledge_llm_api_key == "saved-knowledge-key"
+    assert next_settings.siliconflow_embedding_api_key == "saved-embedding-key"
     assert next_settings.llm_model == "new-model"
 
 
@@ -254,6 +267,7 @@ def test_update_settings_replaces_api_keys_when_payload_has_new_values(tmp_path:
         siliconflow_asr_api_key="saved-asr-key",
         llm_api_key="saved-llm-key",
         knowledge_llm_api_key="saved-knowledge-key",
+        siliconflow_embedding_api_key="saved-embedding-key",
     )
     settings_manager._settings = current
     settings_manager._settings_path = tmp_path / "settings.json"
@@ -263,12 +277,14 @@ def test_update_settings_replaces_api_keys_when_payload_has_new_values(tmp_path:
             siliconflow_asr_api_key="new-asr-key",
             llm_api_key="new-llm-key",
             knowledge_llm_api_key="new-knowledge-key",
+            siliconflow_embedding_api_key="new-embedding-key",
         )
     )
 
     assert next_settings.siliconflow_asr_api_key == "new-asr-key"
     assert next_settings.llm_api_key == "new-llm-key"
     assert next_settings.knowledge_llm_api_key == "new-knowledge-key"
+    assert next_settings.siliconflow_embedding_api_key == "new-embedding-key"
 
 
 def test_update_settings_persists_visual_summary_options(tmp_path: Path) -> None:
@@ -600,6 +616,116 @@ sys.modules["sentence_transformers"] = types.ModuleType("sentence_transformers")
     assert environment["sentenceTransformersVersion"] == "3.0.0"
     assert environment["knowledgeDependenciesReady"] is False
     assert "chromadb" in environment["knowledgeDependenciesError"]
+
+
+def test_detect_environment_applies_siliconflow_dependency_policy_to_cached_probe(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        cache_dir=tmp_path / "cache",
+        runtime_channel="base",
+        knowledge_embedding_provider="siliconflow",
+    )
+    current.cache_dir.mkdir(parents=True)
+    runtime_support._environment_probe_cache.clear()
+    runtime_support._environment_probe_failures.clear()
+    monkeypatch.setattr(runtime_support.settings_manager, "_settings", current)
+    monkeypatch.setattr(runtime_support, "is_frozen", lambda: False)
+    monkeypatch.setattr(
+        runtime_support,
+        "run_host_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("probe should not run")),
+    )
+    cache_path = current.cache_dir / runtime_support._ENVIRONMENT_PROBE_CACHE_FILE
+    cache_path.write_text(
+        '{"base":{"runtimeChannel":"base","runtimeReady":true,"runtimePython":"","chromadbInstalled":true,'
+        '"sentenceTransformersInstalled":false,"knowledgeDependenciesReady":false}}',
+        encoding="utf-8",
+    )
+
+    environment = runtime_support.detect_environment("base")
+
+    assert environment["chromadbInstalled"] is True
+    assert environment["sentenceTransformersInstalled"] is False
+    assert environment["knowledgeDependenciesReady"] is True
+    assert environment["knowledgeRequiredPackages"] == ["chromadb"]
+
+
+def test_knowledge_requirements_are_provider_specific() -> None:
+    siliconflow = runtime_support.get_knowledge_requirements("siliconflow")
+    local_hf = runtime_support.get_knowledge_requirements("local_huggingface")
+    local_ms = runtime_support.get_knowledge_requirements("local_modelscope")
+
+    assert siliconflow == {"required": ["chromadb"], "optional": [], "preinstalled": []}
+    assert local_hf == {"required": ["chromadb", "sentence-transformers"], "optional": [], "preinstalled": []}
+    assert local_ms == {"required": ["chromadb", "sentence-transformers", "modelscope"], "optional": [], "preinstalled": []}
+
+
+def test_siliconflow_knowledge_dependencies_only_install_chromadb(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+        knowledge_embedding_provider="siliconflow",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr(runtime_support, "uses_current_service_python", lambda runtime_channel: False)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr(runtime_support, "install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    commands: list[tuple[list[str], bool]] = []
+    environments = [
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": False,
+            "chromadbVersion": "",
+            "sentenceTransformersInstalled": False,
+            "sentenceTransformersVersion": "",
+            "knowledgeDependenciesReady": False,
+        },
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": True,
+            "chromadbVersion": "1.0.0",
+            "sentenceTransformersInstalled": False,
+            "sentenceTransformersVersion": "",
+            "knowledgeDependenciesReady": True,
+        },
+    ]
+
+    def fake_detect_environment(runtime_channel=None):
+        return environments.pop(0)
+
+    def fake_pip_install(python_executable, runtime_channel, packages, *, reinstall=False, **kwargs):
+        commands.append((packages, reinstall))
+        return type("Result", (), {"stdout": "installed chromadb", "stderr": ""})()
+
+    monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
+    monkeypatch.setattr(
+        runtime_support,
+        "build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+
+    result, _worker = runtime_support.install_knowledge_dependencies(
+        reinstall=False,
+        repository=object(),
+        provider="siliconflow",
+    )
+
+    assert result["installed"] is True
+    assert commands == [(["chromadb>=1.0.0"], False)]
 
 
 def test_install_knowledge_dependencies_repairs_broken_imports(monkeypatch, tmp_path: Path) -> None:
@@ -1940,6 +2066,133 @@ def test_torch_install_with_fallbacks_accepts_custom_cuda_index(monkeypatch, tmp
     assert len(commands) == 2
     assert commands[0][-1] == "https://download.pytorch.org/whl/cu128"
     assert commands[1][-1] == "https://mirror.example/pytorch/cu128"
+
+
+def test_cleanup_invalid_runtime_distributions_removes_pip_leftovers(monkeypatch, tmp_path: Path) -> None:
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    stale_dist = site_packages / "~~mpy-1.14.0.dist-info"
+    stale_libs = site_packages / "~umpy.libs"
+    valid_package = site_packages / "numpy"
+    stale_dist.mkdir()
+    stale_libs.mkdir()
+    valid_package.mkdir()
+
+    monkeypatch.setattr(runtime_support, "runtime_site_packages_dir", lambda runtime_channel: site_packages)
+
+    removed = runtime_support.cleanup_invalid_runtime_distributions("gpu-cu128")
+
+    assert set(removed) == {"~~mpy-1.14.0.dist-info", "~umpy.libs"}
+    assert not stale_dist.exists()
+    assert not stale_libs.exists()
+    assert valid_package.exists()
+
+
+def test_pip_install_with_fallbacks_repairs_gpu_torch_family(monkeypatch, tmp_path: Path) -> None:
+    runner_commands: list[list[str]] = []
+    repair_calls: list[dict[str, object]] = []
+    probes = [
+        {
+            "torch": {"version": "2.12.0+cpu", "distributionVersion": "2.12.0", "error": ""},
+            "torchvision": {"version": "0.26.0+cu128", "distributionVersion": "0.26.0+cu128", "error": "operator torchvision::nms does not exist"},
+            "torchaudio": {"version": "2.11.0+cu128", "distributionVersion": "2.11.0+cu128", "error": "libtorchaudio.pyd"},
+        },
+        {
+            "torch": {"version": "2.12.0+cu128", "distributionVersion": "2.12.0+cu128", "error": ""},
+            "torchvision": {"version": "0.27.0+cu128", "distributionVersion": "0.27.0+cu128", "error": ""},
+            "torchaudio": {"version": "2.12.0+cu128", "distributionVersion": "2.12.0+cu128", "error": ""},
+        },
+    ]
+
+    def fake_runner(command, runtime_channel, timeout=1800):
+        runner_commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="plain install", stderr="")
+
+    def fake_torch_install(python_executable, runtime_channel, cuda_variant, *, timeout=1800, runner=None, reinstall=False):
+        repair_calls.append({"runtime_channel": runtime_channel, "cuda_variant": cuda_variant, "reinstall": reinstall})
+        return subprocess.CompletedProcess(["torch-install"], 0, stdout="torch repaired", stderr="")
+
+    monkeypatch.setattr(runtime_support, "cleanup_invalid_runtime_distributions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runtime_support, "_probe_torch_family", lambda *args, **kwargs: probes.pop(0))
+    monkeypatch.setattr(runtime_support, "torch_install_with_fallbacks", fake_torch_install)
+
+    result = runtime_support.pip_install_with_fallbacks(
+        tmp_path / "python.exe",
+        "gpu-cu128",
+        ["funasr>=1.1.0"],
+        package_label="FunASR 依赖",
+        runner=fake_runner,
+    )
+
+    assert runner_commands[0][-1] == "funasr>=1.1.0"
+    assert repair_calls == [{"runtime_channel": "gpu-cu128", "cuda_variant": "cu128", "reinstall": True}]
+    assert "plain install" in result.stdout
+    assert "torch repaired" in result.stdout
+
+
+def test_install_funasr_gpu_repairs_torch_family_before_funasr_pip(monkeypatch, tmp_path: Path) -> None:
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="gpu-cu128",
+    )
+    settings_manager._settings = current
+
+    monkeypatch.setattr(runtime_support, "uses_current_service_python", lambda runtime_channel: False)
+    monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr(runtime_support, "install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    environments = [
+        {
+            "runtimeChannel": "gpu-cu128",
+            "funasrInstalled": False,
+            "funasrVersion": "",
+            "funasrError": "",
+        },
+        {
+            "runtimeChannel": "gpu-cu128",
+            "funasrInstalled": True,
+            "funasrAvailable": True,
+            "funasrVersion": "1.3.9",
+        },
+    ]
+    monkeypatch.setattr(runtime_support, "detect_environment", lambda runtime_channel=None: environments.pop(0))
+
+    torch_checks: list[dict[str, object]] = []
+    pip_installs: list[list[str]] = []
+
+    def fake_ensure_torch(python_executable, runtime_channel, *, package_label, runner, install_if_missing=False):
+        torch_checks.append({"runtime_channel": runtime_channel, "install_if_missing": install_if_missing})
+        return subprocess.CompletedProcess(["torch-install"], 0, stdout="torch ok", stderr="")
+
+    def fake_pip_install(python_executable, runtime_channel, packages, **kwargs):
+        pip_installs.append(packages)
+        return subprocess.CompletedProcess(["pip-install"], 0, stdout="funasr ok", stderr="")
+
+    monkeypatch.setattr(runtime_support, "ensure_torch_family_compatible", fake_ensure_torch)
+    monkeypatch.setattr(runtime_support, "_run_pip_install", fake_pip_install)
+    monkeypatch.setattr(
+        runtime_support,
+        "build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "environment": environment_info,
+        },
+    )
+
+    result, worker = runtime_support.install_funasr(
+        reinstall=False,
+        repository=object(),
+    )
+
+    assert result["installed"] is True
+    assert worker == {"environment": result["environment"]}
+    assert torch_checks == [{"runtime_channel": "gpu-cu128", "install_if_missing": True}]
+    assert pip_installs == [["transformers>=4.0,<4.50", "funasr>=1.1.0"]]
 
 
 def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:

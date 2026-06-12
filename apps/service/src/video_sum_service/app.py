@@ -342,11 +342,16 @@ def install_local_asr(reinstall: bool = False) -> dict[str, object]:
     }
 
 
-def install_knowledge_dependencies(reinstall: bool = False, runtime_channel: str | None = None) -> dict[str, object]:
+def install_knowledge_dependencies(
+    reinstall: bool = False,
+    runtime_channel: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, object]:
     result, worker = install_knowledge_dependencies_with_worker(
         reinstall=reinstall,
         repository=app.state.task_repository,
         runtime_channel=runtime_channel,
+        session_id=session_id,
     )
     if worker is not None:
         replace_task_worker(app.state, worker)

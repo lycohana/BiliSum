@@ -1,4 +1,4 @@
-import { type FocusEvent, type FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type FocusEvent, type FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import {
@@ -28,10 +28,12 @@ import { settingsCategories, type SettingsCategory } from "./settingsConfig";
 
 const HIDDEN_PROMPT_PRESETS_STORAGE_KEY = "bilisum.hiddenPromptPresetIds";
 
-function SiliconFlowApiKeyHelp() {
+function SiliconFlowApiKeyHelp({ purpose = "asr" }: { purpose?: "asr" | "embedding" }) {
   return (
     <div className="settings-input-help">
-      <span className="settings-input-caption">调用云端语音识别必须提供 API Key。</span>
+      <span className="settings-input-caption">
+        {purpose === "embedding" ? "调用硅基流动在线向量模型必须提供 API Key。" : "调用云端语音识别必须提供 API Key。"}
+      </span>
       <div className="settings-help-popover">
         <span className="settings-help-link" role="button" tabIndex={0}>
           如何获得 API？
@@ -121,6 +123,8 @@ type BilibiliCookieCaptureResult = {
 };
 
 const MASKED_API_KEY = "******";
+const DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5";
 
 function isMaskedApiKey(value: string | undefined | null) {
   return String(value || "").trim() === MASKED_API_KEY;
@@ -141,6 +145,7 @@ function maskConfiguredApiKeys(settings: ServiceSettings | null): ServiceSetting
     multimodal_asr_api_key: settings.multimodal_asr_api_key_configured ? MASKED_API_KEY : settings.multimodal_asr_api_key,
     llm_api_key: settings.llm_api_key_configured ? MASKED_API_KEY : settings.llm_api_key,
     knowledge_llm_api_key: settings.knowledge_llm_api_key_configured ? MASKED_API_KEY : settings.knowledge_llm_api_key,
+    siliconflow_embedding_api_key: settings.siliconflow_embedding_api_key_configured ? MASKED_API_KEY : settings.siliconflow_embedding_api_key,
     visual_evidence_api_key: settings.visual_evidence_api_key_configured ? MASKED_API_KEY : settings.visual_evidence_api_key,
     siliconflow_embedding_api_key: settings.siliconflow_embedding_api_key_configured ? MASKED_API_KEY : settings.siliconflow_embedding_api_key,
   };
@@ -242,6 +247,57 @@ function parseMinOneInt(value: string, fallback: number) {
   return Math.max(1, parsed);
 }
 
+type RuntimeSectionTone = "installed" | "missing" | "error";
+
+type RuntimeSectionProps = {
+  title: string;
+  status: string;
+  tone: RuntimeSectionTone;
+  summary: string;
+  open: boolean;
+  onToggle(): void;
+  focusKey?: string;
+  highlighted?: boolean;
+  sectionRef?: (node: HTMLElement | null) => void;
+  children: ReactNode;
+};
+
+function RuntimeSection({
+  title,
+  status,
+  tone,
+  summary,
+  open,
+  onToggle,
+  focusKey,
+  highlighted,
+  sectionRef,
+  children,
+}: RuntimeSectionProps) {
+  return (
+    <section
+      className={`runtime-subsection settings-focus-target ${highlighted ? "is-highlighted" : ""}`}
+      data-focus-key={focusKey}
+      ref={sectionRef}
+    >
+      <button
+        className="runtime-subsection-header"
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className="runtime-subsection-chevron" aria-hidden="true">▶</span>
+        <span className="runtime-subsection-heading">
+          <span className="runtime-subsection-title">{title}</span>
+          <span className="runtime-subsection-summary">{summary}</span>
+        </span>
+        <span className={`runtime-subsection-badge status-${tone}`}>{status}</span>
+      </button>
+      {open && <div className="runtime-subsection-content">{children}</div>}
+    </section>
+  );
+}
+
 export function SettingsPage({
   snapshot,
   desktop,
@@ -296,7 +352,22 @@ export function SettingsPage({
 
   useEffect(() => {
     void fetchKnowledgeRequirements();
+    setEmbeddingVerified(false);
+    setEmbeddingStatus("");
+    setEmbeddingOutput("");
   }, [form?.knowledge_embedding_provider]);
+
+  useEffect(() => {
+    setEmbeddingVerified(false);
+    setEmbeddingStatus("");
+    setEmbeddingOutput("");
+  }, [
+    form?.knowledge_embedding_model,
+    form?.hf_endpoint,
+    form?.siliconflow_embedding_api_key,
+    form?.siliconflow_embedding_base_url,
+    form?.siliconflow_embedding_model,
+  ]);
 
   const [localAsrStatus, setLocalAsrStatus] = useState("");
   const [localAsrOutput, setLocalAsrOutput] = useState("");
@@ -960,6 +1031,9 @@ export function SettingsPage({
   const llmApiKeyReady = hasUsableApiKey(form?.llm_api_key, form?.llm_api_key_configured);
   const visualApiKeyReady = hasUsableApiKey(form?.visual_evidence_api_key, form?.visual_evidence_api_key_configured) || llmApiKeyReady;
   const knowledgeLlmApiKeyReady = hasUsableApiKey(form?.knowledge_llm_api_key, form?.knowledge_llm_api_key_configured);
+  const siliconflowEmbeddingApiKeyReady = hasUsableApiKey(form?.siliconflow_embedding_api_key, form?.siliconflow_embedding_api_key_configured);
+  const knowledgeEmbeddingProvider = String(form?.knowledge_embedding_provider || "local_huggingface").trim().toLowerCase();
+  const knowledgeEmbeddingUsesSiliconFlow = knowledgeEmbeddingProvider === "siliconflow";
   const llmEnabled = Boolean(form?.llm_enabled);
   const visualMultimodalEnabled = Boolean(form?.visual_multimodal_enabled);
   const llmReady = Boolean(form?.llm_enabled && llmApiKeyReady && String(form?.llm_base_url || "").trim() && String(form?.llm_model || "").trim());
@@ -1152,15 +1226,45 @@ export function SettingsPage({
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
 
   const knowledgeDepsReady = Boolean(environment?.knowledgeDependenciesReady);
+  const effectiveSiliconFlowEmbeddingBaseUrl = String(form?.siliconflow_embedding_base_url || DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL).trim();
+  const effectiveSiliconFlowEmbeddingModel = String(form?.siliconflow_embedding_model || DEFAULT_SILICONFLOW_EMBEDDING_MODEL).trim();
+  const knowledgeEmbeddingReady = knowledgeEmbeddingUsesSiliconFlow
+    ? Boolean(
+        siliconflowEmbeddingApiKeyReady &&
+        effectiveSiliconFlowEmbeddingBaseUrl &&
+        effectiveSiliconFlowEmbeddingModel
+      )
+    : knowledgeDepsReady;
   const hasKnowledgeBrokenDeps = Boolean(
     environment?.chromadbBroken ||
     environment?.sentenceTransformersBroken ||
     environment?.modelscopeBroken
   );
-  const missingKnowledgeDeps = [
-    environment?.chromadbInstalled || environment?.chromadbBroken ? null : "chromadb",
-    environment?.sentenceTransformersInstalled || environment?.sentenceTransformersBroken ? null : "sentence-transformers",
-  ].filter(Boolean) as string[];
+  const requiredKnowledgePackages = knowledgeRequirements?.required?.length
+    ? knowledgeRequirements.required
+    : knowledgeEmbeddingUsesSiliconFlow
+      ? ["chromadb"]
+      : ["chromadb", "sentence-transformers"];
+  const requiredKnowledgePackageText = requiredKnowledgePackages.join(" / ");
+  const missingKnowledgeDeps = requiredKnowledgePackages.filter((packageName) => {
+    if (packageName === "chromadb") {
+      return !environment?.chromadbInstalled && !environment?.chromadbBroken;
+    }
+    if (packageName === "sentence-transformers") {
+      return !environment?.sentenceTransformersInstalled && !environment?.sentenceTransformersBroken;
+    }
+    if (packageName === "modelscope") {
+      return !environment?.modelscopeInstalled && !environment?.modelscopeBroken;
+    }
+    return false;
+  });
+  const knowledgeRuntimeStatus = knowledgeDepsReady ? "已安装" : hasKnowledgeBrokenDeps ? "部分损坏" : "未安装";
+  const knowledgeRuntimeTone = knowledgeDepsReady ? "installed" : hasKnowledgeBrokenDeps ? "error" : "missing";
+  const knowledgeRuntimeSummary = knowledgeDepsReady
+    ? (knowledgeEmbeddingUsesSiliconFlow ? "chromadb 索引存储已就绪" : "向量库和本地模型依赖已就绪")
+    : hasKnowledgeBrokenDeps
+      ? "检测到包导入异常"
+      : `安装 ${requiredKnowledgePackageText}`;
   const outdatedRuntimeChannels = runtimeStatus?.channels.filter((channel) => channel.needsUpdate) || [];
   const activeRuntimeStatus = runtimeStatus?.channels.find(
     (channel) => channel.runtimeChannel === (environment?.runtimeChannel || form.runtime_channel),
@@ -1413,6 +1517,10 @@ export function SettingsPage({
       ...nextForm,
       device_preference: normalizeDevicePreference(nextForm.device_preference),
     };
+    if (String(payload.knowledge_embedding_provider || "").trim().toLowerCase() === "siliconflow") {
+      payload.siliconflow_embedding_base_url = String(payload.siliconflow_embedding_base_url || DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL).trim();
+      payload.siliconflow_embedding_model = String(payload.siliconflow_embedding_model || DEFAULT_SILICONFLOW_EMBEDDING_MODEL).trim();
+    }
     if (nextForm.siliconflow_asr_api_key_configured && (!String(nextForm.siliconflow_asr_api_key || "").trim() || isMaskedApiKey(nextForm.siliconflow_asr_api_key))) {
       delete payload.siliconflow_asr_api_key;
     }
@@ -1424,6 +1532,9 @@ export function SettingsPage({
     }
     if (nextForm.knowledge_llm_api_key_configured && (!String(nextForm.knowledge_llm_api_key || "").trim() || isMaskedApiKey(nextForm.knowledge_llm_api_key))) {
       delete payload.knowledge_llm_api_key;
+    }
+    if (nextForm.siliconflow_embedding_api_key_configured && (!String(nextForm.siliconflow_embedding_api_key || "").trim() || isMaskedApiKey(nextForm.siliconflow_embedding_api_key))) {
+      delete payload.siliconflow_embedding_api_key;
     }
     if (nextForm.visual_evidence_api_key_configured && (!String(nextForm.visual_evidence_api_key || "").trim() || isMaskedApiKey(nextForm.visual_evidence_api_key))) {
       delete payload.visual_evidence_api_key;
@@ -1583,8 +1694,9 @@ export function SettingsPage({
       }, 1500);
       const response = await api.installKnowledgeDependencies({
         runtime_channel: form.runtime_channel,
+        provider: form.knowledge_embedding_provider || "local_huggingface",
         reinstall: Boolean(knowledgeDepsReady) || hasKnowledgeBrokenDeps,
-        install_session_id: sessionId,
+        installSessionId: sessionId,
       });
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       // Final log fetch
@@ -1652,11 +1764,16 @@ export function SettingsPage({
     try {
       setEmbeddingTesting(true);
       setEmbeddingOutput("");
-      setEmbeddingStatus("正在加载并验证 Embedding 模型...");
+      setEmbeddingStatus(form.knowledge_embedding_provider === "siliconflow" ? "正在请求硅基流动 Embedding API..." : "正在加载并验证 Embedding 模型...");
+      const provider = form.knowledge_embedding_provider || "local_huggingface";
       const response = await api.testEmbeddingModel({
-        provider: form.knowledge_embedding_provider || "local_huggingface",
-        model: form.knowledge_embedding_model,
+        provider,
+        model: provider === "siliconflow" ? effectiveSiliconFlowEmbeddingModel : form.knowledge_embedding_model,
         hf_endpoint: form.hf_endpoint,
+        api_key: provider === "siliconflow" && !isMaskedApiKey(form.siliconflow_embedding_api_key)
+          ? form.siliconflow_embedding_api_key
+          : undefined,
+        base_url: provider === "siliconflow" ? effectiveSiliconFlowEmbeddingBaseUrl : undefined,
       });
       setEmbeddingOutput(response.stdoutTail || "");
       if (response.verified) {
@@ -1936,7 +2053,10 @@ export function SettingsPage({
       return { category: "generation", targetKey: "llm_enabled" };
     }
     if (issueKey === "knowledge_dependencies") {
-      return { category: "knowledge", targetKey: "knowledge_dependencies" };
+      return { category: "runtime", targetKey: "knowledge_runtime" };
+    }
+    if (issueKey === "siliconflow_embedding_api_key") {
+      return { category: "knowledge", targetKey: "siliconflow_embedding_api_key" };
     }
     if (issueKey === "knowledge_llm_configuration") {
       if (String(form.knowledge_llm_mode || "same_as_main").trim().toLowerCase() === "custom") {
@@ -2083,7 +2203,7 @@ export function SettingsPage({
             </div>
             <div className="settings-nav-summary-row">
               <span>知识库</span>
-              <strong>{form.knowledge_enabled ? (knowledgeDepsReady ? "就绪" : "待安装") : "关闭"}</strong>
+              <strong>{form.knowledge_enabled ? (knowledgeEmbeddingReady && knowledgeDepsReady ? "就绪" : "待配置") : "关闭"}</strong>
             </div>
           </div>
         </div>
@@ -2157,9 +2277,9 @@ export function SettingsPage({
               <span className={`settings-hero-chip ${llmReady ? "is-success" : ""}`}>
                 {llmReady ? "LLM 已配置" : form.llm_enabled ? "LLM 待补全" : "LLM 关闭"}
               </span>
-              <span className={`settings-hero-chip ${form.knowledge_enabled && environment?.knowledgeDependenciesReady ? "is-success" : form.knowledge_enabled && environment?.runtimeReady !== undefined ? "is-warning" : ""}`}>
+              <span className={`settings-hero-chip ${form.knowledge_enabled && knowledgeEmbeddingReady && knowledgeDepsReady ? "is-success" : form.knowledge_enabled && environment?.runtimeReady !== undefined ? "is-warning" : ""}`}>
                 {!environment?.runtimeReady && !environment?.runtimeError ? "检测中..."
-                  : form.knowledge_enabled ? (environment?.knowledgeDependenciesReady ? "知识库就绪" : "需安装依赖") : "知识库关闭"}
+                  : form.knowledge_enabled ? (knowledgeEmbeddingReady && knowledgeDepsReady ? "知识库就绪" : "知识库待配置") : "知识库关闭"}
               </span>
             </div>
           </header>
@@ -3184,7 +3304,7 @@ export function SettingsPage({
                         <option value="local_modelscope">本地 ModelScope</option>
                       </select>
                       <span className="settings-input-caption">
-                        {form.knowledge_embedding_provider === "siliconflow" ? "使用在线 API，无需本地 GPU 和依赖。" : "向量模型从哪个源下载和加载。"}
+                        {form.knowledge_embedding_provider === "siliconflow" ? "使用在线 API，无需本地向量模型和 GPU；索引存储仍需要 chromadb。" : "向量模型从哪个源下载和加载。"}
                       </span>
                     </label>
                     {form.knowledge_embedding_provider === "siliconflow" ? (
@@ -3199,16 +3319,17 @@ export function SettingsPage({
                             type="password"
                             value={form.siliconflow_embedding_api_key || ""}
                             disabled={!form.knowledge_enabled}
+                            onFocus={selectMaskedApiKey}
                             onChange={(e) => updateForm({ ...form, siliconflow_embedding_api_key: e.target.value })}
                             placeholder="sk-..."
                           />
-                          <SiliconFlowApiKeyHelp />
+                          <SiliconFlowApiKeyHelp purpose="embedding" />
                         </label>
                         <label className="settings-input-group">
                           <span className="settings-input-label">Base URL</span>
                           <input
                             className="settings-input-field"
-                            value={form.siliconflow_embedding_base_url || "https://api.siliconflow.cn/v1"}
+                            value={form.siliconflow_embedding_base_url || DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL}
                             disabled={!form.knowledge_enabled}
                             onChange={(e) => updateForm({ ...form, siliconflow_embedding_base_url: e.target.value })}
                             placeholder="https://api.siliconflow.cn/v1"
@@ -3219,7 +3340,7 @@ export function SettingsPage({
                           <span className="settings-input-label">模型名称</span>
                           <input
                             className="settings-input-field"
-                            value={form.siliconflow_embedding_model || "BAAI/bge-large-zh-v1.5"}
+                            value={form.siliconflow_embedding_model || DEFAULT_SILICONFLOW_EMBEDDING_MODEL}
                             disabled={!form.knowledge_enabled}
                             onChange={(e) => updateForm({ ...form, siliconflow_embedding_model: e.target.value })}
                             placeholder="BAAI/bge-large-zh-v1.5"
@@ -3228,6 +3349,29 @@ export function SettingsPage({
                             推荐使用 BAAI/bge-large-zh-v1.5 或 BAAI/bge-small-zh-v1.5。
                           </span>
                         </label>
+                        <div className="settings-inline-actions" style={{ gridColumn: "1 / -1" }}>
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={embeddingTesting || !form.knowledge_enabled || !knowledgeEmbeddingReady}
+                            onClick={() => void testEmbeddingModel()}
+                          >
+                            {embeddingTesting ? "测试中..." : "测试向量模型"}
+                          </button>
+                          {embeddingVerified ? (
+                            <span className="settings-status-pill success">API 可用</span>
+                          ) : siliconflowEmbeddingApiKeyReady ? (
+                            <span className="settings-status-pill warning">待测试</span>
+                          ) : null}
+                        </div>
+                        {embeddingStatus ? (
+                          <div className={`settings-inline-alert ${embeddingVerified ? "success" : embeddingStatus.includes("失败") || embeddingStatus.includes("未配置") ? "warning" : "info"}`}>
+                            <span>{embeddingStatus}</span>
+                          </div>
+                        ) : null}
+                        {embeddingOutput ? (
+                          <textarea className="textarea-field log-viewer" rows={6} readOnly value={embeddingOutput}></textarea>
+                        ) : null}
                       </>
                     ) : form.knowledge_embedding_provider !== "online" ? (
                       <>
@@ -3345,7 +3489,7 @@ export function SettingsPage({
                               ? `chromadb${environment?.chromadbVersion ? ` ${environment.chromadbVersion}` : ""} 与 sentence-transformers${environment?.sentenceTransformersVersion ? ` ${environment.sentenceTransformersVersion}` : ""} 已在当前运行环境可用。`
                               : hasKnowledgeBrokenDeps
                                 ? `部分依赖包已安装但无法正常导入，需要重新安装。`
-                                : `需要安装：${missingKnowledgeDeps.join("、") || "chromadb、sentence-transformers"}。`}
+                                : `需要安装：${missingKnowledgeDeps.join("、") || requiredKnowledgePackageText}。`}
                           </p>
                         </div>
                       </div>
@@ -4037,7 +4181,7 @@ export function SettingsPage({
                   )}
                 </div>
                 {runtimeStatusMessage ? (
-                  <p className="settings-input-caption" style={{ marginTop: 8 }}>{runtimeStatusMessage}</p>
+                  <p className="settings-input-caption runtime-status-message">{runtimeStatusMessage}</p>
                 ) : null}
                 <div className="runtime-channel-list" role="list">
                   {(runtimeStatus?.channels || []).map((channel) => (
@@ -4057,211 +4201,191 @@ export function SettingsPage({
                   已启用国内镜像回退：{pipIndexSummary}。安装失败时会自动从官方源切换到国内镜像继续尝试。
                 </span>
               </div>
-              <div className="settings-form-group">
-                <div
-                  className="runtime-subsection-header"
-                  onClick={() => setLocalAsrSectionOpen(!localAsrSectionOpen)}
-                  aria-expanded={localAsrSectionOpen}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setLocalAsrSectionOpen(!localAsrSectionOpen); }}
+              <div className="runtime-subsection-list">
+                <RuntimeSection
+                  title="本地 ASR 运行环境"
+                  status={localAsrInstalled ? "已安装" : "未安装"}
+                  tone={localAsrInstalled ? "installed" : "missing"}
+                  summary={localAsrInstalled ? `faster-whisper ${environment?.localAsrVersion || "已就绪"}` : "安装后可切换到本地 Whisper 转写"}
+                  open={localAsrSectionOpen}
+                  onToggle={() => setLocalAsrSectionOpen(!localAsrSectionOpen)}
+                  focusKey="local_asr_runtime"
+                  highlighted={activeFocusTarget === "local_asr_runtime"}
+                  sectionRef={registerFocusTarget("local_asr_runtime") as (node: HTMLElement | null) => void}
                 >
-                  <span className="runtime-subsection-chevron">▶</span>
-                  <span className="runtime-subsection-title">本地 ASR 运行环境</span>
-                  {localAsrInstalled && (
-                    <span className="runtime-subsection-badge status-installed">已安装</span>
-                  )}
-                  {!localAsrInstalled && (
-                    <span className="runtime-subsection-badge status-missing">未安装</span>
-                  )}
-                </div>
-                {localAsrSectionOpen && (
-                  <div className="runtime-subsection-content">
-                    <div
-                      className={`settings-actions settings-focus-target ${activeFocusTarget === "local_asr_runtime" ? "is-highlighted" : ""}`}
-                      ref={registerFocusTarget("local_asr_runtime") as (node: HTMLDivElement | null) => void}
-                    >
+                  <div className="runtime-subsection-intro">
+                    <div className="runtime-subsection-copy">
+                      <strong>{localAsrInstalled ? "本地 Whisper 已可用" : "安装到当前 runtime"}</strong>
+                      <span>
+                        {localAsrInstalled
+                          ? "当前运行环境可直接使用本地语音识别；重新安装会保留同一运行环境通道并刷新依赖。"
+                          : "正式安装包默认不包含本地 ASR，安装完成后会自动切换到本地模式。"}
+                      </span>
+                    </div>
+                    <div className="runtime-subsection-actions">
                       <button className="secondary-button" type="button" disabled={localAsrInstalling} onClick={() => void installLocalAsr()}>
                         {localAsrInstalling ? "安装中..." : localAsrInstalled ? "重新安装本地 ASR" : "安装本地 ASR"}
                       </button>
+                      {localAsrStatus ? (
+                        <span className={`helper-chip runtime-operation-chip ${localAsrStatus.includes("失败") ? "status-error" : localAsrStatus.includes("安装") || localAsrStatus.includes("已") ? "status-success" : "status-info"}`}>
+                          {localAsrStatus}
+                        </span>
+                      ) : null}
                     </div>
-                    <span className="settings-input-caption">
-                      {localAsrInstalled
-                        ? `当前已安装${environment?.localAsrVersion ? `（${environment.localAsrVersion}）` : ""}，安装后会自动切换到本地模式。`
-                        : "正式安装包默认不包含本地 ASR；安装到当前运行环境后会自动切换到本地模式。"}
-                    </span>
-                    <div style={{ marginTop: "1rem" }}>
-                      <DependencyTree
-                        title="本地 ASR 依赖"
-                        items={buildAsrDependencyTree(environment, "local")}
-                        runtimeChannel={form.runtime_channel}
-                        onStatusChange={handleDependencyStatusChange}
-                      />
-                    </div>
-                    {localAsrOutput ? (
-                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
-                    ) : null}
                   </div>
-                )}
-              </div>
-              <div className="settings-form-group">
-                <div
-                  className="runtime-subsection-header"
-                  onClick={() => setFunasrSectionOpen(!funasrSectionOpen)}
-                  aria-expanded={funasrSectionOpen}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFunasrSectionOpen(!funasrSectionOpen); }}
+                  <DependencyTree
+                    title="本地 ASR 依赖"
+                    items={buildAsrDependencyTree(environment, "local")}
+                    runtimeChannel={form.runtime_channel}
+                    installKind="local"
+                    onStatusChange={handleDependencyStatusChange}
+                  />
+                  {localAsrOutput ? (
+                    <div className="runtime-log-block">
+                      <span className="runtime-block-title">安装输出</span>
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={localAsrOutput}></textarea>
+                    </div>
+                  ) : null}
+                </RuntimeSection>
+
+                <RuntimeSection
+                  title="FunASR 运行环境"
+                  status={funasrInstalled ? "已安装" : "未安装"}
+                  tone={funasrInstalled ? "installed" : "missing"}
+                  summary={funasrInstalled ? `funasr ${environment?.funasrVersion || "已就绪"}` : "中文转写增强，包含 PyTorch 依赖"}
+                  open={funasrSectionOpen}
+                  onToggle={() => setFunasrSectionOpen(!funasrSectionOpen)}
+                  focusKey="funasr_runtime"
+                  highlighted={activeFocusTarget === "funasr_runtime"}
+                  sectionRef={registerFocusTarget("funasr_runtime") as (node: HTMLElement | null) => void}
                 >
-                  <span className="runtime-subsection-chevron">▶</span>
-                  <span className="runtime-subsection-title">FunASR 运行环境</span>
-                  {funasrInstalled && (
-                    <span className="runtime-subsection-badge status-installed">已安装</span>
-                  )}
-                  {!funasrInstalled && (
-                    <span className="runtime-subsection-badge status-missing">未安装</span>
-                  )}
-                </div>
-                {funasrSectionOpen && (
-                  <div className="runtime-subsection-content">
-                    <div
-                      className={`settings-actions settings-focus-target ${activeFocusTarget === "funasr_runtime" ? "is-highlighted" : ""}`}
-                      ref={registerFocusTarget("funasr_runtime") as (node: HTMLDivElement | null) => void}
-                    >
+                  <div className="runtime-subsection-intro">
+                    <div className="runtime-subsection-copy">
+                      <strong>{funasrInstalled ? "FunASR 已可用" : "安装中文 ASR 增强包"}</strong>
+                      <span>
+                        {funasrInstalled
+                          ? "当前运行环境已经通过 FunASR 检测；重新安装会自动修复 torch、torchvision、torchaudio 等子依赖。"
+                          : "FunASR 是阿里开源语音识别引擎，依赖包含 PyTorch，安装体积较大，请耐心等待。"}
+                      </span>
+                    </div>
+                    <div className="runtime-subsection-actions">
                       <button className="secondary-button" type="button" disabled={funasrInstalling} onClick={() => void installFunAsr()}>
                         {funasrInstalling ? "安装中..." : funasrInstalled ? "重新安装 FunASR" : "安装 FunASR"}
                       </button>
+                      {funasrStatus ? (
+                        <span className={`helper-chip runtime-operation-chip ${funasrStatus.includes("失败") ? "status-error" : funasrStatus.includes("已安装") || funasrStatus.includes("成功") ? "status-success" : "status-info"}`}>
+                          {funasrStatus}
+                        </span>
+                      ) : null}
                     </div>
-                    <span className="settings-input-caption">
-                      {funasrInstalled
-                        ? `当前已安装${environment?.funasrVersion ? `（${environment.funasrVersion}）` : ""}，中文识别效果优于 Whisper。安装后会自动切换到 FunASR 模式。`
-                        : "FunASR 是阿里开源语音识别引擎，中文效果优于 Whisper，CPU 速度约为 Whisper 的 34 倍。依赖包含 PyTorch，安装体积较大，请耐心等待。"}
-                    </span>
-                    <div style={{ marginTop: "1rem" }}>
+                  </div>
+                  <DependencyTree
+                    title="FunASR 依赖"
+                    items={buildAsrDependencyTree(environment, "funasr")}
+                    runtimeChannel={form.runtime_channel}
+                    installKind="funasr"
+                    onStatusChange={handleDependencyStatusChange}
+                  />
+                  {funasrOutput ? (
+                    <div className="runtime-log-block">
+                      <span className="runtime-block-title">安装输出</span>
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
+                    </div>
+                  ) : null}
+                </RuntimeSection>
+
+                <RuntimeSection
+                  title="知识库运行环境"
+                  status={knowledgeRuntimeStatus}
+                  tone={knowledgeRuntimeTone}
+                  summary={knowledgeRuntimeSummary}
+                  open={knowledgeSectionOpen}
+                  onToggle={() => setKnowledgeSectionOpen(!knowledgeSectionOpen)}
+                  focusKey="knowledge_runtime"
+                  highlighted={activeFocusTarget === "knowledge_runtime"}
+                  sectionRef={registerFocusTarget("knowledge_runtime") as (node: HTMLElement | null) => void}
+                >
+                  <div className="runtime-subsection-intro">
+                    <div className="runtime-subsection-copy">
+                      <strong>{knowledgeDepsReady ? "知识库依赖已就绪" : hasKnowledgeBrokenDeps ? "依赖需要修复" : "安装知识库依赖"}</strong>
+                      <span>
+                        {knowledgeEmbeddingUsesSiliconFlow
+                          ? "当前 provider: siliconflow。本区域只负责本地知识库索引存储依赖，在线向量模型请在「知识库与问答」里测试。"
+                          : `当前 provider: ${form.knowledge_embedding_provider || "local_huggingface"}。本区域负责知识库索引存储和本地向量模型所需的 Python 依赖。`}
+                      </span>
+                    </div>
+                    <div className="runtime-subsection-actions">
+                      <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
+                        {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : hasKnowledgeBrokenDeps ? "重新安装知识库依赖" : "安装知识库依赖"}
+                      </button>
+                      {knowledgeDepsStatus ? (
+                        <span className={`helper-chip runtime-operation-chip ${knowledgeDepsStatus.includes("成功") || knowledgeDepsStatus.includes("就绪") ? "status-success" : knowledgeDepsStatus.includes("失败") ? "status-error" : "status-info"}`}>
+                          {knowledgeDepsStatus}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {knowledgeRequirements && (
+                    <div
+                      className="runtime-subsection-group"
+                      ref={registerFocusTarget("knowledge_dependencies") as (node: HTMLDivElement | null) => void}
+                    >
                       <DependencyTree
-                        title="FunASR 依赖"
-                        items={buildAsrDependencyTree(environment, "funasr")}
+                        title="知识库依赖"
+                        items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
                         runtimeChannel={form.runtime_channel}
+                        installKind="knowledge"
+                        provider={form.knowledge_embedding_provider || "local_huggingface"}
                         onStatusChange={handleDependencyStatusChange}
                       />
                     </div>
-                    {funasrOutput ? (
-                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={funasrOutput} />
-                    ) : null}
-                  </div>
-                )}
-              </div>
-              <div className="settings-form-group">
-                <div
-                  className="runtime-subsection-header"
-                  data-focus-key="knowledge_runtime"
-                  onClick={() => setKnowledgeSectionOpen(!knowledgeSectionOpen)}
-                  aria-expanded={knowledgeSectionOpen}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setKnowledgeSectionOpen(!knowledgeSectionOpen); }}
-                >
-                  <span className="runtime-subsection-chevron">▶</span>
-                  <span className="runtime-subsection-title">知识库运行环境</span>
-                  {knowledgeDepsReady && (
-                    <span className="runtime-subsection-badge status-installed">已安装</span>
                   )}
-                  {!knowledgeDepsReady && hasKnowledgeBrokenDeps && (
-                    <span className="runtime-subsection-badge status-error">部分损坏</span>
-                  )}
-                  {!knowledgeDepsReady && !hasKnowledgeBrokenDeps && (
-                    <span className="runtime-subsection-badge status-missing">未安装</span>
-                  )}
-                </div>
-                {knowledgeSectionOpen && (
-                  <div className="runtime-subsection-content">
-                    <div className="runtime-subsection-group">
-                      <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
-                        批量操作
-                      </span>
-                      <div
-                        className={`settings-actions settings-focus-target ${activeFocusTarget === "knowledge_runtime" ? "is-highlighted" : ""}`}
-                        ref={registerFocusTarget("knowledge_runtime") as (node: HTMLDivElement | null) => void}
-                      >
-                        <button className="secondary-button" type="button" disabled={knowledgeDepsInstalling} onClick={() => void installKnowledgeDependencies()}>
-                          {knowledgeDepsInstalling ? "安装中..." : knowledgeDepsReady ? "重新安装知识库依赖" : hasKnowledgeBrokenDeps ? "重新安装知识库依赖" : "安装知识库依赖"}
-                        </button>
-                      </div>
-                      <span className="settings-input-caption">
-                        当前 provider: {form.knowledge_embedding_provider || "local_huggingface"}
-                      </span>
-                      {knowledgeDepsStatus && (
-                        <div style={{ marginTop: "0.5rem" }}>
-                          <span className={`helper-chip ${knowledgeDepsStatus.includes("成功") || knowledgeDepsStatus.includes("就绪") ? "status-success" : knowledgeDepsStatus.includes("失败") ? "status-error" : "status-info"}`}>
-                            {knowledgeDepsStatus}
-                          </span>
-                        </div>
-                      )}
+
+                  {knowledgeDepsOutput ? (
+                    <div className="runtime-log-block">
+                      <span className="runtime-block-title">安装输出</span>
+                      <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
                     </div>
+                  ) : null}
 
-                    {knowledgeRequirements && (
-                      <div className="runtime-subsection-group">
-                        <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
-                          依赖状态
-                        </span>
-                        <DependencyTree
-                          title="知识库依赖"
-                          items={buildKnowledgeDependencyTree(knowledgeRequirements, environment)}
-                          runtimeChannel={form.runtime_channel}
-                          onStatusChange={handleDependencyStatusChange}
-                        />
+                  {(environment?.chromadbError || environment?.sentenceTransformersError || environment?.modelscopeError) && (
+                    <div className="runtime-log-block">
+                      <div className="settings-inline-alert warning runtime-inline-alert">
+                        <strong>依赖损坏，需要重新安装</strong>
+                        <span>部分依赖包已安装但无法正常导入，请点击上方“重新安装知识库依赖”自动修复。</span>
                       </div>
-                    )}
-
-                    {knowledgeDepsOutput ? (
-                      <div className="runtime-subsection-group">
-                        <span className="settings-input-label" style={{ fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
-                          安装输出
-                        </span>
-                        <textarea className="textarea-field log-viewer" rows={8} readOnly value={knowledgeDepsOutput}></textarea>
-                      </div>
-                    ) : null}
-
-                    {(environment?.chromadbError || environment?.sentenceTransformersError || environment?.modelscopeError) && (
-                      <div className="runtime-subsection-group">
-                        <div className="settings-inline-alert warning" style={{ marginBottom: "0.75rem" }}>
-                          <strong>依赖损坏，需要重新安装</strong>
-                          <span>部分依赖包已安装但无法正常导入，请点击上方"重新安装知识库依赖"自动修复。</span>
-                        </div>
-                        <span className="settings-input-label" style={{ color: "var(--color-warning, #f59e0b)", fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
-                          包导入错误
-                        </span>
+                      <span className="runtime-block-title runtime-block-title-warning">包导入错误</span>
+                      <div className="runtime-error-stack">
                         {environment.chromadbError && (
-                          <div style={{ marginTop: "0.5rem" }}>
-                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>chromadb:</span>
-                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.chromadbError} style={{ marginTop: "0.25rem" }} />
+                          <div className="runtime-error-item">
+                            <span className="runtime-error-label">chromadb</span>
+                            <textarea className="textarea-field log-viewer runtime-error-textarea" rows={4} readOnly value={environment.chromadbError} />
                           </div>
                         )}
                         {environment.sentenceTransformersError && (
-                          <div style={{ marginTop: "0.5rem" }}>
-                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>sentence-transformers:</span>
-                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.sentenceTransformersError} style={{ marginTop: "0.25rem" }} />
+                          <div className="runtime-error-item">
+                            <span className="runtime-error-label">sentence-transformers</span>
+                            <textarea className="textarea-field log-viewer runtime-error-textarea" rows={4} readOnly value={environment.sentenceTransformersError} />
                           </div>
                         )}
                         {environment.modelscopeError && (
-                          <div style={{ marginTop: "0.5rem" }}>
-                            <span style={{ fontSize: "0.9em", fontWeight: 500 }}>modelscope:</span>
-                            <textarea className="textarea-field log-viewer" rows={4} readOnly value={environment.modelscopeError} style={{ marginTop: "0.25rem" }} />
+                          <div className="runtime-error-item">
+                            <span className="runtime-error-label">modelscope</span>
+                            <textarea className="textarea-field log-viewer runtime-error-textarea" rows={4} readOnly value={environment.modelscopeError} />
                           </div>
                         )}
                       </div>
-                    )}
+                    </div>
+                  )}
 
-                    {environment?.knowledgeDependenciesError && !environment?.chromadbError && !environment?.sentenceTransformersError && !environment?.modelscopeError && (
-                      <div className="runtime-subsection-group">
-                        <span className="settings-input-label" style={{ color: "var(--color-error, #ef4444)", fontSize: "0.9em", fontWeight: 600, marginBottom: "0.5rem", display: "block" }}>
-                          知识库依赖错误
-                        </span>
-                        <textarea className="textarea-field log-viewer" rows={6} readOnly value={environment.knowledgeDependenciesError} style={{ borderColor: "var(--color-error, #ef4444)" }} />
-                      </div>
-                    )}
-                  </div>
-                )}
+                  {environment?.knowledgeDependenciesError && !environment?.chromadbError && !environment?.sentenceTransformersError && !environment?.modelscopeError && (
+                    <div className="runtime-log-block is-error">
+                      <span className="runtime-block-title runtime-block-title-danger">知识库依赖错误</span>
+                      <textarea className="textarea-field log-viewer runtime-error-textarea is-error" rows={6} readOnly value={environment.knowledgeDependenciesError} />
+                    </div>
+                  )}
+                </RuntimeSection>
               </div>
               {environment?.runtimeError ? (
                 <div className="settings-form-group">

@@ -69,6 +69,8 @@ export const emptySnapshot: Snapshot = {
 };
 
 const MASKED_API_KEY = "******";
+const DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL = "https://api.siliconflow.cn/v1";
+const DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "BAAI/bge-large-zh-v1.5";
 
 function hasUsableApiKey(value: string | undefined | null, configured: boolean | undefined): boolean {
   const trimmed = String(value || "").trim();
@@ -149,8 +151,12 @@ export function getConfigHealth(
   const transcriptionProvider = String(settings.transcription_provider || "").trim().toLowerCase();
   const knowledgeEnabled = Boolean(settings.knowledge_enabled);
   const knowledgeUsesCustomLlm = String(settings.knowledge_llm_mode || "same_as_main").trim().toLowerCase() === "custom";
+  const knowledgeEmbeddingProvider = String(settings.knowledge_embedding_provider || "local_huggingface").trim().toLowerCase();
   const mainLlmApiKeyReady = hasUsableApiKey(settings.llm_api_key, settings.llm_api_key_configured);
   const knowledgeLlmApiKeyReady = hasUsableApiKey(settings.knowledge_llm_api_key, settings.knowledge_llm_api_key_configured);
+  const siliconflowEmbeddingApiKeyReady = hasUsableApiKey(settings.siliconflow_embedding_api_key, settings.siliconflow_embedding_api_key_configured);
+  const siliconflowEmbeddingBaseUrlReady = Boolean(String(settings.siliconflow_embedding_base_url || DEFAULT_SILICONFLOW_EMBEDDING_BASE_URL).trim());
+  const siliconflowEmbeddingModelReady = Boolean(String(settings.siliconflow_embedding_model || DEFAULT_SILICONFLOW_EMBEDDING_MODEL).trim());
   const knowledgeLlmReady = knowledgeUsesCustomLlm
     ? Boolean(settings.knowledge_llm_enabled && knowledgeLlmApiKeyReady && String(settings.knowledge_llm_base_url || "").trim() && String(settings.knowledge_llm_model || "").trim())
     : Boolean(settings.llm_enabled && mainLlmApiKeyReady && String(settings.llm_base_url || "").trim() && String(settings.llm_model || "").trim());
@@ -238,7 +244,22 @@ export function getConfigHealth(
     issues.push({
       key: "knowledge_dependencies",
       title: "缺少知识库依赖",
-      description: "当前运行环境缺少 chromadb 或 sentence-transformers，无法构建知识库索引。",
+      description: knowledgeEmbeddingProvider === "siliconflow"
+        ? "当前运行环境缺少 chromadb，无法保存知识库索引。硅基流动只替代向量模型推理，不替代本地索引存储。"
+        : "当前运行环境缺少 chromadb 或 sentence-transformers，无法构建知识库索引。",
+      severity: "warning",
+    });
+  }
+
+  if (
+    knowledgeEnabled &&
+    knowledgeEmbeddingProvider === "siliconflow" &&
+    (!siliconflowEmbeddingApiKeyReady || !siliconflowEmbeddingBaseUrlReady || !siliconflowEmbeddingModelReady)
+  ) {
+    issues.push({
+      key: "siliconflow_embedding_api_key",
+      title: "硅基流动向量模型未补全",
+      description: "知识库当前使用硅基流动在线向量模型，请填写 API Key、Base URL 和模型名称后测试连接。",
       severity: "warning",
     });
   }

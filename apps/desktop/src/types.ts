@@ -288,6 +288,15 @@ export type EnvironmentInfo = {
   pythonVersion?: string;
   torchInstalled?: boolean;
   torchVersion?: string;
+  torchError?: string;
+  torchvisionInstalled?: boolean;
+  torchvisionVersion?: string;
+  torchvisionBroken?: boolean;
+  torchvisionError?: string;
+  torchaudioInstalled?: boolean;
+  torchaudioVersion?: string;
+  torchaudioBroken?: boolean;
+  torchaudioError?: string;
   cudaAvailable?: boolean;
   gpuName?: string;
   ytDlpVersion?: string;
@@ -297,6 +306,8 @@ export type EnvironmentInfo = {
   funasrInstalled?: boolean;
   funasrAvailable?: boolean;
   funasrVersion?: string;
+  funasrBroken?: boolean;
+  funasrError?: string;
   chromadbInstalled?: boolean;
   chromadbVersion?: string;
   chromadbBroken?: boolean;
