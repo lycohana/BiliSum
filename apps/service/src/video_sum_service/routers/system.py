@@ -654,6 +654,11 @@ def post_runtime_uninstall_packages(payload: dict[str, object]) -> dict[str, obj
     packages = payload.get("packages", [])
     if not isinstance(packages, list) or not packages:
         raise HTTPException(status_code=400, detail="packages 参数必须是非空列表")
-    
-    runtime_channel = payload.get("runtime_channel") or payload.get("runtimeChannel") or None
+
+    runtime_channel_raw = str(payload.get("runtime_channel") or payload.get("runtimeChannel") or "").strip()
+    runtime_channel = (
+        normalize_runtime_channel(runtime_channel_raw, allow_unknown_gpu=True)
+        if runtime_channel_raw
+        else None
+    )
     return uninstall_packages(packages, runtime_channel)

@@ -166,7 +166,14 @@ def managed_runtime_root() -> Path:
 
 
 def managed_runtime_dir(runtime_channel: str) -> Path:
-    return managed_runtime_root() / runtime_channel
+    """Get managed runtime directory for a channel, with path traversal protection."""
+    root = managed_runtime_root().resolve()
+    candidate = (root / runtime_channel).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Invalid runtime channel path: {runtime_channel!r}") from exc
+    return candidate
 
 
 def log_dir() -> Path:
