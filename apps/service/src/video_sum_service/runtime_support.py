@@ -2437,7 +2437,7 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         # On GPU channels, torch / torchvision / torchaudio must come from
         # the PyTorch CUDA index.  The generic PyPI index can overwrite them
         # with CPU wheels, so only let PyPI install torch on base/CPU.
-        funasr_packages = ["transformers>=4.0,<4.50", "funasr>=1.1.0"]
+        funasr_packages = ["transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "funasr>=1.1.0"]
         if not _runtime_channel_cuda_variant(runtime_channel):
             try:
                 torch_probe = runner(
@@ -2621,9 +2621,37 @@ def install_knowledge_dependencies(
 
     packages = ["chromadb>=1.0.0"]
     if "sentence-transformers" in required_packages:
-        packages.extend(["transformers>=4.0,<4.50", "sentence-transformers>=3.0"])
+        packages.extend(["transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "sentence-transformers>=3.0"])
     if "modelscope" in required_packages:
         packages.append("modelscope")
+
+    # Auto-uninstall broken residual packages that are NOT required by current provider.
+    # E.g. when switching from local_huggingface to siliconflow, leftover broken
+    # sentence-transformers should be cleaned up to avoid confusing UI state.
+    residual_packages_to_uninstall = []
+    if "sentence-transformers" not in required_packages and environment.get("sentenceTransformersBroken"):
+        residual_packages_to_uninstall.append("sentence-transformers")
+    if "modelscope" not in required_packages and environment.get("modelscopeBroken"):
+        residual_packages_to_uninstall.append("modelscope")
+
+    if residual_packages_to_uninstall:
+        try:
+            append_install_log(
+                session_id,
+                f"[知识库] 检测到损坏的残留依赖（{', '.join(residual_packages_to_uninstall)}），将自动卸载\n",
+            )
+            runner(
+                [str(python_executable), "-m", "pip", "uninstall", "-y", *residual_packages_to_uninstall],
+                runtime_channel=runtime_channel,
+                timeout=300,
+            )
+        except subprocess.CalledProcessError as exc:
+            # Non-fatal: log and continue
+            logger.warning(
+                "failed to uninstall residual broken packages packages=%s error=%s",
+                residual_packages_to_uninstall,
+                exc,
+            )
 
     try:
         if not use_current_python:

@@ -793,7 +793,7 @@ def test_install_knowledge_dependencies_repairs_broken_imports(monkeypatch, tmp_
 
     assert response["installed"] is True
     assert response["repairReinstall"] is True
-    assert commands == [(["chromadb>=1.0.0", "transformers>=4.0,<4.50", "sentence-transformers>=3.0"], True)]
+    assert commands == [(["chromadb>=1.0.0", "transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "sentence-transformers>=3.0"], True)]
 
 
 def test_install_knowledge_dependencies_can_target_runtime_channel(monkeypatch, tmp_path: Path) -> None:
@@ -2192,7 +2192,7 @@ def test_install_funasr_gpu_repairs_torch_family_before_funasr_pip(monkeypatch, 
     assert result["installed"] is True
     assert worker == {"environment": result["environment"]}
     assert torch_checks == [{"runtime_channel": "gpu-cu128", "install_if_missing": True}]
-    assert pip_installs == [["transformers>=4.0,<4.50", "funasr>=1.1.0"]]
+    assert pip_installs == [["transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "funasr>=1.1.0"]]
 
 
 def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:
