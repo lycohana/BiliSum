@@ -796,6 +796,273 @@ def test_install_knowledge_dependencies_repairs_broken_imports(monkeypatch, tmp_
     assert commands == [(["chromadb>=1.0.0", "transformers>=4.40,<4.50", "tokenizers>=0.22.0,<0.23.1", "sentence-transformers>=3.0"], True)]
 
 
+def test_install_knowledge_dependencies_auto_uninstalls_broken_sentence_transformers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """When switching to siliconflow, broken sentence-transformers should be auto-uninstalled."""
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr(runtime_support, "uses_current_service_python", lambda runtime_channel: False)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr(runtime_support, "install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    pip_commands: list[tuple[list[str], bool]] = []
+    run_commands: list[list[str]] = []
+
+    environments = [
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": False,
+            "chromadbVersion": "",
+            "sentenceTransformersInstalled": True,
+            "sentenceTransformersVersion": "3.0.0",
+            "sentenceTransformersBroken": True,
+            "sentenceTransformersError": "ImportError: broken",
+            "modelscopeInstalled": False,
+            "modelscopeVersion": "",
+            "knowledgeDependenciesReady": False,
+        },
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": True,
+            "chromadbVersion": "1.0.0",
+            "sentenceTransformersInstalled": False,
+            "sentenceTransformersVersion": "",
+            "knowledgeDependenciesReady": True,
+        },
+    ]
+
+    def fake_detect_environment(runtime_channel=None):
+        return environments.pop(0)
+
+    def fake_pip_install(python_executable, runtime_channel, packages, *, reinstall=False, **kwargs):
+        pip_commands.append((packages, reinstall))
+        return type("Result", (), {"stdout": "installed", "stderr": ""})()
+
+    def fake_run_command(command, runtime_channel, timeout=300):
+        run_commands.append(command)
+        return type("Result", (), {"returncode": 0, "stdout": "uninstalled", "stderr": ""})()
+
+    monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
+    monkeypatch.setattr(runtime_support, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        runtime_support,
+        "build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+
+    result, _worker = runtime_support.install_knowledge_dependencies(
+        reinstall=False,
+        repository=object(),
+        provider="siliconflow",
+    )
+
+    assert result["installed"] is True
+    # sentence-transformers should have been auto-uninstalled
+    assert len(run_commands) == 1
+    assert "uninstall" in run_commands[0]
+    assert "sentence-transformers" in run_commands[0]
+    # only chromadb should be pip-installed (siliconflow provider)
+    # reinstall=True because sentenceTransformersVersion is set (repair mode)
+    assert pip_commands == [(["chromadb>=1.0.0"], True)]
+
+
+def test_install_knowledge_dependencies_auto_uninstall_failure_non_fatal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """If auto-uninstall of broken residual packages fails, install should still proceed."""
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr(runtime_support, "uses_current_service_python", lambda runtime_channel: False)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr(runtime_support, "install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    import logging
+
+    logger_warnings: list[str] = []
+    original_warning = runtime_support.logger.warning
+
+    def capture_warning(msg, *args, **kwargs):
+        logger_warnings.append(msg % args if args else msg)
+        return original_warning(msg, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_support.logger, "warning", capture_warning)
+
+    pip_commands: list[tuple[list[str], bool]] = []
+    environments = [
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": False,
+            "chromadbVersion": "",
+            "sentenceTransformersInstalled": True,
+            "sentenceTransformersVersion": "3.0.0",
+            "sentenceTransformersBroken": True,
+            "sentenceTransformersError": "ImportError: broken",
+            "modelscopeInstalled": True,
+            "modelscopeVersion": "1.0",
+            "modelscopeBroken": True,
+            "modelscopeError": "ImportError: broken",
+            "knowledgeDependenciesReady": False,
+        },
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": True,
+            "chromadbVersion": "1.0.0",
+            "sentenceTransformersInstalled": False,
+            "sentenceTransformersVersion": "",
+            "modelscopeInstalled": False,
+            "modelscopeVersion": "",
+            "knowledgeDependenciesReady": True,
+        },
+    ]
+
+    def fake_detect_environment(runtime_channel=None):
+        return environments.pop(0)
+
+    def fake_pip_install(python_executable, runtime_channel, packages, *, reinstall=False, **kwargs):
+        pip_commands.append((packages, reinstall))
+        return type("Result", (), {"stdout": "installed", "stderr": ""})()
+
+    def fake_run_command(command, runtime_channel, timeout=300):
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
+    monkeypatch.setattr(runtime_support, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        runtime_support,
+        "build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+
+    result, _worker = runtime_support.install_knowledge_dependencies(
+        reinstall=False,
+        repository=object(),
+        provider="siliconflow",
+    )
+
+    # Installation should still succeed despite uninstall failure
+    assert result["installed"] is True
+    # There should be a warning logged about the uninstall failure
+    assert any("failed to uninstall residual broken packages" in w for w in logger_warnings)
+    # chromadb should still be installed (repair reinstall due to broken packages having versions)
+    assert pip_commands == [(["chromadb>=1.0.0"], True)]
+
+
+def test_install_knowledge_dependencies_no_auto_uninstall_when_required(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Broken packages required by current provider should NOT be auto-uninstalled."""
+    current = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+        runtime_channel="base",
+    )
+    settings_manager._settings = current
+    app.state.task_repository = object()
+    app.state.task_worker = object()
+
+    monkeypatch.setattr(runtime_support, "uses_current_service_python", lambda runtime_channel: False)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda runtime_channel: tmp_path / runtime_channel)
+    monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda runtime_channel: tmp_path / "python.exe")
+    monkeypatch.setattr(runtime_support, "install_workspace_packages", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
+    monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
+
+    run_commands: list[list[str]] = []
+    pip_commands: list[tuple[list[str], bool]] = []
+
+    environments = [
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": False,
+            "chromadbVersion": "",
+            "sentenceTransformersInstalled": True,
+            "sentenceTransformersVersion": "3.0.0",
+            "sentenceTransformersBroken": True,
+            "sentenceTransformersError": "ImportError: broken",
+            "knowledgeDependenciesReady": False,
+        },
+        {
+            "runtimeChannel": "base",
+            "chromadbInstalled": True,
+            "chromadbVersion": "1.0.0",
+            "sentenceTransformersInstalled": True,
+            "sentenceTransformersVersion": "3.0.0",
+            "knowledgeDependenciesReady": True,
+        },
+    ]
+
+    def fake_detect_environment(runtime_channel=None):
+        return environments.pop(0)
+
+    def fake_pip_install(python_executable, runtime_channel, packages, *, reinstall=False, **kwargs):
+        pip_commands.append((packages, reinstall))
+        return type("Result", (), {"stdout": "installed", "stderr": ""})()
+
+    def fake_run_command(command, runtime_channel, timeout=300):
+        run_commands.append(command)
+        return type("Result", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
+    monkeypatch.setattr(runtime_support, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        runtime_support,
+        "build_worker",
+        lambda repository, current_settings, environment_info=None: {
+            "repository": repository,
+            "environment": environment_info,
+        },
+    )
+
+    result, _worker = runtime_support.install_knowledge_dependencies(
+        reinstall=False,
+        repository=object(),
+        provider="local_huggingface",
+    )
+
+    assert result["installed"] is True
+    # sentence-transformers is required by local_huggingface, so it should NOT be uninstalled
+    assert len(run_commands) == 0
+
+
 def test_install_knowledge_dependencies_can_target_runtime_channel(monkeypatch, tmp_path: Path) -> None:
     current = ServiceSettings(
         data_dir=tmp_path / "data",
