@@ -857,6 +857,7 @@ def test_install_knowledge_dependencies_auto_uninstalls_broken_sentence_transfor
         return type("Result", (), {"returncode": 0, "stdout": "uninstalled", "stderr": ""})()
 
     monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "append_install_log", lambda session_id, line: None)
     monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
     monkeypatch.setattr(runtime_support, "run_command", fake_run_command)
     monkeypatch.setattr(
@@ -957,6 +958,7 @@ def test_install_knowledge_dependencies_auto_uninstall_failure_non_fatal(
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(runtime_support, "detect_environment", fake_detect_environment)
+    monkeypatch.setattr(runtime_support, "append_install_log", lambda session_id, line: None)
     monkeypatch.setattr(runtime_support, "pip_install_with_fallbacks", fake_pip_install)
     monkeypatch.setattr(runtime_support, "run_command", fake_run_command)
     monkeypatch.setattr(
