@@ -139,6 +139,7 @@ function maskConfiguredApiKeys(settings: ServiceSettings | null): ServiceSetting
     llm_api_key: settings.llm_api_key_configured ? MASKED_API_KEY : settings.llm_api_key,
     knowledge_llm_api_key: settings.knowledge_llm_api_key_configured ? MASKED_API_KEY : settings.knowledge_llm_api_key,
     visual_evidence_api_key: settings.visual_evidence_api_key_configured ? MASKED_API_KEY : settings.visual_evidence_api_key,
+    siliconflow_embedding_api_key: settings.siliconflow_embedding_api_key_configured ? MASKED_API_KEY : settings.siliconflow_embedding_api_key,
   };
 }
 
@@ -1409,6 +1410,9 @@ export function SettingsPage({
     }
     if (nextForm.visual_evidence_api_key_configured && (!String(nextForm.visual_evidence_api_key || "").trim() || isMaskedApiKey(nextForm.visual_evidence_api_key))) {
       delete payload.visual_evidence_api_key;
+    }
+    if (nextForm.siliconflow_embedding_api_key_configured && (!String(nextForm.siliconflow_embedding_api_key || "").trim() || isMaskedApiKey(nextForm.siliconflow_embedding_api_key))) {
+      delete payload.siliconflow_embedding_api_key;
     }
     return payload;
   }

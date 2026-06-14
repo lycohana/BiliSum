@@ -31,6 +31,7 @@ SECRET_SETTINGS_FIELDS = {
     "llm_api_key",
     "knowledge_llm_api_key",
     "visual_evidence_api_key",
+    "siliconflow_embedding_api_key",
 }
 MASKED_SECRET_PLACEHOLDER = "******"
 
@@ -114,6 +115,9 @@ class SettingsUpdatePayload(BaseModel):
     knowledge_enabled: bool | None = None
     knowledge_embedding_provider: str | None = None
     knowledge_embedding_model: str | None = None
+    siliconflow_embedding_api_key: str | None = None
+    siliconflow_embedding_base_url: str | None = None
+    siliconflow_embedding_model: str | None = None
     hf_endpoint: str | None = None
     summary_system_prompt: str | None = None
     summary_user_prompt_template: str | None = None
