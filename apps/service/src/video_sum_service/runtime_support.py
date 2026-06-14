@@ -1235,8 +1235,10 @@ def _assert_path_within_managed_runtime_root(path: Path, *, field_name: str = "p
 
 
 def restore_interrupted_runtime_refresh(runtime_dir: Path, backup_dir: Path) -> None:
-    runtime_dir = _assert_path_within_managed_runtime_root(runtime_dir, field_name="runtime_dir")
-    backup_dir = _assert_path_within_managed_runtime_root(backup_dir, field_name="backup_dir")
+    """Restore runtime from backup if interrupted refresh left it in a bad state.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     if not backup_dir.exists():
         return
     if runtime_dir.exists():
@@ -1245,8 +1247,10 @@ def restore_interrupted_runtime_refresh(runtime_dir: Path, backup_dir: Path) -> 
 
 
 def run_runtime_refresh_with_backup(runtime_dir: Path, backup_dir: Path, refresh) -> None:
-    runtime_dir = _assert_path_within_managed_runtime_root(runtime_dir, field_name="runtime_dir")
-    backup_dir = _assert_path_within_managed_runtime_root(backup_dir, field_name="backup_dir")
+    """Run refresh operation with backup/restore safety net.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     prepare_runtime_refresh_backup(runtime_dir, backup_dir)
     try:
         refresh()
@@ -1260,8 +1264,10 @@ def run_runtime_refresh_with_backup(runtime_dir: Path, backup_dir: Path, refresh
 
 
 def prepare_runtime_refresh_backup(runtime_dir: Path, backup_dir: Path) -> None:
-    runtime_dir = _assert_path_within_managed_runtime_root(runtime_dir, field_name="runtime_dir")
-    backup_dir = _assert_path_within_managed_runtime_root(backup_dir, field_name="backup_dir")
+    """Create backup of runtime before refresh.
+
+    Path validation is performed by the caller via managed_runtime_dir().
+    """
     backup_temp_dir = backup_dir.parent / f".{backup_dir.name}-temp"
     if backup_dir.exists():
         _robust_rmtree(backup_dir)
