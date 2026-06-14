@@ -2437,7 +2437,7 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         # On GPU channels, torch / torchvision / torchaudio must come from
         # the PyTorch CUDA index.  The generic PyPI index can overwrite them
         # with CPU wheels, so only let PyPI install torch on base/CPU.
-        funasr_packages = ["transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "funasr>=1.1.0"]
+        funasr_packages = ["transformers>=4.40,<4.50", "tokenizers>=0.22.0,<0.23.1", "funasr>=1.1.0"]
         if not _runtime_channel_cuda_variant(runtime_channel):
             try:
                 torch_probe = runner(
@@ -2621,7 +2621,7 @@ def install_knowledge_dependencies(
 
     packages = ["chromadb>=1.0.0"]
     if "sentence-transformers" in required_packages:
-        packages.extend(["transformers>=4.0,<4.50", "tokenizers>=0.22.0,<0.23.1", "sentence-transformers>=3.0"])
+        packages.extend(["transformers>=4.40,<4.50", "tokenizers>=0.22.0,<0.23.1", "sentence-transformers>=3.0"])
     if "modelscope" in required_packages:
         packages.append("modelscope")
 
