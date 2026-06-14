@@ -1160,7 +1160,11 @@ if _bs_orig is not None:
     if target.exists() and target.read_text(encoding="utf-8") == content:
         return
     target.write_text(content, encoding="utf-8")
-    logger.info("sitecustomize guard written runtime_channel=%s path=%s", _sanitize_for_log(runtime_channel), target)
+    logger.info(
+        "sitecustomize guard written runtime_channel=%s path=%s",
+        _sanitize_for_log(runtime_channel),
+        _sanitize_for_log(str(target)),
+    )
     logger.info("installed sitecustomize guard runtime_channel=%s", _sanitize_for_log(runtime_channel))
 
 
