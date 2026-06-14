@@ -3346,7 +3346,7 @@ export function SettingsPage({
                             placeholder="BAAI/bge-large-zh-v1.5"
                           />
                           <span className="settings-input-caption">
-                            推荐使用 BAAI/bge-large-zh-v1.5 或 BAAI/bge-small-zh-v1.5。
+                            推荐使用 BAAI/bge-large-zh-v1.5 或 Qwen/Qwen3-Embedding-8B。
                           </span>
                         </label>
                         <div className="settings-inline-actions" style={{ gridColumn: "1 / -1" }}>
