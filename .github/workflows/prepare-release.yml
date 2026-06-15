@@ -164,7 +164,7 @@ jobs:
           Get-ChildItem -Path $assetDir | Select-Object Name, Length
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ needs.detect-release.outputs.next_version }}
           path: |
@@ -332,7 +332,7 @@ jobs:
           ls -lh "$asset_dir"
 
       - name: Upload macOS release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-macos-${{ matrix.arch }}-${{ needs.detect-release.outputs.next_version }}
           path: |
