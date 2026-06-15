@@ -275,7 +275,7 @@ jobs:
         run: npm run build:web
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Docker image for validation
         uses: docker/build-push-action@v7
