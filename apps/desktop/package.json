@@ -52,7 +52,7 @@
     "electron-builder": "^26.15.2",
     "typescript": "^5.8.2",
     "vite": "^8.0.16",
-    "wait-on": "^8.0.3"
+    "wait-on": "^9.0.10"
   },
   "build": {
     "appId": "com.bilisum.desktop",
