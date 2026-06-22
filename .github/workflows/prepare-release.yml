@@ -516,7 +516,7 @@ jobs:
             --target-ref "v${{ needs.detect-release.outputs.next_version }}"
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.detect-release.outputs.next_version }}
           body_path: dist/release-notes.md
