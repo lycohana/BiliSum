@@ -48,8 +48,8 @@
     "@vitejs/plugin-react": "^6.0.2",
     "concurrently": "^10.0.3",
     "cross-env": "^10.1.0",
-    "electron": "^42.3.3",
-    "electron-builder": "^26.15.2",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.8.2",
     "vite": "^8.0.16",
     "wait-on": "^8.0.3"
