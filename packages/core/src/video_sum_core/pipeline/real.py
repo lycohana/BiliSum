@@ -239,6 +239,11 @@ class PipelineSettings:
     visual_evidence_image_quality: int = 85
     visual_evidence_timeout_seconds: int = 120
     visual_evidence_retry_count: int = 1
+    twelvelabs_summary_enabled: bool = False
+    twelvelabs_api_key: str = ""
+    twelvelabs_model: str = "pegasus1.5"
+    twelvelabs_base_url: str = "https://api.twelvelabs.io/v1.3"
+    twelvelabs_prompt: str = ""
     visual_note_system_prompt: str = ""
     visual_note_user_prompt_template: str = ""
     visual_frame_planning_prompt: str = ""

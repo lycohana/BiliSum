@@ -146,6 +146,7 @@ function maskConfiguredApiKeys(settings: ServiceSettings | null): ServiceSetting
     knowledge_llm_api_key: settings.knowledge_llm_api_key_configured ? MASKED_API_KEY : settings.knowledge_llm_api_key,
     siliconflow_embedding_api_key: settings.siliconflow_embedding_api_key_configured ? MASKED_API_KEY : settings.siliconflow_embedding_api_key,
     visual_evidence_api_key: settings.visual_evidence_api_key_configured ? MASKED_API_KEY : settings.visual_evidence_api_key,
+    twelvelabs_api_key: settings.twelvelabs_api_key_configured ? MASKED_API_KEY : settings.twelvelabs_api_key,
   };
 }
 
@@ -199,6 +200,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "summary_chunk_target_chars", title: "分块目标字符数", description: "LLM 分块处理的目标长度。", keywords: ["分块", "chunk", "字符", "长度"] },
   { category: "generation", targetKey: "summary_chunk_overlap_segments", title: "分块重叠段数", description: "摘要分块之间保留的重叠段落。", keywords: ["重叠", "overlap", "分块"] },
   { category: "generation", targetKey: "summary_chunk_retry_count", title: "重试次数", description: "摘要 API 失败后的重试次数。", keywords: ["重试", "retry", "失败"] },
+  { category: "generation", targetKey: "twelvelabs_summary_enabled", title: "Pegasus 视频理解", description: "Twelve Labs Pegasus 直接观看画面生成摘要。仅本地视频生效。", keywords: ["twelvelabs", "pegasus", "视频理解", "画面", "笔记"] },
   { category: "prompts", targetKey: "summary_system_prompt", title: "摘要 System Prompt", description: "控制视频摘要生成的角色、风格和整体约束。", keywords: ["摘要", "prompt", "system", "提示词", "风格"] },
   { category: "prompts", targetKey: "summary_user_prompt_template", title: "摘要 User Template", description: "控制摘要变量、结构和输出格式。", keywords: ["摘要", "template", "模板", "格式", "transcript"] },
   { category: "prompts", targetKey: "knowledge_note_system_prompt", title: "知识笔记 System Prompt", description: "控制知识笔记角色、风格和整体约束。", keywords: ["知识笔记", "prompt", "system", "提示词", "风格"] },
@@ -1536,6 +1538,9 @@ export function SettingsPage({
     }
     if (nextForm.visual_evidence_api_key_configured && (!String(nextForm.visual_evidence_api_key || "").trim() || isMaskedApiKey(nextForm.visual_evidence_api_key))) {
       delete payload.visual_evidence_api_key;
+    }
+    if (nextForm.twelvelabs_api_key_configured && (!String(nextForm.twelvelabs_api_key || "").trim() || isMaskedApiKey(nextForm.twelvelabs_api_key))) {
+      delete payload.twelvelabs_api_key;
     }
     if (nextForm.siliconflow_embedding_api_key_configured && (!String(nextForm.siliconflow_embedding_api_key || "").trim() || isMaskedApiKey(nextForm.siliconflow_embedding_api_key))) {
       delete payload.siliconflow_embedding_api_key;
@@ -3207,6 +3212,47 @@ export function SettingsPage({
                 <section className="settings-tree-panel">
                   <header className="settings-tree-panel-header">
                     <span className="settings-tree-index">{(form.visual_note_mode || "text") !== "text" ? "05" : "04"}</span>
+                    <div>
+                      <h3>Twelve Labs Pegasus 视频理解</h3>
+                      <p>可选。仅对本地视频生效，直接"看"画面生成理解摘要并写入知识笔记。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <label className="settings-input-group" ref={registerFocusTarget("twelvelabs_summary_enabled") as (node: HTMLLabelElement | null) => void}>
+                      <span className="settings-input-label">启用 Pegasus 视频摘要</span>
+                      <select
+                        className="settings-select-field"
+                        value={form.twelvelabs_summary_enabled ? "true" : "false"}
+                        onChange={(e) => updateForm({ ...form, twelvelabs_summary_enabled: e.target.value === "true" })}
+                      >
+                        <option value="false">关闭</option>
+                        <option value="true">开启</option>
+                      </select>
+                      <span className="settings-input-caption">仅本地视频生效，不影响在线视频摘要流程。</span>
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">Twelve Labs API Key</span>
+                      <input className="settings-input-field" type="password" value={form.twelvelabs_api_key || ""} placeholder="tlk_..." autoComplete="off" onChange={(e) => updateForm({ ...form, twelvelabs_api_key: e.target.value, twelvelabs_api_key_configured: false })} />
+                      <span className="settings-input-caption">可在 <a href="https://twelvelabs.io" target="_blank" rel="noreferrer">twelvelabs.io</a> 免费申请。</span>
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">Pegasus 模型</span>
+                      <input className="settings-input-field" type="text" value={form.twelvelabs_model || "pegasus1.5"} placeholder="pegasus1.5" onChange={(e) => updateForm({ ...form, twelvelabs_model: e.target.value })} />
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">API Base URL</span>
+                      <input className="settings-input-field" type="text" value={form.twelvelabs_base_url || "https://api.twelvelabs.io/v1.3"} placeholder="https://api.twelvelabs.io/v1.3" onChange={(e) => updateForm({ ...form, twelvelabs_base_url: e.target.value })} />
+                    </label>
+                    <label className="settings-input-group">
+                      <span className="settings-input-label">Pegasus 提示词（留空用默认）</span>
+                      <textarea className="textarea-field" rows={4} value={form.twelvelabs_prompt || ""} placeholder="留空则使用内置默认提示词" onChange={(e) => updateForm({ ...form, twelvelabs_prompt: e.target.value })} />
+                    </label>
+                  </div>
+                </section>
+
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">{(form.visual_note_mode || "text") !== "text" ? "06" : "05"}</span>
                     <div>
                       <h3>长视频切块</h3>
                       <p>控制长视频拆分摘要的连续性和单块长度。</p>
