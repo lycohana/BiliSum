@@ -32,7 +32,7 @@ SECRET_SETTINGS_FIELDS = {
     "knowledge_llm_api_key",
     "siliconflow_embedding_api_key",
     "visual_evidence_api_key",
-    "siliconflow_embedding_api_key",
+    "twelvelabs_api_key",
 }
 MASKED_SECRET_PLACEHOLDER = "******"
 
@@ -101,6 +101,11 @@ class SettingsUpdatePayload(BaseModel):
     visual_evidence_image_quality: int | None = None
     visual_evidence_timeout_seconds: int | None = None
     visual_evidence_retry_count: int | None = None
+    twelvelabs_summary_enabled: bool | None = None
+    twelvelabs_api_key: str | None = None
+    twelvelabs_model: str | None = None
+    twelvelabs_base_url: str | None = None
+    twelvelabs_prompt: str | None = None
     llm_provider: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None

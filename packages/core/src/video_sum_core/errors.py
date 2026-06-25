@@ -20,3 +20,11 @@ class TranscriptionAuthenticationError(VideoSumError):
 
 class UnsupportedInputError(VideoSumError):
     """Raised when an input type is not supported by the current pipeline."""
+
+
+class PegasusConfigurationError(VideoSumError):
+    """Raised when Twelve Labs Pegasus settings are incomplete or invalid."""
+
+
+class PegasusAuthenticationError(VideoSumError):
+    """Raised when Twelve Labs rejects the supplied API key."""

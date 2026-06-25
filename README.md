@@ -79,6 +79,23 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
   <p><i>跨视频 AI 检索与问答，标签管理，可生长的知识体系</i></p>
 </div>
 
+### Twelve Labs Pegasus 视频理解（可选） `新增`
+
+针对本地视频，可选开启 [Twelve Labs](https://twelvelabs.io/) 的 Pegasus 视频理解模型。Pegasus 直接“看”视频画面（演示步骤、界面操作、图表、代码、实验结果等），生成一段视频理解摘要，并自动并入知识笔记、随之进入知识库。它与基于转写文本的 LLM 摘要互补——当画面信息无法从字幕/转写获知时尤其有用。
+
+- 完全可选、不改默认行为：默认关闭，未配置或调用失败都会安静跳过，不影响原有摘要与知识笔记。
+- 仅对本地视频文件生效（直接读取磁盘上的原始视频）。
+- 在设置页 → Twelve Labs Pegasus 视频理解中填入 API Key 并开启。
+- 复用现有 `httpx` 直连 REST API（`/v1.3/analyze`），不引入额外依赖。
+
+```env
+VIDEO_SUM_TWELVELABS_SUMMARY_ENABLED=true
+VIDEO_SUM_TWELVELABS_API_KEY=tlk-your-key
+VIDEO_SUM_TWELVELABS_MODEL=pegasus1.5
+```
+
+> 可在 https://twelvelabs.io 免费申请 API Key，有较慷慨的免费额度。
+
 ### 多 P 视频与全集总结
 
 自动检测分 P 视频，支持选择单个分 P 或批量创建任务。全集总结模式可聚合所有分 P 内容生成一篇总笔记。
@@ -113,7 +130,7 @@ VLM 理解型图文笔记是一版从零设计的笔记生成方式：VLM 阅读
 | 后端服务 | FastAPI + SQLite |
 | 视频下载 | yt-dlp |
 | 语音转写 | SiliconFlow ASR / 多模态 ASR / 本地 Whisper / FunASR（QwenASR） |
-| 摘要生成 | OpenAI-compatible / Anthropic Claude / 本地规则降级 |
+| 摘要生成 | OpenAI-compatible / Anthropic Claude / 本地规则降级 / Twelve Labs Pegasus 视频理解（可选） |
 | 视觉模型 | OpenAI / Anthropic / 兼容接口（自动格式适配） |
 | 知识库 RAG | Embedding 向量检索 + LLM Agent |
 | 思维导图 | ReactFlow |

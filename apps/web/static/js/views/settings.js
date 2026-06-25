@@ -253,6 +253,19 @@ export function renderSettingsView(state) {
             ${renderTextarea("summary_user_prompt_template", "用户提示词模板", settings.summary_user_prompt_template || "", 6)}
           </section>
 
+          <!-- Twelve Labs Pegasus 视频理解（可选） -->
+          <section class="settings-subsection">
+            <h3>Twelve Labs Pegasus 视频理解</h3>
+            <label class="toggle-row">
+              <span>启用 Pegasus 视频摘要（仅本地视频，写入知识笔记）</span>
+              <input id="twelvelabs_summary_enabled" type="checkbox" ${settings.twelvelabs_summary_enabled ? "checked" : ""} />
+            </label>
+            ${renderInput("twelvelabs_api_key", "Twelve Labs API Key", settings.twelvelabs_api_key || "", "password", "tlk_...", "current-password")}
+            ${renderInput("twelvelabs_model", "Pegasus 模型", settings.twelvelabs_model || "pegasus1.5", "text", "pegasus1.5")}
+            ${renderInput("twelvelabs_base_url", "API Base URL", settings.twelvelabs_base_url || "", "text", "https://api.twelvelabs.io/v1.3")}
+            ${renderTextarea("twelvelabs_prompt", "Pegasus 提示词（留空用默认）", settings.twelvelabs_prompt || "", 4)}
+          </section>
+
           <!-- 知识库 LLM -->
           <section class="settings-subsection">
             <h3>知识库 LLM</h3>

@@ -47,10 +47,17 @@ from video_sum_infra.runtime import (
 from video_sum_core.errors import (
     LLMAuthenticationError,
     LLMConfigurationError,
+    PegasusAuthenticationError,
+    PegasusConfigurationError,
     TranscriptionAuthenticationError,
     TranscriptionConfigurationError,
     UnsupportedInputError,
     VideoSumError,
+)
+from video_sum_core.twelvelabs import (
+    DEFAULT_TWELVELABS_PROMPT,
+    analyze_video_with_pegasus,
+    video_context_from_file,
 )
 from video_sum_core.models.tasks import InputType, MindMapNode, TaskInput, TaskMindMap, TaskResult
 from video_sum_core.pipeline.base import (
@@ -560,12 +567,16 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "transcript",
             },
         )
+        pegasus_video = None
+        if is_video_file and self._settings.twelvelabs_summary_enabled:
+            pegasus_video = video_context_from_file(source_path)
         summary = self._summarize(
             transcript,
             segments,
             title,
             emit,
             prompt_preset_id=task_input.options.prompt_preset_id,
+            pegasus_video=pegasus_video,
         )
         emit("exporting", 97, "正在导出任务结果")
         result = self._export_result(task_dir, title, transcript, segments, summary)
@@ -2173,6 +2184,7 @@ class RealPipelineRunner(PipelineRunner):
         emit: Callable[[str, int, str, dict[str, object] | None], None],
         source_kind: str | None = None,
         prompt_preset_id: str | None = None,
+        pegasus_video: dict[str, str] | None = None,
     ) -> dict[str, object]:
         emit(
             "summarizing",
@@ -2272,6 +2284,7 @@ class RealPipelineRunner(PipelineRunner):
                         "result_scope": "knowledge_note",
                     },
                 )
+        self._maybe_append_pegasus_summary(summary, title, pegasus_video, emit)
         emit("summarizing", 99, "结果整理完成")
         logger.info(
             "summary finished title=%s bullet_points=%d chapters=%d overview_chars=%d",
@@ -2281,6 +2294,47 @@ class RealPipelineRunner(PipelineRunner):
             len(str(summary.get("overview") or "")),
         )
         return summary
+
+    def _maybe_append_pegasus_summary(
+        self,
+        summary: dict[str, object],
+        title: str,
+        pegasus_video: dict[str, str] | None,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> None:
+        """可选：用 Twelve Labs Pegasus 直接理解视频画面，把生成的视频理解摘要
+        追加到知识笔记末尾，随知识笔记一起进入知识库。
+
+        这是纯增量的可选步骤：未开启、缺少可直连的视频来源或调用失败时都会安静跳过，
+        绝不影响已生成的文本摘要与知识笔记。
+        """
+        if not self._settings.twelvelabs_summary_enabled:
+            return
+        if not pegasus_video:
+            logger.info("pegasus summary skipped: no direct video source available")
+            return
+        api_key = str(self._settings.twelvelabs_api_key or "").strip()
+        if not api_key:
+            logger.info("pegasus summary skipped: api key not configured")
+            return
+        emit("summarizing", 98, "正在调用 Twelve Labs Pegasus 理解视频画面")
+        try:
+            pegasus_text = analyze_video_with_pegasus(
+                api_key=api_key,
+                video=pegasus_video,
+                prompt=self._settings.twelvelabs_prompt or DEFAULT_TWELVELABS_PROMPT,
+                model_name=self._settings.twelvelabs_model or "pegasus1.5",
+                base_url=self._settings.twelvelabs_base_url or "https://api.twelvelabs.io/v1.3",
+            )
+        except (PegasusConfigurationError, PegasusAuthenticationError) as exc:
+            logger.warning("pegasus summary failed, skipping enrichment reason=%s", exc)
+            emit("summarizing", 98, f"Pegasus 视频理解跳过：{exc}", {"pegasus": "skipped", "reason": str(exc)})
+            return
+        section = f"\n\n## Pegasus 视频理解摘要\n\n{pegasus_text.strip()}\n"
+        existing_note = str(summary.get("knowledgeNoteMarkdown") or "").strip()
+        summary["knowledgeNoteMarkdown"] = (existing_note + section) if existing_note else section.strip()
+        summary["pegasus_summary"] = pegasus_text.strip()
+        emit("summarizing", 98, "Pegasus 视频理解摘要已并入知识笔记", {"pegasus": "ok"})
 
     def _build_summary_start_message(self) -> str:
         if self._settings.llm_enabled and self._settings.llm_api_key:
