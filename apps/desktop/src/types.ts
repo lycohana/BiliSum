@@ -428,6 +428,12 @@ export type ServiceSettings = {
   visual_evidence_image_quality: number;
   visual_evidence_timeout_seconds: number;
   visual_evidence_retry_count: number;
+  twelvelabs_summary_enabled: boolean;
+  twelvelabs_api_key: string;
+  twelvelabs_api_key_configured?: boolean;
+  twelvelabs_model: string;
+  twelvelabs_base_url: string;
+  twelvelabs_prompt: string;
   llm_provider: string;
   llm_api_key: string;
   llm_base_url: string;

@@ -345,6 +345,8 @@ export function renderSettingsView(state) {
           ${renderRow("摘要模式", settings.summary_mode || "-", "neutral")}
           ${renderRow("分块大小", String(settings.summary_chunk_target_chars || "-"), "neutral")}
           ${renderRow("分块并发", String(settings.summary_chunk_concurrency || "-"), "neutral")}
+          ${renderRow("Pegasus 视频理解", settings.twelvelabs_summary_enabled ? "✓ 已启用" : "✗ 关闭", settings.twelvelabs_summary_enabled ? "success" : "neutral")}
+          ${renderRow("Twelve Labs API Key", settings.twelvelabs_api_key_configured ? "✓ 已配置" : "✗ 未配置", settings.twelvelabs_api_key_configured ? "success" : "warning")}
           ${renderRow("API Key", settings.llm_api_key_configured ? "✓ 已配置" : "✗ 未配置", settings.llm_api_key_configured ? "success" : "warning")}
         </div>
       </article>
