@@ -29,7 +29,7 @@
     "@xyflow/react": "^12.11.0",
     "electron-updater": "^6.8.9",
     "html-to-image": "^1.11.13",
-    "katex": "^0.17.0",
+    "katex": "^0.18.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-arborist": "^3.10.1",
