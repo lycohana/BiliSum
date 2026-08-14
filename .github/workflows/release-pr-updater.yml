@@ -71,7 +71,10 @@ jobs:
             echo "target=${current}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          target="$(python scripts/bump_version.py "${kind}")"
+          # Compute the target version WITHOUT writing any files: bump_version.py
+          # (the CLI) also calls sync_version and would mutate the checkout,
+          # which breaks the "already synced" check in the next step.
+          target="$(python -c "import sys; sys.path.insert(0, 'scripts'); from versioning import bump_version, read_source_version; print(bump_version(read_source_version(), '${kind}'))")"
           echo "target=${target}" >> "$GITHUB_OUTPUT"
 
       - name: Sync version files on the PR branch
