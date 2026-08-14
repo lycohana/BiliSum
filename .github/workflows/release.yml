@@ -1,0 +1,431 @@
+name: Release
+
+# tag push（v*）触发：构建 Windows / macOS 包并创建 GitHub Release。
+# tag 由 create-release-tag.yml 在「Release vX.Y.Z」PR 合并后自动推送，
+# 也可以手动推送同名 tag 触发（版本文件需与 tag 一致）。
+#
+# tag 名决定发布类型：
+#   - vX.Y.Z             → 发行版（stable），附带升级通道 latest.yml / latest-mac.yml
+#   - vX.Y.Z-beta.N 等   → 预发布（prerelease），仅上传安装包，不覆盖稳定版升级通道
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  electron_config_cache: ${{ github.workspace }}/.cache/electron
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.define.outputs.release_version }}
+      prerelease: ${{ steps.define.outputs.prerelease }}
+
+    steps:
+      - name: Define release version and prerelease flag
+        id: define
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          if [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "release_version=${version}" >> "$GITHUB_OUTPUT"
+
+  validate-windows-package:
+    needs: meta
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('apps/desktop/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check --upgrade pip uv
+
+      - name: Verify version files match the tag
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          python scripts/bump_version.py --check
+
+      - name: Install desktop dependencies
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false
+
+      - name: Set up FFmpeg
+        id: setup-ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+          architecture: x64
+
+      - name: Prepare electron-builder cache
+        shell: pwsh
+        run: |
+          $winCodeSignDir = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
+          $darwinLibDir = Join-Path $winCodeSignDir "darwin\10.12\lib"
+          New-Item -ItemType Directory -Force -Path $darwinLibDir | Out-Null
+          "2.6.0" | Out-File -FilePath (Join-Path $winCodeSignDir ".version") -Encoding utf8
+          foreach ($name in @("libcrypto.dylib", "libssl.dylib")) {
+            $target = Join-Path $darwinLibDir $name
+            if (-not (Test-Path $target)) {
+              New-Item -ItemType File -Force -Path $target | Out-Null
+            }
+          }
+
+      - name: Build Windows release
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CSC_PLATFORM: "windows"
+          VIDEO_SUM_FFMPEG_DIR: ${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}
+        run: npm run package:win
+
+      - name: Collect release assets
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          $distDir = Join-Path $env:GITHUB_WORKSPACE "dist"
+          $assetDir = Join-Path $env:GITHUB_WORKSPACE "dist\release-assets"
+          $installerPattern = "BiliSum-$env:RELEASE_VERSION-*-Setup.exe"
+
+          if (-not (Test-Path $distDir)) {
+            throw "Build output directory not found: $distDir"
+          }
+
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+          $installer = Get-ChildItem -Path $distDir -Recurse -File |
+            Where-Object { $_.Name -like $installerPattern } |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "No Windows installer matching $installerPattern was found under $distDir"
+          }
+
+          $sourceDir = Split-Path -Parent $installer.FullName
+          $blockmap = Get-Item -LiteralPath "$($installer.FullName).blockmap" -ErrorAction SilentlyContinue
+          if (-not $blockmap) {
+            throw "Installer blockmap not found for $($installer.Name)"
+          }
+
+          $latestYml = Join-Path $sourceDir "latest.yml"
+          if (-not (Test-Path $latestYml)) {
+            throw "latest.yml was not found next to installer under $sourceDir"
+          }
+
+          Copy-Item -LiteralPath $installer.FullName -Destination $assetDir -Force
+          Copy-Item -LiteralPath $blockmap.FullName -Destination $assetDir -Force
+          Copy-Item -LiteralPath $latestYml -Destination $assetDir -Force
+
+          Write-Host "Collected release assets:"
+          Get-ChildItem -Path $assetDir | Select-Object Name, Length
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ needs.meta.outputs.release_version }}
+          path: |
+            dist/release-assets/BiliSum-*-Setup.exe
+            dist/release-assets/BiliSum-*-Setup.exe.blockmap
+            dist/release-assets/latest.yml
+          if-no-files-found: error
+
+  validate-macos-package:
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    env:
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('apps/desktop/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Cache electron-builder downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/electron-builder
+          key: ${{ runner.os }}-electron-builder-${{ hashFiles('apps/desktop/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-builder-
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check --upgrade pip uv
+
+      - name: Verify version files match the tag
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          python scripts/bump_version.py --check
+
+      - name: Install desktop dependencies
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false
+
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+
+      - name: Build macOS release
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm --prefix apps/desktop run package:mac -- --${{ matrix.arch }}
+
+      - name: Collect macOS release assets
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          asset_dir="$GITHUB_WORKSPACE/dist/release-assets-macos"
+          dmg_pattern="BiliSum-${RELEASE_VERSION}-mac-${{ matrix.arch }}.dmg"
+          zip_pattern="BiliSum-${RELEASE_VERSION}-mac-${{ matrix.arch }}.zip"
+
+          if [[ ! -d "$GITHUB_WORKSPACE/dist" ]]; then
+            echo "Build output directory not found: $GITHUB_WORKSPACE/dist" >&2
+            exit 1
+          fi
+
+          mkdir -p "$asset_dir"
+
+          dmg_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$dmg_pattern" -print -quit)"
+          if [[ -z "$dmg_path" ]]; then
+            echo "No macOS DMG matching $dmg_pattern was found under $GITHUB_WORKSPACE/dist" >&2
+            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
+            exit 1
+          fi
+          zip_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$zip_pattern" -print -quit)"
+          if [[ -z "$zip_path" ]]; then
+            echo "No macOS ZIP matching $zip_pattern was found under $GITHUB_WORKSPACE/dist" >&2
+            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
+            exit 1
+          fi
+          latest_mac_yml="$(find "$GITHUB_WORKSPACE/dist" -type f -name "latest-mac.yml" -print -quit)"
+          if [[ -z "$latest_mac_yml" ]]; then
+            echo "No latest-mac.yml was found under $GITHUB_WORKSPACE/dist" >&2
+            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
+            exit 1
+          fi
+
+          python "$GITHUB_WORKSPACE/packaging/desktop/validate_macos_package.py" \
+            --dmg "$dmg_path" \
+            --zip "$zip_path" \
+            --version "$RELEASE_VERSION" \
+            --arch "${{ matrix.arch }}"
+
+          cp "$dmg_path" "$asset_dir/"
+          cp "$zip_path" "$asset_dir/"
+          cp "$latest_mac_yml" "$asset_dir/latest-mac-${{ matrix.arch }}.yml"
+          blockmap_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$(basename "$zip_path").blockmap" -print -quit)"
+          if [[ -n "$blockmap_path" ]]; then
+            cp "$blockmap_path" "$asset_dir/"
+          fi
+          echo "Collected macOS release assets:"
+          ls -lh "$asset_dir"
+
+      - name: Upload macOS release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-macos-${{ matrix.arch }}-${{ needs.meta.outputs.release_version }}
+          path: |
+            dist/release-assets-macos/BiliSum-*.dmg
+            dist/release-assets-macos/BiliSum-*.zip
+            dist/release-assets-macos/BiliSum-*.zip.blockmap
+            dist/release-assets-macos/latest-mac-*.yml
+          if-no-files-found: error
+
+  publish-release:
+    needs:
+      - meta
+      - validate-windows-package
+      - validate-macos-package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ needs.meta.outputs.release_version }}
+          path: dist/release-assets
+
+      - name: Download macOS release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-macos-*-${{ needs.meta.outputs.release_version }}
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: Drop update feeds for prerelease
+        if: ${{ needs.meta.outputs.prerelease == 'true' }}
+        run: |
+          rm -f dist/release-assets/latest.yml dist/release-assets/latest-mac*.yml
+
+      - name: Compose macOS update feed (stable only)
+        if: ${{ needs.meta.outputs.prerelease == 'false' }}
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import re
+          from pathlib import Path
+
+          asset_dir = Path("dist/release-assets")
+          version = os.environ["RELEASE_VERSION"]
+          arches = ("x64", "arm64")
+          files = []
+          for arch in arches:
+              zip_path = asset_dir / f"BiliSum-{version}-mac-{arch}.zip"
+              dmg_path = asset_dir / f"BiliSum-{version}-mac-{arch}.dmg"
+              if not zip_path.exists():
+                  raise SystemExit(f"Missing macOS ZIP for {arch}: {zip_path}")
+              if not dmg_path.exists():
+                  raise SystemExit(f"Missing macOS DMG for {arch}: {dmg_path}")
+              data = zip_path.read_bytes()
+              files.append({
+                  "url": zip_path.name,
+                  "sha512": base64.b64encode(hashlib.sha512(data).digest()).decode("ascii"),
+                  "size": zip_path.stat().st_size,
+                  "arch": arch,
+              })
+
+          release_date = ""
+          for feed in sorted(asset_dir.glob("latest-mac-*.yml")):
+              text = feed.read_text(encoding="utf-8")
+              match = re.search(r"^releaseDate:\s*(.+)$", text, re.M)
+              if match:
+                  release_date = match.group(1).strip()
+                  break
+          if not release_date:
+              release_date = os.environ.get("GITHUB_RUN_STARTED_AT", "")
+          if not release_date:
+              from datetime import datetime, timezone
+              release_date = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+          lines = [
+              f"version: {version}",
+              "files:",
+          ]
+          for item in files:
+              lines.extend([
+                  f"  - url: {item['url']}",
+                  f"    sha512: {item['sha512']}",
+                  f"    size: {item['size']}",
+                  f"    arch: {item['arch']}",
+              ])
+          first = next(item for item in files if item["arch"] == "x64")
+          lines.extend([
+              f"path: {first['url']}",
+              f"sha512: {first['sha512']}",
+              f"releaseDate: {release_date}",
+              "",
+          ])
+          (asset_dir / "latest-mac.yml").write_text("\n".join(lines), encoding="utf-8")
+          print((asset_dir / "latest-mac.yml").read_text(encoding="utf-8"))
+          PY
+
+      - name: Generate release notes
+        run: |
+          python scripts/generate_release_notes.py \
+            --version "${{ needs.meta.outputs.release_version }}" \
+            --repo "${{ github.repository }}" \
+            --output dist/release-notes.md \
+            --target-ref "v${{ needs.meta.outputs.release_version }}"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: dist/release-notes.md
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
+          files: |
+            dist/release-assets/BiliSum-*-Setup.exe
+            dist/release-assets/BiliSum-*-Setup.exe.blockmap
+            dist/release-assets/BiliSum-*.dmg
+            dist/release-assets/BiliSum-*.zip
+            dist/release-assets/BiliSum-*.zip.blockmap
+            dist/release-assets/latest.yml
+            dist/release-assets/latest-mac.yml

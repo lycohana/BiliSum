@@ -6,8 +6,21 @@ from pathlib import Path
 import re
 
 
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+# PEP 440 / npm-semver compatible: X.Y.Z optionally followed by a prerelease
+# segment (e.g. 1.20.0-beta.1, 1.20.0-rc.2). Kept aligned with what
+# pyproject.toml (PEP 440), package.json (semver) and electron-builder accept.
+SEMVER_RE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+PRERELEASE_RE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-"
+    r"(?P<prefix>[0-9A-Za-z-]+)(?:\.(?P<number>[0-9]+))?$"
+)
 PYPROJECT_VERSION_RE = re.compile(r'(?m)^version = "[^"]+"$')
+
+# Prerelease kinds selectable through the `release: <kind>` PR label.
+PRERELEASE_KINDS: tuple[str, ...] = ("beta", "rc", "alpha")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
@@ -47,8 +60,30 @@ def read_source_version() -> str:
 
 
 def bump_version(current: str, level: str) -> str:
-    major, minor, patch = [int(part) for part in normalize_version(current).split(".")]
+    normalized = normalize_version(current)
+    base = normalized.split("-", 1)[0]
+    major, minor, patch = [int(part) for part in base.split(".")]
     normalized_level = level.strip().lower()
+    prerelease_match = PRERELEASE_RE.match(normalized)
+
+    if normalized_level in {"beta", "rc", "alpha"}:
+        if normalized_level not in PRERELEASE_KINDS:
+            raise ValueError(f"Unsupported prerelease kind: {level!r}")
+        if prerelease_match and prerelease_match.group("prefix") == normalized_level:
+            number = int(prerelease_match.group("number") or 1)
+            return f"{major}.{minor}.{patch}-{normalized_level}.{number + 1}"
+        return f"{major}.{minor}.{patch}-{normalized_level}.1"
+
+    # Finalizing an existing prerelease (e.g. 1.20.0-beta.1 + patch) releases
+    # the final version instead of bumping past it.
+    if prerelease_match is not None:
+        if normalized_level == "major":
+            return f"{major + 1}.0.0"
+        if normalized_level == "minor":
+            return f"{major}.{minor + 1}.0"
+        if normalized_level == "patch":
+            return f"{major}.{minor}.{patch}"
+
     if normalized_level == "major":
         return f"{major + 1}.0.0"
     if normalized_level == "minor":
@@ -56,6 +91,14 @@ def bump_version(current: str, level: str) -> str:
     if normalized_level == "patch":
         return f"{major}.{minor}.{patch + 1}"
     return normalize_version(level)
+
+
+def bump_prerelease_kind(current: str, kind: str) -> str:
+    """Return the prerelease version for *kind* based on the current version.
+
+    ``1.20.0`` -> ``1.20.0-beta.1``; ``1.20.0-beta.1`` -> ``1.20.0-beta.2``.
+    """
+    return bump_version(current, kind)
 
 
 def sync_version(version: str) -> list[Path]:

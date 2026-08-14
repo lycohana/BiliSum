@@ -1,0 +1,104 @@
+name: Release PR Updater
+
+# 在「Release vX.Y.Z」PR 上通过 label 选择版本类型：
+#   - 添加 label release:beta / release:rc / release:alpha → 生成开发版版本号
+#     （vX.Y.Z-beta.1，重复添加递增）并同步 PR 标题与分支版本文件
+#   - 移除这些 label → 恢复为发行版版本号
+
+on:
+  pull_request:
+    types:
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-pr-updater-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  update-release-pr:
+    if: ${{ startsWith(github.event.pull_request.title, 'Release v') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Decide target version from labels
+        id: decide
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh pr view "$PR_NUMBER" --json title,labels)"
+          current="$(printf '%s' "$pr_json" | python -c "import json,sys; print(json.load(sys.stdin)['title'].replace('Release v','').strip())")"
+          label_names="$(printf '%s' "$pr_json" | python -c "import json,sys; print(' '.join(l['name'] for l in json.load(sys.stdin)['labels']))")"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "labels=$label_names" >> "$GITHUB_OUTPUT"
+
+          kind=""
+          for candidate in beta rc alpha; do
+            if printf '%s' "$label_names" | grep -q "release:${candidate}"; then
+              kind="$candidate"
+              break
+            fi
+          done
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${kind}" ]; then
+            target="$(python scripts/bump_version.py "${kind}")"
+          else
+            target="$(printf '%s' "${current}" | sed 's/-.*//')"
+          fi
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync version files on the PR branch
+        env:
+          TARGET: ${{ steps.decide.outputs.target }}
+          CURRENT: ${{ steps.decide.outputs.current }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git"
+
+          current_file="$(cat VERSION | tr -d '[:space:]')"
+          if [ "${current_file}" = "${TARGET}" ]; then
+            echo "Version files already at ${TARGET}; nothing to commit."
+            exit 0
+          fi
+          python scripts/bump_version.py "${TARGET}"
+          git add VERSION pyproject.toml apps/service/pyproject.toml \
+            packages/core/pyproject.toml packages/infra/pyproject.toml \
+            apps/desktop/package.json apps/desktop/package-lock.json \
+            packages/npx/package.json
+          git commit -m "chore(release): v${TARGET} [skip ci]"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+
+      - name: Update pull request title
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TARGET: ${{ steps.decide.outputs.target }}
+          CURRENT: ${{ steps.decide.outputs.current }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${CURRENT}" = "${TARGET}" ]; then
+            echo "PR title already reflects v${TARGET}."
+            exit 0
+          fi
+          gh pr edit "$PR_NUMBER" --title "Release v${TARGET}"

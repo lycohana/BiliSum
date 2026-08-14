@@ -1,5 +1,15 @@
 name: Prepare Release
 
+# 版本发布流程的第一阶段：推送带 * 标记（或 BREAKING CHANGE）的提交到
+# main/master 后，自动 bump 版本并创建「Release vX.Y.Z」PR。
+# 合并该 PR 会触发 create-release-tag.yml 打 tag，tag 再触发 release.yml
+# 构建并发布 GitHub Release。
+#
+# 在 Release PR 里选择版本类型：
+#   - 默认（无 label）：发行版，版本号 vX.Y.Z
+#   - 添加 label `release: beta` / `release: rc` / `release: alpha`：
+#     自动生成开发版版本号（vX.Y.Z-beta.1 等）并更新 PR 标题
+
 on:
   push:
     branches:
@@ -8,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 env:
   electron_config_cache: ${{ github.workspace }}/.cache/electron
@@ -44,315 +55,10 @@ jobs:
         if: ${{ steps.detect.outputs.bump == '' }}
         run: echo "No release bump detected for this push."
 
-  validate-windows-package:
+  create-release-pr:
     needs: detect-release
-    if: ${{ needs.detect-release.outputs.bump != '' }}
-    runs-on: windows-latest
-    outputs:
-      release_version: ${{ needs.detect-release.outputs.next_version }}
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Cache Electron downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('apps/desktop/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-
-
-      - name: Install uv
-        run: python -m pip install --disable-pip-version-check --upgrade pip uv
-
-      - name: Apply release version for validation build
-        run: python scripts/bump_version.py "${{ needs.detect-release.outputs.bump }}"
-
-      - name: Verify version files are synced
-        run: python scripts/bump_version.py --check
-
-      - name: Install desktop dependencies
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false
-
-      - name: Set up FFmpeg
-        id: setup-ffmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          ffmpeg-version: release
-          architecture: x64
-
-      - name: Prepare electron-builder cache
-        shell: pwsh
-        run: |
-          $winCodeSignDir = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
-          $darwinLibDir = Join-Path $winCodeSignDir "darwin\10.12\lib"
-          New-Item -ItemType Directory -Force -Path $darwinLibDir | Out-Null
-          "2.6.0" | Out-File -FilePath (Join-Path $winCodeSignDir ".version") -Encoding utf8
-          foreach ($name in @("libcrypto.dylib", "libssl.dylib")) {
-            $target = Join-Path $darwinLibDir $name
-            if (-not (Test-Path $target)) {
-              New-Item -ItemType File -Force -Path $target | Out-Null
-            }
-          }
-
-      - name: Build Windows release candidate
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          CSC_PLATFORM: "windows"
-          VIDEO_SUM_FFMPEG_DIR: ${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}
-        run: npm run package:win
-
-      - name: Collect release assets
-        shell: pwsh
-        env:
-          RELEASE_VERSION: ${{ needs.detect-release.outputs.next_version }}
-        run: |
-          $distDir = Join-Path $env:GITHUB_WORKSPACE "dist"
-          $assetDir = Join-Path $env:GITHUB_WORKSPACE "dist\release-assets"
-          $installerPattern = "BiliSum-$env:RELEASE_VERSION-*-Setup.exe"
-
-          if (-not (Test-Path $distDir)) {
-            throw "Build output directory not found: $distDir"
-          }
-
-          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
-
-          Write-Host "Searching for release assets under $distDir"
-
-          $installer = Get-ChildItem -Path $distDir -Recurse -File |
-            Where-Object { $_.Name -like $installerPattern } |
-            Select-Object -First 1
-          if (-not $installer) {
-            throw "No Windows installer matching $installerPattern was found under $distDir"
-          }
-
-          $sourceDir = Split-Path -Parent $installer.FullName
-          $blockmap = Get-Item -LiteralPath "$($installer.FullName).blockmap" -ErrorAction SilentlyContinue
-          if (-not $blockmap) {
-            throw "Installer blockmap not found for $($installer.Name)"
-          }
-
-          $latestYml = Join-Path $sourceDir "latest.yml"
-          if (-not (Test-Path $latestYml)) {
-            throw "latest.yml was not found next to installer under $sourceDir"
-          }
-
-          Copy-Item -LiteralPath $installer.FullName -Destination $assetDir -Force
-          Copy-Item -LiteralPath $blockmap.FullName -Destination $assetDir -Force
-          Copy-Item -LiteralPath $latestYml -Destination $assetDir -Force
-
-          Write-Host "Collected release assets:"
-          Get-ChildItem -Path $assetDir | Select-Object Name, Length
-
-      - name: Upload release assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-assets-${{ needs.detect-release.outputs.next_version }}
-          path: |
-            dist/release-assets/BiliSum-*-Setup.exe
-            dist/release-assets/BiliSum-*-Setup.exe.blockmap
-            dist/release-assets/latest.yml
-          if-no-files-found: error
-
-  validate-macos-package:
-    needs: detect-release
-    if: ${{ needs.detect-release.outputs.bump != '' }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: macos-15-intel
-          - arch: arm64
-            runner: macos-15
-    env:
-      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
-    outputs:
-      release_version: ${{ needs.detect-release.outputs.next_version }}
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Cache Electron downloads
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cache/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('apps/desktop/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-
-
-      - name: Cache electron-builder downloads
-        uses: actions/cache@v4
-        with:
-          path: .cache/electron-builder
-          key: ${{ runner.os }}-electron-builder-${{ hashFiles('apps/desktop/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-builder-
-
-      - name: Install uv
-        run: python -m pip install --disable-pip-version-check --upgrade pip uv
-
-      - name: Apply release version for validation build
-        run: python scripts/bump_version.py "${{ needs.detect-release.outputs.bump }}"
-
-      - name: Verify version files are synced
-        run: python scripts/bump_version.py --check
-
-      - name: Install desktop dependencies
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false
-
-      - name: Install FFmpeg
-        run: brew install ffmpeg
-
-      - name: Build macOS release candidate
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm --prefix apps/desktop run package:mac -- --${{ matrix.arch }}
-
-      - name: Collect macOS release assets
-        env:
-          RELEASE_VERSION: ${{ needs.detect-release.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          asset_dir="$GITHUB_WORKSPACE/dist/release-assets-macos"
-          dmg_pattern="BiliSum-${RELEASE_VERSION}-mac-${{ matrix.arch }}.dmg"
-          zip_pattern="BiliSum-${RELEASE_VERSION}-mac-${{ matrix.arch }}.zip"
-
-          if [[ ! -d "$GITHUB_WORKSPACE/dist" ]]; then
-            echo "Build output directory not found: $GITHUB_WORKSPACE/dist" >&2
-            exit 1
-          fi
-
-          mkdir -p "$asset_dir"
-
-          echo "Searching for macOS release assets under $GITHUB_WORKSPACE/dist"
-          dmg_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$dmg_pattern" -print -quit)"
-          if [[ -z "$dmg_path" ]]; then
-            echo "No macOS DMG matching $dmg_pattern was found under $GITHUB_WORKSPACE/dist" >&2
-            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
-            exit 1
-          fi
-          zip_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$zip_pattern" -print -quit)"
-          if [[ -z "$zip_path" ]]; then
-            echo "No macOS ZIP matching $zip_pattern was found under $GITHUB_WORKSPACE/dist" >&2
-            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
-            exit 1
-          fi
-          latest_mac_yml="$(find "$GITHUB_WORKSPACE/dist" -type f -name "latest-mac.yml" -print -quit)"
-          if [[ -z "$latest_mac_yml" ]]; then
-            echo "No latest-mac.yml was found under $GITHUB_WORKSPACE/dist" >&2
-            find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -type f -print
-            exit 1
-          fi
-
-          python "$GITHUB_WORKSPACE/packaging/desktop/validate_macos_package.py" \
-            --dmg "$dmg_path" \
-            --zip "$zip_path" \
-            --version "$RELEASE_VERSION" \
-            --arch "${{ matrix.arch }}"
-
-          cp "$dmg_path" "$asset_dir/"
-          cp "$zip_path" "$asset_dir/"
-          cp "$latest_mac_yml" "$asset_dir/latest-mac-${{ matrix.arch }}.yml"
-          blockmap_path="$(find "$GITHUB_WORKSPACE/dist" -type f -name "$(basename "$zip_path").blockmap" -print -quit)"
-          if [[ -n "$blockmap_path" ]]; then
-            cp "$blockmap_path" "$asset_dir/"
-          fi
-          packaged_update_yml="$(find "$GITHUB_WORKSPACE/dist/desktop" -path "*/BiliSum.app/Contents/Resources/app-update.yml" -print -quit)"
-          if [[ -z "$packaged_update_yml" ]]; then
-            echo "Packaged app-update.yml was not found in the macOS app resources." >&2
-            find "$GITHUB_WORKSPACE/dist/desktop" -maxdepth 5 -type f -name "app-update.yml" -print || true
-            exit 1
-          fi
-          python - "$packaged_update_yml" <<'PY'
-          from pathlib import Path
-          import sys
-
-          path = Path(sys.argv[1])
-          expected = {
-              "provider": "github",
-              "owner": "lycohana",
-              "repo": "BiliSum",
-          }
-          values = {}
-          for raw_line in path.read_text(encoding="utf-8").splitlines():
-              line = raw_line.strip()
-              if not line or line.startswith("#") or ":" not in line:
-                  continue
-              key, value = line.split(":", 1)
-              values[key.strip()] = value.strip().strip('"\'')
-          missing = [
-              f"{key}={expected_value!r} (got {values.get(key)!r})"
-              for key, expected_value in expected.items()
-              if values.get(key) != expected_value
-          ]
-          if missing:
-              raise SystemExit("Packaged app-update.yml has unexpected update config: " + ", ".join(missing))
-          PY
-          echo "Collected macOS release assets:"
-          ls -lh "$asset_dir"
-
-      - name: Upload macOS release assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-assets-macos-${{ matrix.arch }}-${{ needs.detect-release.outputs.next_version }}
-          path: |
-            dist/release-assets-macos/BiliSum-*.dmg
-            dist/release-assets-macos/BiliSum-*.zip
-            dist/release-assets-macos/BiliSum-*.zip.blockmap
-            dist/release-assets-macos/latest-mac-*.yml
-          if-no-files-found: error
-
-  create-release-tag:
-    needs:
-      - detect-release
-      - validate-windows-package
-      - validate-macos-package
     if: ${{ needs.detect-release.outputs.bump != '' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      release_created: ${{ steps.push_release.outputs.release_created }}
 
     steps:
       - name: Check out repository
@@ -366,277 +72,63 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check branch head is unchanged
-        id: head_check
+      - name: Skip when release PR already exists
+        id: existing
         env:
-          TARGET_BRANCH: ${{ github.ref_name }}
-          TRIGGER_SHA: ${{ github.sha }}
+          NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
         run: |
-          git fetch origin "${TARGET_BRANCH}"
-          remote_head="$(git rev-parse "origin/${TARGET_BRANCH}")"
-          if [ "${remote_head}" != "${TRIGGER_SHA}" ]; then
-            echo "branch_unchanged=false" >> "$GITHUB_OUTPUT"
-            echo "Branch advanced from ${TRIGGER_SHA} to ${remote_head}; skip this release run."
-            exit 0
+          if git ls-remote --exit-code --heads origin "refs/heads/release/v${NEXT_VERSION}" >/dev/null 2>&1; then
+            echo "Release branch release/v${NEXT_VERSION} already exists; skip."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "branch_unchanged=true" >> "$GITHUB_OUTPUT"
 
-      - name: Bump repository version
-        if: ${{ steps.head_check.outputs.branch_unchanged == 'true' }}
-        run: python scripts/bump_version.py "${{ needs.detect-release.outputs.bump }}"
-
-      - name: Commit release version and tag
-        id: push_release
-        if: ${{ steps.head_check.outputs.branch_unchanged == 'true' }}
+      - name: Bump version and create release branch
+        if: ${{ steps.existing.outputs.skip != 'true' }}
         env:
-          RELEASE_VERSION: ${{ needs.detect-release.outputs.next_version }}
-          TARGET_BRANCH: ${{ github.ref_name }}
+          BUMP: ${{ needs.detect-release.outputs.bump }}
+          NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "Release tag v${RELEASE_VERSION} already exists; skip publishing from this run."
-            echo "release_created=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git"
-          git add VERSION pyproject.toml apps/service/pyproject.toml packages/core/pyproject.toml packages/infra/pyproject.toml apps/desktop/package.json apps/desktop/package-lock.json packages/npx/package.json
-          git commit -m "chore(release): v${RELEASE_VERSION} [skip ci]"
-          git tag -a "v${RELEASE_VERSION}" -m "v${RELEASE_VERSION}"
-          git push origin "HEAD:${TARGET_BRANCH}"
-          git push origin "refs/tags/v${RELEASE_VERSION}"
-          echo "release_created=true" >> "$GITHUB_OUTPUT"
 
-  publish-release:
-    needs:
-      - detect-release
-      - validate-windows-package
-      - validate-macos-package
-      - create-release-tag
-    if: ${{ needs.detect-release.outputs.bump != '' && needs.create-release-tag.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
+          python scripts/bump_version.py "${BUMP}"
+          git checkout -b "release/v${NEXT_VERSION}"
+          git add VERSION pyproject.toml apps/service/pyproject.toml \
+            packages/core/pyproject.toml packages/infra/pyproject.toml \
+            apps/desktop/package.json apps/desktop/package-lock.json \
+            packages/npx/package.json
+          git commit -m "chore(release): v${NEXT_VERSION} [skip ci]"
+          git push origin "HEAD:release/v${NEXT_VERSION}"
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-          ref: v${{ needs.detect-release.outputs.next_version }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Download release assets
-        uses: actions/download-artifact@v4
-        with:
-          name: release-assets-${{ needs.detect-release.outputs.next_version }}
-          path: dist/release-assets
-
-      - name: Download macOS release assets
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-assets-macos-*-${{ needs.detect-release.outputs.next_version }}
-          path: dist/release-assets
-          merge-multiple: true
-
-      - name: Compose macOS update feed
+      - name: Open release pull request
+        if: ${{ steps.existing.outputs.skip != 'true' }}
         env:
-          RELEASE_VERSION: ${{ needs.detect-release.outputs.next_version }}
+          NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          python - <<'PY'
-          import base64
-          import hashlib
-          import os
-          import re
-          from pathlib import Path
+          cat > /tmp/release-pr-body.md <<EOF
+          ## 发布准备
 
-          asset_dir = Path("dist/release-assets")
-          version = os.environ["RELEASE_VERSION"]
-          arches = ("x64", "arm64")
-          files = []
-          for arch in arches:
-              zip_path = asset_dir / f"BiliSum-{version}-mac-{arch}.zip"
-              dmg_path = asset_dir / f"BiliSum-{version}-mac-{arch}.dmg"
-              if not zip_path.exists():
-                  raise SystemExit(f"Missing macOS ZIP for {arch}: {zip_path}")
-              if not dmg_path.exists():
-                  raise SystemExit(f"Missing macOS DMG for {arch}: {dmg_path}")
-              data = zip_path.read_bytes()
-              files.append({
-                  "url": zip_path.name,
-                  "sha512": base64.b64encode(hashlib.sha512(data).digest()).decode("ascii"),
-                  "size": zip_path.stat().st_size,
-                  "arch": arch,
-              })
+          合并此 PR 即发布 **v${NEXT_VERSION}**（发行版）。合并后工作流会自动打 tag
+          v${NEXT_VERSION} 并触发构建与 GitHub Release 发布。
 
-          release_date = ""
-          for feed in sorted(asset_dir.glob("latest-mac-*.yml")):
-              text = feed.read_text(encoding="utf-8")
-              match = re.search(r"^releaseDate:\s*(.+)$", text, re.M)
-              if match:
-                  release_date = match.group(1).strip()
-                  break
-          if not release_date:
-              release_date = os.environ.get("GITHUB_RUN_STARTED_AT", "")
-          if not release_date:
-              from datetime import datetime, timezone
-              release_date = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+          ### 选择版本类型
 
-          lines = [
-              f"version: {version}",
-              "files:",
-          ]
-          for item in files:
-              lines.extend([
-                  f"  - url: {item['url']}",
-                  f"    sha512: {item['sha512']}",
-                  f"    size: {item['size']}",
-                  f"    arch: {item['arch']}",
-              ])
-          first = next(item for item in files if item["arch"] == "x64")
-          lines.extend([
-              f"path: {first['url']}",
-              f"sha512: {first['sha512']}",
-              f"releaseDate: {release_date}",
-              "",
-          ])
-          (asset_dir / "latest-mac.yml").write_text("\n".join(lines), encoding="utf-8")
-          print((asset_dir / "latest-mac.yml").read_text(encoding="utf-8"))
-          PY
+          - **发行版**（默认）：保持现状，直接合并。
+          - **开发版/预发布**：给本 PR 添加 label release:beta（或 release:rc /
+            release:alpha），工作流会自动把版本号更新为 v${NEXT_VERSION}-beta.1 并
+            同步修改本 PR 标题；再次添加同名 label 会递增序号（-beta.2）。移除 label
+            则恢复为发行版。
 
-      - name: Generate release notes
-        run: |
-          python scripts/generate_release_notes.py \
-            --version "${{ needs.detect-release.outputs.next_version }}" \
-            --repo "${{ github.repository }}" \
-            --output dist/release-notes.md \
-            --target-ref "v${{ needs.detect-release.outputs.next_version }}"
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.detect-release.outputs.next_version }}
-          body_path: dist/release-notes.md
-          files: |
-            dist/release-assets/BiliSum-*-Setup.exe
-            dist/release-assets/BiliSum-*-Setup.exe.blockmap
-            dist/release-assets/BiliSum-*.dmg
-            dist/release-assets/BiliSum-*.zip
-            dist/release-assets/BiliSum-*.zip.blockmap
-            dist/release-assets/latest.yml
-            dist/release-assets/latest-mac.yml
-
-  publish-docker-image:
-    needs:
-      - detect-release
-      - create-release-tag
-    if: ${{ needs.detect-release.outputs.bump != '' && needs.create-release-tag.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-          ref: v${{ needs.detect-release.outputs.next_version }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Install desktop dependencies without package install scripts
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
-
-      - name: Build web static assets
-        run: npm run build:web
-
-      - name: Resolve Docker image repository
-        id: image
-        env:
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
-        run: |
-          if [ -n "${DOCKERHUB_REPOSITORY}" ]; then
-            repository="${DOCKERHUB_REPOSITORY}"
-          else
-            repository="${DOCKERHUB_USERNAME}/bilisum"
-          fi
-          echo "repository=$(printf '%s' "${repository}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          cache-from: type=gha,scope=bilisum-docker
-          cache-to: type=gha,mode=max,scope=bilisum-docker
-          tags: |
-            docker.io/${{ steps.image.outputs.repository }}:v${{ needs.detect-release.outputs.next_version }}
-            docker.io/${{ steps.image.outputs.repository }}:${{ needs.detect-release.outputs.next_version }}
-            docker.io/${{ steps.image.outputs.repository }}:latest
-
-  publish-npx-package:
-    needs:
-      - detect-release
-      - create-release-tag
-    if: ${{ needs.detect-release.outputs.bump != '' && needs.create-release-tag.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
-          ref: v${{ needs.detect-release.outputs.next_version }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-          registry-url: https://registry.npmjs.org
-
-      - name: Show Node.js tool versions
-        run: |
-          node --version
-          npm --version
-
-      - name: Install desktop dependencies without package install scripts
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
-
-      - name: Build web static assets
-        run: npm run build:web
-
-      - name: Validate npx package
-        run: npm run npx:test
-
-      - name: Publish npx package to npm
-        run: |
-          cd packages/npx
-          npm publish --access public --provenance
+          > 预发布版本发布为 GitHub Prerelease，且不会覆盖稳定版升级通道
+          > （latest.yml / latest-mac.yml），仅提供手动下载。
+          EOF
+          gh pr create \
+            --base "${{ github.ref_name }}" \
+            --head "release/v${NEXT_VERSION}" \
+            --title "Release v${NEXT_VERSION}" \
+            --body-file /tmp/release-pr-body.md

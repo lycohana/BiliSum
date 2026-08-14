@@ -94,6 +94,19 @@
   color: ee0701
   description: 安全漏洞或安全相关
 
+# 发布版本类型（用于 Release vX.Y.Z PR）
+- name: release:beta
+  color: c5def5
+  description: 发布为开发版（vX.Y.Z-beta.N，Prerelease）
+
+- name: release:rc
+  color: c5def5
+  description: 发布为候选版（vX.Y.Z-rc.N，Prerelease）
+
+- name: release:alpha
+  color: c5def5
+  description: 发布为内测版（vX.Y.Z-alpha.N，Prerelease）
+
 - name: dependencies
   color: 0366d6
   description: 依赖更新

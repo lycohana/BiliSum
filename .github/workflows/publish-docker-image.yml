@@ -1,0 +1,125 @@
+name: Publish Docker Image
+
+# 手动触发：构建并推送 Docker 镜像到 Docker Hub。
+# release_tag 留空时使用最新的已发布 release tag。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (empty = latest release)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+
+    steps:
+      - name: Resolve release tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(gh release view --json tagName --jq .tagName)"
+          fi
+          if ! printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "Invalid release tag: '${tag}'" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-push:
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install desktop dependencies without package install scripts
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
+
+      - name: Build web static assets
+        run: npm run build:web
+
+      - name: Resolve Docker image repository
+        id: image
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+        run: |
+          if [ -n "${DOCKERHUB_REPOSITORY}" ]; then
+            repository="${DOCKERHUB_REPOSITORY}"
+          else
+            repository="${DOCKERHUB_USERNAME}/bilisum"
+          fi
+          echo "repository=$(printf '%s' "${repository}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compose Docker tags
+        id: tags
+        env:
+          TAG: ${{ needs.resolve-tag.outputs.tag }}
+          VERSION: ${{ needs.resolve-tag.outputs.version }}
+          PRERELEASE: ${{ needs.resolve-tag.outputs.prerelease }}
+          REPOSITORY: ${{ steps.image.outputs.repository }}
+        run: |
+          set -euo pipefail
+          base="docker.io/${REPOSITORY}"
+          if [ "${PRERELEASE}" = "true" ]; then
+            # 预发布不覆盖 latest
+            echo "tags=${base}:${TAG} ${base}:${VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${base}:${TAG} ${base}:${VERSION} ${base}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          cache-from: type=gha,scope=bilisum-docker
+          cache-to: type=gha,mode=max,scope=bilisum-docker
+          tags: ${{ steps.tags.outputs.tags }}
