@@ -1,8 +1,14 @@
 name: Release
 
-# tag push（v*）触发：构建 Windows / macOS 包并创建 GitHub Release。
-# tag 由 create-release-tag.yml 在「Release vX.Y.Z」PR 合并后自动推送，
-# 也可以手动推送同名 tag 触发（版本文件需与 tag 一致）。
+# 构建 Windows / macOS 包并创建 GitHub Release。
+#
+# 触发方式：
+# - create-release-tag.yml 在「Release vX.Y.Z」PR 合并后打 tag，并通过
+#   `gh workflow run`（workflow_dispatch）触发本 workflow —— tag 由
+#   workflow 用 token 推送时，push 事件不会触发 tag workflow（GitHub
+#   平台限制），因此必须显式 dispatch。
+# - 手动推送 tag 也会触发（push.tags: v*）；也可以直接在 Actions 页面
+#   手动 Run workflow 并填写 release_tag。
 #
 # tag 名决定发布类型：
 #   - vX.Y.Z             → 发行版（stable），附带升级通道 latest.yml / latest-mac.yml
@@ -12,6 +18,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (e.g. v1.20.0 or v1.20.0-beta.1)"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -20,7 +33,7 @@ env:
   electron_config_cache: ${{ github.workspace }}/.cache/electron
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -33,8 +46,18 @@ jobs:
     steps:
       - name: Define release version and prerelease flag
         id: define
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
         run: |
-          tag="${{ github.ref_name }}"
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          if ! printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "Invalid release tag: '${tag}'" >&2
+            exit 1
+          fi
           version="${tag#v}"
           if [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -53,7 +76,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -188,7 +211,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -316,7 +339,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
-          ref: ${{ github.ref }}
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6

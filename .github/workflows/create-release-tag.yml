@@ -81,3 +81,16 @@ jobs:
           git push origin "refs/tags/${tag}"
           echo "tag_created=true" >> "$GITHUB_OUTPUT"
 
+      - name: Trigger release build
+        # A tag pushed by a workflow token does not fire the `push.tags`
+        # workflow trigger (GitHub platform behaviour), so dispatch the
+        # Release workflow explicitly.
+        if: ${{ steps.push_tag.outputs.tag_created == 'true' }}
+        env:
+          TAG: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml -f release_tag="v${TAG}"
+          echo "Dispatched release.yml for v${TAG}."
+
