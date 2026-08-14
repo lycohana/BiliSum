@@ -10,8 +10,16 @@ from versioning import bump_version, read_source_version
 
 COMMIT_SEPARATOR = "\x1e"
 FIELD_SEPARATOR = "\x1f"
-COMMIT_HEADER_RE = re.compile(r"^(?P<type>[A-Za-z][\w/-]*)(?:\([^)]*\))?(?P<markers>[!*]*):")
+# Markers (`!` / `*`) may appear before and/or after the scope:
+#   fix*: ...          fix(scope)*: ...        fix*(scope): ...
+COMMIT_HEADER_RE = re.compile(
+    r"^(?P<type>[A-Za-z][\w/-]*)(?P<pre_markers>[!*]*)(?:\([^)]*\))?(?P<post_markers>[!*]*):"
+)
 RELEASE_RE = re.compile(r"^chore\(release\):\s+v\d+\.\d+\.\d+$")
+# A breaking change is only recognized from the conventional-commit footer
+# (`BREAKING CHANGE:` / `BREAKING-CHANGE:` at line start) or the `!` marker.
+# Plain mentions of the phrase in a commit body must not count as breaking.
+BREAKING_FOOTER_RE = re.compile(r"^BREAKING[ -]CHANGE:", re.MULTILINE)
 MINOR_TYPES = {"feat"}
 PATCH_TYPES = {"fix", "perf", "refactor"}
 RELEASABLE_TYPES = MINOR_TYPES | PATCH_TYPES
@@ -67,11 +75,12 @@ def parse_commit_subject(subject: str) -> tuple[str, str] | None:
     match = COMMIT_HEADER_RE.match(subject)
     if not match:
         return None
-    return match.group("type"), match.group("markers")
+    markers = (match.group("pre_markers") or "") + (match.group("post_markers") or "")
+    return match.group("type"), markers
 
 
 def is_breaking_change(markers: str, body: str) -> bool:
-    return "!" in markers or "BREAKING CHANGE" in body.upper()
+    return "!" in markers or bool(BREAKING_FOOTER_RE.search(body or ""))
 
 
 def should_release_commit(commit_type: str, markers: str, body: str) -> bool:

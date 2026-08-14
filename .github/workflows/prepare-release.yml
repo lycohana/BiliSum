@@ -72,16 +72,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Skip when release PR already exists
+      - name: Skip when an open release PR already exists
         id: existing
         env:
           NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          if git ls-remote --exit-code --heads origin "refs/heads/release/v${NEXT_VERSION}" >/dev/null 2>&1; then
-            echo "Release branch release/v${NEXT_VERSION} already exists; skip."
+          open_pr="$(gh pr list \
+            --head "release/v${NEXT_VERSION}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "${open_pr}" ]; then
+            echo "Release PR #${open_pr} for v${NEXT_VERSION} is already open; skip."
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          # A stale branch may linger after a closed Release PR. Remove it so
+          # the steps below can recreate the release branch from latest master.
+          if git ls-remote --exit-code --heads origin "refs/heads/release/v${NEXT_VERSION}" >/dev/null 2>&1; then
+            echo "Removing stale release branch release/v${NEXT_VERSION} (no open PR)."
+            git push origin --delete "release/v${NEXT_VERSION}" 2>/dev/null || true
           fi
 
       - name: Bump version and create release branch
