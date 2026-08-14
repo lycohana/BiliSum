@@ -105,5 +105,8 @@ jobs:
             echo "PR title already reflects v${TARGET}."
             exit 0
           fi
-          gh pr edit "$PR_NUMBER" --title "Release v${TARGET}"
+          # Use the REST API (not `gh pr edit`, which requires a GraphQL scope
+          # the PAT_TOKEN lacks) to rename the release PR.
+          gh api -X PATCH "repos/${{ github.repository }}/pulls/${PR_NUMBER}" \
+            -f title="Release v${TARGET}" >/dev/null
 
