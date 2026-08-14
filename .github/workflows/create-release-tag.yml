@@ -2,9 +2,13 @@ name: Create Release Tag
 
 # 「Release vX.Y.Z」PR 合并后：校验版本文件与标题一致，打 tag 并推送。
 # tag push（v*）会触发 release.yml 执行构建与 GitHub Release 发布。
+#
+# 注意：使用 pull_request_target 而非 pull_request —— 由 workflow 自动创建
+# 的 Release PR 合并时，pull_request 的 closed 事件不会触发 workflow（与
+# labeled/unlabeled 相同的平台限制），pull_request_target 则正常触发。
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - closed
 
@@ -24,6 +28,9 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
+          # Tag the exact merge commit on the default branch (pull_request_target
+          # runs against the base branch, but the merged SHA is authoritative).
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -73,3 +80,4 @@ jobs:
           git tag -a "${tag}" -m "${tag}"
           git push origin "refs/tags/${tag}"
           echo "tag_created=true" >> "$GITHUB_OUTPUT"
+

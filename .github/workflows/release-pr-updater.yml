@@ -4,9 +4,13 @@ name: Release PR Updater
 #   - 添加 label release:beta / release:rc / release:alpha → 生成开发版版本号
 #     （vX.Y.Z-beta.1，重复添加递增）并同步 PR 标题与分支版本文件
 #   - 移除这些 label → 恢复为发行版版本号
+#
+# 注意：使用 pull_request_target 而非 pull_request —— 由 workflow 自动创建
+# 的 Release PR 上，pull_request 的 labeled/unlabeled 事件不会触发 workflow，
+# pull_request_target 则正常触发（checkout 只针对仓库自己的 release 分支）。
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - labeled
       - unlabeled
@@ -102,3 +106,4 @@ jobs:
             exit 0
           fi
           gh pr edit "$PR_NUMBER" --title "Release v${TARGET}"
+
