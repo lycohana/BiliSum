@@ -1,0 +1,78 @@
+name: Publish npx Package
+
+# 手动触发：构建并发布 packages/npx 到 npm（带 provenance）。
+# release_tag 留空时使用最新的已发布 release tag。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (empty = latest release)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+
+    steps:
+      - name: Resolve release tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(gh release view --json tagName --jq .tagName)"
+          fi
+          if ! printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "Invalid release tag: '${tag}'" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - name: Install desktop dependencies without package install scripts
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
+
+      - name: Build web static assets
+        run: npm run build:web
+
+      - name: Validate npx package
+        run: npm run npx:test
+
+      - name: Publish npx package to npm
+        run: |
+          cd packages/npx
+          npm publish --access public --provenance
