@@ -1,6 +1,6 @@
 name: Label Test
 on:
-  pull_request:
+  pull_request_target:
     types:
       - labeled
 jobs:
