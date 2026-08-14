@@ -106,6 +106,38 @@ def _knowledge_dependency_probe_fields(package: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def _knowledge_package_site_package_dir_names(package: str) -> list[str]:
+    """Map a knowledge dependency distribution name to import dir names inside site-packages."""
+    normalized = str(package or "").strip().lower()
+    if normalized == "chromadb":
+        return ["chromadb"]
+    if normalized in {"sentence-transformers", "sentence_transformers"}:
+        return ["sentence_transformers"]
+    if normalized == "modelscope":
+        return ["modelscope"]
+    return []
+
+
+def packages_missing_from_site_packages(site_packages: Path, packages: list[str]) -> list[str]:
+    """Return the subset of *packages* whose import dir is absent from *site_packages*.
+
+    This is a directory-level check against the exact site-packages directory the
+    frozen service process puts on sys.path for the knowledge index. It complements
+    (and guards against) the subprocess probe, which imports packages through the
+    runtime interpreter and can accidentally pick them up from outside the managed
+    runtime (e.g. macOS user site-packages) — see issue #97.
+    """
+    missing: list[str] = []
+    for package in packages:
+        dir_names = _knowledge_package_site_package_dir_names(package)
+        if not dir_names:
+            # Unknown package mapping — do not block unknown providers.
+            continue
+        if not any((site_packages / dir_name).is_dir() for dir_name in dir_names):
+            missing.append(str(package))
+    return missing
+
+
 def apply_knowledge_dependency_policy(
     environment: dict[str, object],
     provider: str | None = None,
@@ -238,6 +270,13 @@ def runtime_subprocess_env(runtime_channel: str) -> dict[str, str]:
         logger.warning("failed to prepare runtime temp dir path=%s", temp_dir)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # The frozen service process never loads the macOS user site-packages
+    # (~/Library/Python/3.12/lib/python/site-packages), while a normal runtime
+    # interpreter would. Disabling the user site keeps every runtime subprocess
+    # (probe / pip / worker) on the SAME package view as the service process,
+    # so a package that only exists in the user site can no longer be mistaken
+    # for an installed knowledge dependency (see issue #97).
+    env["PYTHONNOUSERSITE"] = "1"
     # Propagate HuggingFace mirror to subprocess (funasr / sentence-transformers)
     hf_endpoint = (settings_manager.current.hf_endpoint or "").strip()
     if hf_endpoint:
@@ -422,8 +461,12 @@ def finish_install_session(session_id: str, success: bool) -> None:
 
 
 def append_install_log(session_id: str, line: str) -> None:
+    if not session_id:
+        # No streaming install session — nothing to append to.
+        return
     log = _install_log_path(session_id)
     sanitized = line.rstrip("\n\r") + "\n"
+    _ensure_install_log_dir()
     with log.open("a", encoding="utf-8") as f:
         f.write(sanitized)
     # Parse pip progress bar, e.g. " 45%|████     | 1.2G/2.7G [02:30<04:10, 11.0MB/s]"
@@ -897,6 +940,7 @@ def pip_install_with_fallbacks(
     reinstall: bool = False,
     timeout: int = 1800,
     runner=run_command,
+    install_target: Path | str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     attempts: list[tuple[str, subprocess.CalledProcessError]] = []
     session_id = _runner_install_session_id(runner)
@@ -915,6 +959,12 @@ def pip_install_with_fallbacks(
         ]
         if reinstall:
             command.append("--force-reinstall")
+        if install_target is not None:
+            # Force packages (and their dependencies) into an explicit directory.
+            # Used when the runtime interpreter resolves a different site-packages
+            # than the one the frozen service process imports from (macOS portable
+            # runtime) — see install_knowledge_dependencies.
+            command.extend(["--target", str(install_target)])
         if index_url:
             command.extend(["--index-url", index_url])
         command.extend(packages)
@@ -2584,7 +2634,19 @@ def install_knowledge_dependencies(
     environment = detect_environment(runtime_channel)
     if not reinstall:
         environment = apply_knowledge_dependency_policy(environment, provider)
-        if environment.get("knowledgeDependenciesReady"):
+        # The probe imports packages through the runtime interpreter, which can
+        # resolve them from outside the managed runtime (e.g. macOS user
+        # site-packages) — but the knowledge index imports them in-process from
+        # the runtime site-packages only. Only treat the dependencies as ready
+        # when they physically exist in that directory (issue #97).
+        missing_in_runtime = (
+            []
+            if use_current_python
+            else packages_missing_from_site_packages(
+                runtime_site_packages_dir(runtime_channel), required_packages
+            )
+        )
+        if environment.get("knowledgeDependenciesReady") and not missing_in_runtime:
             if use_streaming:
                 append_install_log(session_id, "知识库依赖已在当前运行环境可用，无需重复安装。")
                 finish_install_session(session_id, success=True)
@@ -2617,6 +2679,13 @@ def install_knowledge_dependencies(
                 "environment": environment,
                 "installSessionId": session_id,
             }, worker
+        if missing_in_runtime:
+            logger.warning(
+                "knowledge deps probe ready but missing from runtime site-packages "
+                "packages=%s runtime_channel=%s",
+                missing_in_runtime,
+                runtime_channel,
+            )
         repair_reinstall = bool(
             environment.get("chromadbVersion")
             or environment.get("sentenceTransformersVersion")
@@ -2696,6 +2765,74 @@ def install_knowledge_dependencies(
     activate_runtime_pythonpath(runtime_channel)
     clear_environment_probe_cache(runtime_channel)
     environment = apply_knowledge_dependency_policy(detect_environment(runtime_channel), provider)
+
+    # Directory-level verification: pip may have installed into a site-packages
+    # directory the runtime interpreter resolves on its own (e.g. the macOS
+    # portable runtime), NOT the one the frozen service process imports from.
+    # In that case reinstall explicitly into the managed runtime site-packages
+    # so the knowledge index can actually import the packages (issue #97).
+    missing_in_runtime = (
+        []
+        if use_current_python
+        else packages_missing_from_site_packages(
+            runtime_site_packages_dir(runtime_channel), required_packages
+        )
+    )
+    if missing_in_runtime:
+        append_install_log(
+            session_id,
+            "[知识库] pip 安装未落入运行环境 site-packages（"
+            + ", ".join(missing_in_runtime)
+            + "），正在改用 --target 强制安装到运行环境目录...\n",
+        )
+        try:
+            result = pip_install_with_fallbacks(
+                python_executable,
+                runtime_channel,
+                packages,
+                package_label="知识库依赖",
+                reinstall=False,
+                timeout=1800,
+                runner=pip_runner,
+                install_target=runtime_site_packages_dir(runtime_channel),
+            )
+        except subprocess.CalledProcessError as exc:
+            if isinstance(pip_runner, _StreamingRunner):
+                pip_runner.cancel()
+                finish_install_session(session_id, success=False)
+            clear_environment_probe_cache(runtime_channel)
+            detail = (exc.stderr or exc.stdout or str(exc))[-1500:]
+            raise HTTPException(status_code=500, detail=detail) from exc
+        except HTTPException:
+            if isinstance(pip_runner, _StreamingRunner):
+                pip_runner.cancel()
+                finish_install_session(session_id, success=False)
+            clear_environment_probe_cache(runtime_channel)
+            raise
+        importlib.invalidate_caches()
+        clear_environment_probe_cache(runtime_channel)
+        environment = apply_knowledge_dependency_policy(
+            detect_environment(runtime_channel), provider
+        )
+        missing_in_runtime = (
+            []
+            if use_current_python
+            else packages_missing_from_site_packages(
+                runtime_site_packages_dir(runtime_channel), required_packages
+            )
+        )
+        if missing_in_runtime:
+            if use_streaming:
+                finish_install_session(session_id, success=False)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "知识库依赖安装后仍未出现在运行环境 site-packages（"
+                    + ", ".join(missing_in_runtime)
+                    + "）。请到运行环境板块同步或重建当前 runtime 后重试。"
+                ),
+            )
+
     worker = (
         build_worker(repository, current_settings, environment_info=environment)
         if should_refresh_worker
@@ -2718,7 +2855,7 @@ def install_knowledge_dependencies(
             "knowledgeDependenciesReady": bool(environment.get("knowledgeDependenciesReady")),
         },
     )
-    installed = bool(environment.get("knowledgeDependenciesReady"))
+    installed = bool(environment.get("knowledgeDependenciesReady")) and not missing_in_runtime
     if use_streaming:
         finish_install_session(session_id, success=installed)
     return {

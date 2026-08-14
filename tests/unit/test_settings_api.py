@@ -459,6 +459,11 @@ def test_install_knowledge_dependencies_refreshes_environment(monkeypatch, tmp_p
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
     monkeypatch.setattr(
         runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
+    monkeypatch.setattr(
+        runtime_support,
         "detect_environment",
         lambda runtime_channel=None: {
             "runtimeChannel": runtime_channel or "base",
@@ -678,6 +683,11 @@ def test_siliconflow_knowledge_dependencies_only_install_chromadb(monkeypatch, t
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
 
     commands: list[tuple[list[str], bool]] = []
@@ -746,6 +756,11 @@ def test_install_knowledge_dependencies_repairs_broken_imports(monkeypatch, tmp_
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
 
     commands: list[tuple[list[str], bool]] = []
@@ -817,6 +832,11 @@ def test_install_knowledge_dependencies_auto_uninstalls_broken_sentence_transfor
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
 
     pip_commands: list[tuple[list[str], bool]] = []
@@ -906,6 +926,11 @@ def test_install_knowledge_dependencies_auto_uninstall_failure_non_fatal(
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
 
     import logging
@@ -1005,6 +1030,11 @@ def test_install_knowledge_dependencies_no_auto_uninstall_when_required(
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
 
     run_commands: list[list[str]] = []
@@ -1081,6 +1111,11 @@ def test_install_knowledge_dependencies_can_target_runtime_channel(monkeypatch, 
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
     monkeypatch.setattr(
         runtime_support,
@@ -1129,6 +1164,11 @@ def test_install_knowledge_dependencies_refreshes_worker_for_saved_runtime_chann
     monkeypatch.setattr(runtime_support, "ensure_runtime_pip", lambda python_executable, runtime_channel: None)
     monkeypatch.setattr(runtime_support, "activate_runtime_pythonpath", lambda runtime_channel: None)
     monkeypatch.setattr(runtime_support, "clear_environment_probe_cache", lambda runtime_channel=None: None)
+    monkeypatch.setattr(
+        runtime_support,
+        "packages_missing_from_site_packages",
+        lambda site_packages, packages: [],
+    )
     monkeypatch.setattr(runtime_support, "write_runtime_metadata", lambda runtime_channel, payload: None)
     monkeypatch.setattr(
         runtime_support,
