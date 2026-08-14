@@ -441,7 +441,10 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          # Use the resolved release version, NOT github.ref_name: on a
+          # workflow_dispatch run github.ref_name is the default branch
+          # (master), which would publish the release to the wrong ref.
+          tag_name: v${{ needs.meta.outputs.release_version }}
           body_path: dist/release-notes.md
           prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
           files: |
