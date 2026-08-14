@@ -1,6 +1,6 @@
 {
   "name": "bilisum",
-  "version": "1.19.2",
+  "version": "1.19.3",
   "description": "Start the local BiliSum service from npx.",
   "bin": {
     "bilisum": "bin/bilisum.js"

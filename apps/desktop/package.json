@@ -1,6 +1,6 @@
 {
   "name": "bilisum-desktop",
-  "version": "1.19.2",
+  "version": "1.19.3",
   "private": true,
   "description": "BiliSum desktop shell powered by React, Vite, and Electron.",
   "main": "dist-electron/main.js",
