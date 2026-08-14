@@ -3,17 +3,19 @@ name: Release PR Updater
 # 在「Release vX.Y.Z」PR 上通过 label 选择版本类型：
 #   - 添加 label release:beta / release:rc / release:alpha → 生成开发版版本号
 #     （vX.Y.Z-beta.1，重复添加递增）并同步 PR 标题与分支版本文件
-#   - 移除这些 label → 恢复为发行版版本号
 #
-# 注意：使用 pull_request_target 而非 pull_request —— 由 workflow 自动创建
-# 的 Release PR 上，pull_request 的 labeled/unlabeled 事件不会触发 workflow，
-# pull_request_target 则正常触发（checkout 只针对仓库自己的 release 分支）。
+# 注意：
+# - 只监听 labeled（添加 label）事件。移除 label 的 unlabeled 事件会与
+#   labeled 事件并发竞争（把分支版本恢复成 stable 后又被改回），故不处理；
+#   移除 label 后版本保持 prerelease，需要恢复发行版时手动改回标题与版本。
+# - 使用 pull_request_target 而非 pull_request —— 由 workflow 自动创建
+#   的 Release PR 上，pull_request 的 labeled 事件不会触发 workflow，
+#   pull_request_target 则正常触发（checkout 只针对仓库自己的 release 分支）。
 
 on:
   pull_request_target:
     types:
       - labeled
-      - unlabeled
 
 permissions:
   contents: write
@@ -63,14 +65,17 @@ jobs:
           done
           echo "kind=${kind}" >> "$GITHUB_OUTPUT"
 
-          if [ -n "${kind}" ]; then
-            target="$(python scripts/bump_version.py "${kind}")"
-          else
-            target="$(printf '%s' "${current}" | sed 's/-.*//')"
+          if [ -z "${kind}" ]; then
+            # An unrelated label (e.g. bug) was added — leave the release PR as-is.
+            echo "No release kind label present; nothing to update."
+            echo "target=${current}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          target="$(python scripts/bump_version.py "${kind}")"
           echo "target=${target}" >> "$GITHUB_OUTPUT"
 
       - name: Sync version files on the PR branch
+        if: ${{ steps.decide.outputs.kind != '' }}
         env:
           TARGET: ${{ steps.decide.outputs.target }}
           CURRENT: ${{ steps.decide.outputs.current }}
@@ -94,6 +99,7 @@ jobs:
           git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
 
       - name: Update pull request title
+        if: ${{ steps.decide.outputs.kind != '' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TARGET: ${{ steps.decide.outputs.target }}
