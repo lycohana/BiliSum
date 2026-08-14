@@ -8,7 +8,8 @@ from pathlib import Path
 
 
 COMMIT_SUBJECT_RE = re.compile(
-    r"^(?P<type>[A-Za-z][\w/-]*)(?:\((?P<scope>[^)]*)\))?(?P<markers>[!*]*)(?P<separator>:|：)\s*(?P<description>.+)$"
+    r"^(?P<type>[A-Za-z][\w/-]*)(?P<pre_markers>[!*]*)(?:\((?P<scope>[^)]*)\))?"
+    r"(?P<post_markers>[!*]*)(?P<separator>:|：)\s*(?P<description>.+)$"
 )
 RELEASE_RE = re.compile(r"^chore\(release\):\s+v\d+\.\d+\.\d+")
 SECTION_ORDER = ("feat", "fix", "refactor")
@@ -62,10 +63,11 @@ def parse_commit(subject: str) -> dict[str, str] | None:
     match = COMMIT_SUBJECT_RE.match(subject.strip())
     if not match:
         return None
+    markers = (match.group("pre_markers") or "") + (match.group("post_markers") or "")
     return {
         "type": match.group("type").lower(),
         "scope": (match.group("scope") or "").strip(),
-        "markers": match.group("markers") or "",
+        "markers": markers,
         "description": match.group("description").strip(),
     }
 
