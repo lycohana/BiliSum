@@ -1,0 +1,11 @@
+name: Label Test
+on:
+  pull_request:
+    types:
+      - labeled
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show event
+        run: echo "event=${{ github.event_name }} label=${{ github.event.label.name }} pr=${{ github.event.pull_request.number }}"
