@@ -1,7 +1,13 @@
 name: Create Release Tag
 
-# 「Release vX.Y.Z」PR 合并后：校验版本文件与标题一致，打 tag 并推送。
-# tag push（v*）会触发 release.yml 执行构建与 GitHub Release 发布。
+# 「Release vX.Y.Z」PR 合并后：校验版本文件与标题一致，打 tag 并推送，
+# 随后触发 release.yml 构建与发布。
+#
+# 触发方式：
+# - 自动：Release PR 合并（pull_request_target: closed）
+# - 手动兜底（workflow_dispatch）：若自动打 tag 未触发/失败，可在 Actions
+#   页面手动运行本 workflow 并填写版本号（如 1.20.0-alpha.1），从 master
+#   最新提交补打 tag
 #
 # 注意：使用 pull_request_target 而非 pull_request —— 由 workflow 自动创建
 # 的 Release PR 合并时，pull_request 的 closed 事件不会触发 workflow（与
@@ -11,6 +17,13 @@ on:
   pull_request_target:
     types:
       - closed
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "手动补打 tag 的版本号（如 1.20.0-alpha.1）"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -18,8 +31,9 @@ permissions:
 jobs:
   create-release-tag:
     if: >-
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.title, 'Release v')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.title, 'Release v'))
     runs-on: ubuntu-latest
 
     steps:
@@ -30,22 +44,28 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
           # Tag the exact merge commit on the default branch (pull_request_target
           # runs against the base branch, but the merged SHA is authoritative).
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          # On a manual dispatch, use the default branch head.
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Extract release version from PR title
+      - name: Extract release version
         id: version
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          MANUAL_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          version="$(printf '%s' "${PR_TITLE}" | sed -E 's/^Release[[:space:]]+v//' | tr -d '[:space:]')"
+          if [ -n "${MANUAL_VERSION}" ]; then
+            version="$(printf '%s' "${MANUAL_VERSION}" | sed 's/^v//' | tr -d '[:space:]')"
+          else
+            version="$(printf '%s' "${PR_TITLE}" | sed -E 's/^Release[[:space:]]+v//' | tr -d '[:space:]')"
+          fi
           if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-            echo "Invalid version parsed from PR title: '${version}'" >&2
+            echo "Invalid version: '${version}'" >&2
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"

@@ -448,13 +448,23 @@ jobs:
           print((asset_dir / "latest-mac.yml").read_text(encoding="utf-8"))
           PY
 
-      - name: Generate release notes
+      - name: Prepare release notes
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
         run: |
-          python scripts/generate_release_notes.py \
-            --version "${{ needs.meta.outputs.release_version }}" \
-            --repo "${{ github.repository }}" \
-            --output dist/release-notes.md \
-            --target-ref "v${{ needs.meta.outputs.release_version }}"
+          set -euo pipefail
+          custom_notes=".release-notes/v${RELEASE_VERSION}.md"
+          if [ -f "${custom_notes}" ]; then
+            cp "${custom_notes}" dist/release-notes.md
+            echo "Using custom release notes from ${custom_notes}."
+          else
+            python scripts/generate_release_notes.py \
+              --version "${{ needs.meta.outputs.release_version }}" \
+              --repo "${{ github.repository }}" \
+              --output dist/release-notes.md \
+              --target-ref "v${{ needs.meta.outputs.release_version }}"
+            echo "Generated release notes from conventional commits."
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

@@ -163,6 +163,12 @@ jobs:
 
           > 预发布版本发布为 GitHub Prerelease，且不会覆盖稳定版升级通道
           > （latest.yml / latest-mac.yml），仅提供手动下载。
+
+          ### 自定义发布说明（可选）
+
+          默认发布说明由提交记录自动生成。如需手写，请在**本 PR 的分支**中添加文件
+          `.release-notes/v${NEXT_VERSION}.md`（内容即 GitHub Release 说明），
+          发布时会优先使用该文件。
           EOF
           gh pr create \
             --base "${{ github.ref_name }}" \
