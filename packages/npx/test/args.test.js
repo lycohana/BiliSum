@@ -56,6 +56,13 @@ test("parseTaskCommandArgs: --no-wait and --all-pages", () => {
   assert.equal(options.allPages, true);
 });
 
+test("parseTaskCommandArgs: --with-transcript", () => {
+  const { options } = parseTaskCommandArgs(["url", "--with-transcript"]);
+  assert.equal(options.withTranscript, true);
+  const { options: without } = parseTaskCommandArgs(["url"]);
+  assert.equal(without.withTranscript, false);
+});
+
 test("parseTaskCommandArgs: missing source throws", () => {
   assert.throws(() => parseTaskCommandArgs([]), UsageError);
   assert.throws(() => parseTaskCommandArgs(["--quiet"]), UsageError);

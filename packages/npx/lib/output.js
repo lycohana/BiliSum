@@ -3,9 +3,13 @@
 /**
  * Output formatting for BiliSum task results.
  *
- * `--format json` emits a stable, machine-readable shape for agents;
- * `markdown` and `transcript` emit human-readable text. Everything machine
- * readable goes to stdout; progress chatter goes to stderr (see bin/bilisum.js).
+ * - `--format json`: stable machine-readable shape for agents (full result,
+ *   including transcript when present).
+ * - `--format markdown` (default): metadata header + summary content only;
+ *   transcript is omitted unless `--with-transcript` is passed.
+ * - `--format transcript`: transcript text only (for `bilisum transcribe`).
+ *
+ * Machine-readable output goes to stdout; progress chatter goes to stderr.
  */
 
 const { writeFileSync } = require("node:fs");
@@ -31,6 +35,43 @@ function pickMarkdown(task) {
   return parts.join("\n").trim();
 }
 
+function metadataLines(task) {
+  const lines = [
+    `task_id: ${task.task_id}`,
+    `status: ${task.status}`,
+  ];
+  if (task.title) {
+    lines.push(`title: ${task.title}`);
+  }
+  if (task.video_id) {
+    lines.push(`video_id: ${task.video_id}`);
+  }
+  if (task.page_number) {
+    lines.push(`page: ${task.page_number}`);
+  }
+  if (task.source) {
+    lines.push(`source: ${task.source}`);
+  }
+  return lines;
+}
+
+/** Markdown body: metadata header + summary (+ transcript on request). */
+function formatMarkdownTask(task, { includeTranscript = false } = {}) {
+  const meta = metadataLines(task).join("\n");
+  const body = pickMarkdown(task);
+  const parts = [`---\n${meta}\n---`];
+  if (body) {
+    parts.push(body);
+  }
+  if (includeTranscript) {
+    const transcript = String((task.result && task.result.transcript_text) || "").trim();
+    if (transcript) {
+      parts.push(`## 转写全文\n\n${transcript}`);
+    }
+  }
+  return parts.join("\n\n");
+}
+
 function toJson(task) {
   return {
     task_id: task.task_id,
@@ -44,18 +85,22 @@ function toJson(task) {
   };
 }
 
-function formatTasks(tasks, format) {
+function formatTasks(tasks, format, { includeTranscript = false } = {}) {
   if (format === "json") {
     const payload = tasks.length === 1 ? toJson(tasks[0]) : { tasks: tasks.map(toJson) };
     return JSON.stringify(payload, null, 2);
   }
-  const bodies = tasks.map((task) => {
-    if (format === "transcript") {
-      return String((task.result && task.result.transcript_text) || "").trim();
-    }
-    return pickMarkdown(task);
-  });
-  return bodies.filter((body) => body).join("\n\n---\n\n");
+  if (format === "markdown") {
+    return tasks
+      .map((task) => formatMarkdownTask(task, { includeTranscript }))
+      .filter((body) => body)
+      .join("\n\n---\n\n");
+  }
+  // transcript
+  return tasks
+    .map((task) => String((task.result && task.result.transcript_text) || "").trim())
+    .filter((body) => body)
+    .join("\n\n---\n\n");
 }
 
 function emit(text, options) {
@@ -67,4 +112,4 @@ function emit(text, options) {
   return "";
 }
 
-module.exports = { pickMarkdown, toJson, formatTasks, emit };
+module.exports = { pickMarkdown, metadataLines, formatMarkdownTask, toJson, formatTasks, emit };

@@ -3,13 +3,14 @@
 `bilisum` 是 BiliSum 的命令行控制面：**直接控制已安装的 BiliSum（桌面端 / 已运行的服务）**，让 Agent / 脚本做视频理解（转写 + 摘要），不打开浏览器、不复用任何独立环境。
 
 ```bash
-# 摘要一个视频（输出知识笔记 Markdown）
+# 摘要一个视频（默认输出：元数据 + 总结内容，不含字幕）
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx"
 
 # 输出 JSON 给 Agent 解析（stdout 只含 JSON，进度在 stderr）
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
 
-# 只拿转写全文 / 本地文件
+# 总结 + 追加转写全文 / 只要转写
+bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --with-transcript
 bilisum transcribe ./demo.mp4 --output transcript.txt
 
 # 多 P / 异步
@@ -19,7 +20,17 @@ bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --all-pages --no-wait
 # 任务管理
 bilisum status <task-id> --json
 bilisum tasks --limit 10
+
+# 帮助（无参数执行也会显示 help，不会自动启动服务）
+bilisum --help
+bilisum summarize --help
 ```
+
+## 输出格式
+
+- **`markdown`（默认）**：YAML 元数据头（task_id / status / title / video_id / source）+ 总结内容（知识笔记或概览+要点），**不含字幕**；加 `--with-transcript` 会追加转写全文。
+- **`json`**：完整任务对象（含 `result`，字幕在 `result.transcript_text`）。
+- **`transcript`**：仅转写全文（`bilisum transcribe` 的默认输出）。
 
 ## 它如何"控制现有程序"
 
@@ -56,6 +67,7 @@ npm install -g bilisum          # 或 npx bilisum ...
 | `--token <token>` | 访问令牌（默认自动读桌面端 token） |
 | `--format json\|markdown\|transcript` | 输出格式，默认 markdown |
 | `--output <path> / -o` | 结果写入文件 |
+| `--with-transcript` | markdown 输出追加转写全文（默认不含字幕） |
 | `--page <n> / --all-pages` | 多 P 视频分 P 选择 |
 | `--visual-note <mode>` | `text` / `frame_insert` / `vlm_integrated` |
 | `--no-wait` | 只创建任务，立即返回 task_id |

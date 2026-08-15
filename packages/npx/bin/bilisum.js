@@ -63,11 +63,13 @@ function printHelp() {
   console.log("  --prompt-preset <id>                 Use a summary prompt preset");
   console.log("  --format <fmt>                       json | markdown | transcript (default markdown)");
   console.log("  --output <path> / -o <path>          Write result to a file instead of stdout");
+  console.log("  --with-transcript                    Append the full transcript to markdown output");
   console.log("  --no-wait                            Create the task and exit immediately");
   console.log("  --timeout <sec>                      Max wait for completion, default 3600");
   console.log("  --startup-timeout <sec>              Max wait for service startup, default 300");
   console.log("  --quiet / -q                         Suppress progress output (stderr)");
   console.log("");
+  console.log("默认输出为元数据 + 总结内容（不含字幕），需要字幕请加 --with-transcript。");
   console.log("Options (start):");
   console.log("  --no-open                            Do not open the browser");
   console.log("");
@@ -319,7 +321,10 @@ async function runTaskCommand(args, { defaultFormat }) {
     emit(formatTasks(completed, "json"), options);
     throw new Error(`${failed.length} 个任务失败。`);
   }
-  const written = emit(formatTasks(completed, options.format), options);
+  const written = emit(
+    formatTasks(completed, options.format, { includeTranscript: options.withTranscript }),
+    options,
+  );
   if (written) {
     log(written);
   }
@@ -445,7 +450,12 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
 
   try {
-    if (!command || command === "start" || command === "serve") {
+    if (!command) {
+      // No command: print help, never start a service implicitly.
+      printHelp();
+      return;
+    }
+    if (command === "start" || command === "serve") {
       startService(args);
       return;
     }

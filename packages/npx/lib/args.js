@@ -52,6 +52,7 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     allPages: false,
     visualNote: "",
     promptPreset: "",
+    withTranscript: false,
     timeoutSeconds: 3600,
     startupTimeoutSeconds: 300,
   };
@@ -81,6 +82,8 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
       options.output = readValue(args, ++index, arg);
     } else if (arg === "--no-wait") {
       options.wait = false;
+    } else if (arg === "--with-transcript") {
+      options.withTranscript = true;
     } else if (arg === "--quiet" || arg === "-q") {
       options.quiet = true;
     } else if (arg === "--page") {

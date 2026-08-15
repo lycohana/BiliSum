@@ -73,10 +73,29 @@ test("formatTasks json: multiple tasks wrap in tasks array", () => {
 });
 
 test("formatTasks markdown joins with separator", () => {
-  const text = formatTasks([task(), task({ result: { knowledge_note_markdown: "# 二" } })], "markdown");
+  const text = formatTasks([task(), task({ task_id: "t2", result: { knowledge_note_markdown: "# 二" } })], "markdown");
   assert.match(text, /# 笔记/);
   assert.match(text, /# 二/);
   assert.match(text, /---/);
+});
+
+test("formatTasks markdown includes metadata header by default", () => {
+  const text = formatTasks([task({ source: "https://bilibili.com/video/BV1xx" })], "markdown");
+  assert.match(text, /task_id: t1/);
+  assert.match(text, /status: completed/);
+  assert.match(text, /title: 标题/);
+  assert.match(text, /source: https:\/\/bilibili\.com\/video\/BV1xx/);
+  // Metadata header appears before the summary body.
+  assert.ok(text.indexOf("task_id: t1") < text.indexOf("# 笔记"));
+});
+
+test("formatTasks markdown omits transcript unless requested", () => {
+  const without = formatTasks([task()], "markdown");
+  assert.ok(!without.includes("转写全文"));
+  assert.ok(!without.includes("转写全文"));
+  const withTranscript = formatTasks([task()], "markdown", { includeTranscript: true });
+  assert.ok(withTranscript.includes("## 转写全文"));
+  assert.ok(withTranscript.includes("转写全文"));
 });
 
 test("formatTasks transcript prints transcript_text", () => {
