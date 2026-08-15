@@ -171,9 +171,9 @@ jobs:
           本 PR 创建后，机器人会在下方回复一条「发版说明」评论，内容为根据提交记录
           自动生成的发布说明。你可以**直接编辑该评论**来修改发布说明，合并时工作流
           会自动使用你修改后的内容。编辑时请保留评论第一行的
-          `<!-- release-notes:... -->` 标记。
+          \`<!-- release-notes:... -->\` 标记。
 
-          > 旧方式（在本 PR 分支中添加 `.release-notes/v${NEXT_VERSION}.md`）
+          > 旧方式（在本 PR 分支中添加 \`.release-notes/v${NEXT_VERSION}.md\`）
           > 仍然可用，但优先级低于上述评论。
           EOF
           pr_url="$(gh pr create \
