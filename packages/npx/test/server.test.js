@@ -42,7 +42,9 @@ test("buildServiceEnv points at the desktop data root and --env overrides", () =
     assert.equal(env.VIDEO_SUM_HOST, "127.0.0.1");
     assert.equal(env.VIDEO_SUM_PORT, "3838");
     assert.equal(env.VIDEO_SUM_APP_DATA_ROOT, dataRoot);
-    assert.equal(env.VIDEO_SUM_WEB_STATIC_DIR, join(dataRoot, "cli-web-static"));
+    // No web static dir is passed here, so the CLI must not invent an empty
+    // cli-web-static directory (spawnService supplies the bundled path).
+    assert.equal(env.VIDEO_SUM_WEB_STATIC_DIR, undefined);
     assert.equal(env.VIDEO_SUM_LLM_ENABLED, "true");
     // The service derives data/cache/tasks/db from APP_DATA_ROOT; the CLI must not
     // point them at a separate npx directory.
@@ -50,6 +52,21 @@ test("buildServiceEnv points at the desktop data root and --env overrides", () =
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("buildServiceEnv wires the web static dir and lets --env override it", () => {
+  const staticDir = "C:/pkg/runtime/apps/web/static";
+  const env = buildServiceEnv({ host: "h", port: "1" }, "C:/data", null, staticDir);
+  assert.equal(env.VIDEO_SUM_WEB_STATIC_DIR, staticDir);
+
+  // An explicit --env must win over the CLI's bundled static dir.
+  const overridden = buildServiceEnv(
+    { host: "h", port: "1", env: ["VIDEO_SUM_WEB_STATIC_DIR=C:/override"] },
+    "C:/data",
+    null,
+    staticDir,
+  );
+  assert.equal(overridden.VIDEO_SUM_WEB_STATIC_DIR, "C:/override");
 });
 
 test("buildServiceEnv rejects malformed --env", () => {
