@@ -281,6 +281,7 @@ def _create_video_task_record(
     page_number: int | None = None,
     visual_note_mode: str | None = None,
     prompt_preset_id: str | None = None,
+    summary_scope: str | None = None,
 ):
     page = resolve_video_page(video, page_number)
     if video.pages and page_number is not None and page is None:
@@ -289,13 +290,14 @@ def _create_video_task_record(
     source_url = page.source_url if page else video.source_url
     title = page.title if page else video.title
     logger.info(
-        "create video task video_id=%s page=%s title=%s source=%s visual_note_mode=%s prompt_preset_id=%s",
+        "create video task video_id=%s page=%s title=%s source=%s visual_note_mode=%s prompt_preset_id=%s summary_scope=%s",
         video.video_id,
         page.page if page else None,
         title,
         source_url,
         visual_note_mode,
         prompt_preset_id,
+        summary_scope,
     )
     input_type = InputType.URL
     if str(video.platform or "").lower() == "local":
@@ -305,6 +307,8 @@ def _create_video_task_record(
         task_input.options.visual_note_mode = visual_note_mode
     if prompt_preset_id is not None:
         task_input.options.prompt_preset_id = prompt_preset_id
+    if summary_scope is not None:
+        task_input.options.summary_scope = summary_scope
     record = task_store.create_task(
         task_input,
         video_id=video.video_id,
@@ -717,6 +721,7 @@ def create_video_task(
         page_number=getattr(request_body, "page_number", None) if request_body else None,
         visual_note_mode=getattr(request_body, "visual_note_mode", None) if request_body else None,
         prompt_preset_id=getattr(request_body, "prompt_preset_id", None) if request_body else None,
+        summary_scope=getattr(request_body, "summary_scope", None) if request_body else None,
     )
     return refreshed.to_detail()
 

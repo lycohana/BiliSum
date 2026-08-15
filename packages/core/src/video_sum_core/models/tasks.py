@@ -22,6 +22,7 @@ class TaskStatus(str, Enum):
 class TaskOptions(BaseModel):
     language: str = "zh"
     summary_mode: str = "auto"
+    summary_scope: str = "knowledge_note"
     prompt_preset_id: str | None = None
     prefer_subtitles: bool = True
     export_formats: list[str] = Field(default_factory=lambda: ["md", "json"])

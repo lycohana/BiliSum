@@ -20,6 +20,7 @@ class VideoTaskCreateRequest(BaseModel):
     page_number: int | None = None
     visual_note_mode: str | None = None
     prompt_preset_id: str | None = None
+    summary_scope: str | None = None
 
 
 class VideoTaskBatchRequest(BaseModel):

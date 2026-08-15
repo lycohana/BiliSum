@@ -101,3 +101,28 @@ test("formatTasks markdown omits transcript unless requested", () => {
 test("formatTasks transcript prints transcript_text", () => {
   assert.equal(formatTasks([task()], "transcript"), "转写全文");
 });
+
+test("brief markdown omits knowledge note and shows summary card", () => {
+  const t = task({
+    result: {
+      overview: "概览",
+      key_points: ["要点一", "要点二"],
+      timeline: [
+        { title: "第一章", start: 65, summary: "第一章摘要" },
+        { title: "第二章", start: 600, summary: "第二章摘要" },
+      ],
+      knowledge_note_markdown: "# 完整笔记",
+      transcript_text: "转写全文",
+    },
+  });
+  const text = formatTasks([t], "markdown", { brief: true });
+  assert.ok(!text.includes("# 完整笔记"));
+  assert.match(text, /概览/);
+  assert.match(text, /要点一/);
+  assert.match(text, /第一章/);
+  assert.match(text, /\[01:05\]/);
+  assert.match(text, /\[10:00\]/);
+  // --with-transcript still appends transcript in brief mode.
+  const withTranscript = formatTasks([t], "markdown", { brief: true, includeTranscript: true });
+  assert.ok(withTranscript.includes("## 转写全文"));
+});

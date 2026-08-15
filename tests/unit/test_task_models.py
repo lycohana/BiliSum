@@ -21,6 +21,38 @@ def test_task_input_defaults() -> None:
 
     assert task_input.options.language == "zh"
     assert "json" in task_input.options.export_formats
+    assert task_input.options.summary_scope == "knowledge_note"
+
+
+def test_summarize_scope_summary_skips_knowledge_note(monkeypatch) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=Path("."),
+            llm_enabled=True,
+            llm_api_key="test-key",
+            llm_model="test-model",
+        )
+    )
+    note_calls: list[str] = []
+
+    def fake_summarize_with_llm(transcript, segments, title, emit, **kwargs):
+        return {"title": title, "overview": "概览", "bulletPoints": ["要点"], "chapters": []}
+
+    def fake_generate_note(**kwargs):
+        note_calls.append("note")
+        return {"knowledgeNoteMarkdown": "# 笔记", "llm_prompt_tokens": 1, "llm_completion_tokens": 1}
+
+    monkeypatch.setattr(runner, "_summarize_with_llm", fake_summarize_with_llm)
+    monkeypatch.setattr(runner, "_generate_knowledge_note_with_llm", fake_generate_note)
+    monkeypatch.setattr(runner, "_normalize_summary", lambda summary, transcript, segments, title: summary)
+
+    summary = runner._summarize("转写", [], "测试标题", lambda *args, **kwargs: None, summary_scope="summary")
+
+    assert note_calls == []
+    assert summary["overview"] == "概览"
+
+    runner._summarize("转写", [], "测试标题", lambda *args, **kwargs: None, summary_scope="knowledge_note")
+    assert note_calls == ["note"]
 
 
 def test_task_status_values_stable() -> None:

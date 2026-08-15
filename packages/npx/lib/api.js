@@ -122,7 +122,7 @@ function uploadLocalMedia(baseUrl, token, filePath, { timeoutMs = 30 * 60_000 } 
   });
 }
 
-function createVideoTask(baseUrl, token, videoId, { pageNumber, visualNoteMode, promptPresetId, timeoutMs = 30_000 } = {}) {
+function createVideoTask(baseUrl, token, videoId, { pageNumber, visualNoteMode, promptPresetId, summaryScope, timeoutMs = 30_000 } = {}) {
   const payload = {};
   if (pageNumber !== undefined && pageNumber !== null) {
     payload.page_number = pageNumber;
@@ -133,10 +133,20 @@ function createVideoTask(baseUrl, token, videoId, { pageNumber, visualNoteMode, 
   if (promptPresetId) {
     payload.prompt_preset_id = promptPresetId;
   }
+  if (summaryScope) {
+    payload.summary_scope = summaryScope;
+  }
   return apiRequest(baseUrl, `/api/v1/videos/${encodeURIComponent(videoId)}/tasks`, {
     method: "POST",
     token,
     json: payload,
+    timeoutMs,
+  });
+}
+
+function getTaskProgress(baseUrl, token, taskId, { timeoutMs = 30_000 } = {}) {
+  return apiRequest(baseUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/progress`, {
+    token,
     timeoutMs,
   });
 }
@@ -169,6 +179,7 @@ module.exports = {
   uploadLocalMedia,
   createVideoTask,
   getTask,
+  getTaskProgress,
   listTasks,
   deleteTask,
 };

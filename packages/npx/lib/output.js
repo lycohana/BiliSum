@@ -14,17 +14,25 @@
 
 const { writeFileSync } = require("node:fs");
 
-function pickMarkdown(task) {
+function pickMarkdown(task, { brief = false } = {}) {
   const result = task && task.result;
   if (!result) {
     return "";
   }
-  const note = String(result.knowledge_note_markdown || "").trim();
-  if (note) {
-    return note;
+  if (!brief) {
+    const note = String(result.knowledge_note_markdown || "").trim();
+    if (note) {
+      return note;
+    }
   }
+  return pickBriefMarkdown(result);
+}
+
+/** Summary-card body: overview + key points + chapters (no knowledge note). */
+function pickBriefMarkdown(result) {
   const overview = String(result.overview || "").trim();
   const keyPoints = Array.isArray(result.key_points) ? result.key_points.filter((item) => String(item).trim()) : [];
+  const chapters = Array.isArray(result.timeline) ? result.timeline.filter((item) => item && typeof item === "object") : [];
   const parts = [];
   if (overview) {
     parts.push(overview);
@@ -32,7 +40,26 @@ function pickMarkdown(task) {
   if (keyPoints.length) {
     parts.push("", "## 要点", ...keyPoints.map((item) => `- ${item}`));
   }
+  if (chapters.length) {
+    parts.push("", "## 章节");
+    for (const chapter of chapters) {
+      const start = formatSeconds(chapter.start);
+      const title = String(chapter.title || "").trim() || "章节";
+      const summary = String(chapter.summary || "").trim();
+      parts.push(`- ${start ? `[${start}] ` : ""}${title}${summary ? `：${summary}` : ""}`);
+    }
+  }
   return parts.join("\n").trim();
+}
+
+function formatSeconds(value) {
+  const total = Number(value);
+  if (!Number.isFinite(total) || total < 0) {
+    return "";
+  }
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.floor(total % 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function metadataLines(task) {
@@ -56,9 +83,9 @@ function metadataLines(task) {
 }
 
 /** Markdown body: metadata header + summary (+ transcript on request). */
-function formatMarkdownTask(task, { includeTranscript = false } = {}) {
+function formatMarkdownTask(task, { includeTranscript = false, brief = false } = {}) {
   const meta = metadataLines(task).join("\n");
-  const body = pickMarkdown(task);
+  const body = pickMarkdown(task, { brief });
   const parts = [`---\n${meta}\n---`];
   if (body) {
     parts.push(body);
@@ -85,14 +112,14 @@ function toJson(task) {
   };
 }
 
-function formatTasks(tasks, format, { includeTranscript = false } = {}) {
+function formatTasks(tasks, format, { includeTranscript = false, brief = false } = {}) {
   if (format === "json") {
     const payload = tasks.length === 1 ? toJson(tasks[0]) : { tasks: tasks.map(toJson) };
     return JSON.stringify(payload, null, 2);
   }
   if (format === "markdown") {
     return tasks
-      .map((task) => formatMarkdownTask(task, { includeTranscript }))
+      .map((task) => formatMarkdownTask(task, { includeTranscript, brief }))
       .filter((body) => body)
       .join("\n\n---\n\n");
   }
@@ -112,4 +139,4 @@ function emit(text, options) {
   return "";
 }
 
-module.exports = { pickMarkdown, metadataLines, formatMarkdownTask, toJson, formatTasks, emit };
+module.exports = { pickMarkdown, pickBriefMarkdown, metadataLines, formatMarkdownTask, toJson, formatTasks, emit };

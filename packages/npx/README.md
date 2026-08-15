@@ -6,6 +6,9 @@
 # 摘要一个视频（默认输出：元数据 + 总结内容，不含字幕）
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx"
 
+# 快速摘要卡片（跳过知识笔记 LLM 调用，更快）
+bilisum brief "https://www.bilibili.com/video/BV1xxxx"
+
 # 输出 JSON 给 Agent 解析（stdout 只含 JSON，进度在 stderr）
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
 
@@ -28,9 +31,11 @@ bilisum summarize --help
 
 ## 输出格式
 
-- **`markdown`（默认）**：YAML 元数据头（task_id / status / title / video_id / source）+ 总结内容（知识笔记或概览+要点），**不含字幕**；加 `--with-transcript` 会追加转写全文。
+- **`markdown`（默认）**：YAML 元数据头（task_id / status / title / video_id / source）+ 总结内容（`summarize` 为知识笔记，`brief` 为摘要卡片），**不含字幕**；加 `--with-transcript` 会追加转写全文。
 - **`json`**：完整任务对象（含 `result`，字幕在 `result.transcript_text`）。
 - **`transcript`**：仅转写全文（`bilisum transcribe` 的默认输出）。
+
+任务等待期间进度显示在 stderr（`[task_id]  12% [stage] 消息`），stdout 保持干净。
 
 ## 它如何"控制现有程序"
 
@@ -41,12 +46,14 @@ bilisum summarize --help
 
 ## 服务不在线时
 
-`summarize / transcribe / status / tasks` 会先探活；如果 `127.0.0.1:3838` 没有服务，就**用桌面端数据目录自动后台拉起一个**（优先用桌面端自带的托管 Python 运行时，其次系统 Python 3.12），等 `/health` 就绪后继续。CLI 拉起的服务进程记录在 `{数据根}\cli-runtime.json`：
+`summarize / brief / transcribe / status / tasks` 会先探活；如果 `127.0.0.1:3838` 没有服务，就**用桌面端数据目录自动后台拉起一个**（优先用桌面端自带的托管 Python 运行时，其次系统 Python 3.12），等 `/health` 就绪后继续。CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`：
 
 ```bash
 bilisum start --no-open   # 前台启动（可选，一般不用）
 bilisum stop              # 停止 CLI 拉起的服务
 ```
+
+**无任务自动关闭**：CLI 后台拉起的服务默认空闲 10 分钟（且无排队/运行中任务）自动退出，可用 `--idle-timeout <sec>` 或 `BILISUM_CLI_IDLE_TIMEOUT` 环境变量调整。该机制只作用于 CLI 自己拉起的服务（通过 `VIDEO_SUM_CLI_MANAGED` 标记），**桌面端启动的服务绝不会被自动关闭**。
 
 > 注意：桌面端自己运行的服务不受 `bilisum stop` 影响（没有 cli-runtime 记录时会提示）。
 
@@ -71,10 +78,13 @@ npm install -g bilisum          # 或 npx bilisum ...
 | `--page <n> / --all-pages` | 多 P 视频分 P 选择 |
 | `--visual-note <mode>` | `text` / `frame_insert` / `vlm_integrated` |
 | `--no-wait` | 只创建任务，立即返回 task_id |
+| `--idle-timeout <sec>` | CLI 后台服务空闲自动关闭秒数（默认 600） |
 | `--timeout <sec>` | 等待完成超时（默认 3600） |
 | `--quiet` | 抑制 stderr 进度输出 |
 
 > 说明：任务转写与摘要在服务端一体执行；`transcribe` 输出转写全文，任务仍会顺带生成摘要。语言 / 摘要模式等参数跟随服务端设置。
+
+> 完整文档见 [BiliSum CLI 使用指南](https://github.com/lycohana/BiliSum/blob/master/docs/cli.md)。
 
 ## 桌面端内置
 

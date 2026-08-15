@@ -140,6 +140,31 @@ def test_create_video_task_does_not_reprobe_page_metadata_before_submit(monkeypa
     assert response.page_number == 1
 
 
+def test_create_video_task_passes_summary_scope_through() -> None:
+    repository = create_repository()
+    worker = FakeTaskWorker()
+    asset = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV-scope",
+            platform="bilibili",
+            title="作用域测试",
+            source_url="https://www.bilibili.com/video/BV-scope",
+        )
+    )
+    app.state.task_repository = repository
+    app.state.task_worker = worker
+
+    response = create_video_task(
+        type("Request", (), {"app": app})(),
+        asset.video_id,
+        type("Body", (), {"summary_scope": "summary"})(),
+    )
+
+    assert len(worker.submitted) == 1
+    assert worker.submitted[0].task_input.options.summary_scope == "summary"
+    assert response.task_id == worker.submitted[0].task_id
+
+
 def test_create_video_task_applies_prompt_preset_id() -> None:
     repository = create_repository()
     worker = FakeTaskWorker()

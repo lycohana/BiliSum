@@ -159,7 +159,7 @@ npm install --prefix .\apps\desktop
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`：
+编辑 `.env`，最小编一组即可跑通（完整变量表见 [配置说明](docs/configuration.md)）：
 
 ```env
 VIDEO_SUM_HOST=127.0.0.1
@@ -167,14 +167,10 @@ VIDEO_SUM_PORT=3838
 VIDEO_SUM_ACCESS_TOKEN=replace-with-a-long-random-token
 
 # 转写（SiliconFlow）
-VIDEO_SUM_TRANSCRIPTION_PROVIDER=siliconflow
-VIDEO_SUM_SILICONFLOW_ASR_BASE_URL=https://api.siliconflow.cn/v1
-VIDEO_SUM_SILICONFLOW_ASR_MODEL=TeleAI/TeleSpeechASR
 VIDEO_SUM_SILICONFLOW_ASR_API_KEY=your-key
 
 # LLM 摘要
 VIDEO_SUM_LLM_ENABLED=true
-VIDEO_SUM_LLM_PROVIDER=openai-compatible
 VIDEO_SUM_LLM_BASE_URL=https://coding.dashscope.aliyuncs.com/v1
 VIDEO_SUM_LLM_MODEL=qwen3.5-plus
 VIDEO_SUM_LLM_API_KEY=your-key
@@ -226,18 +222,19 @@ docker pull lycohana/bilisum:latest
 
 ### CLI（Agent 友好）`新增`
 
-`bilisum` 命令行直接控制已安装的 BiliSum（桌面端 / 已运行的服务）：同一个数据库、同一个知识库，Agent 无需浏览器即可做视频理解。服务未运行时命令会自动用桌面端数据目录后台拉起：
+`bilisum` 命令行直接控制已安装的 BiliSum（桌面端 / 已运行的服务）：同一个数据库、同一个知识库，Agent 无需浏览器即可做视频理解。服务未运行时命令会自动用桌面端数据目录后台拉起，空闲 10 分钟（可配）自动关闭：
 
 ```bash
 npm install -g bilisum
 
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
+bilisum brief "https://www.bilibili.com/video/BV1xxxx"     # 快速摘要卡片
 bilisum transcribe ./demo.mp4 --output transcript.txt
 bilisum status <task-id> --json
 bilisum stop
 ```
 
-详见 [`packages/npx/README.md`](packages/npx/README.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
+完整用法见 [CLI 使用指南](docs/cli.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
 
 ### 从旧版迁移
 
@@ -265,20 +262,20 @@ BiliSum/
 │           └── routers/            # API 路由
 ├── packages/
 │   ├── core/             # 下载/转写/摘要/图文笔记核心逻辑
-│   └── infra/            # 配置/运行时/LLM 工具函数
-├── docs/pic/             # 文档截图
+│   ├── infra/            # 配置/运行时/LLM 工具函数
+│   └── npx/              # bilisum CLI（零依赖 node 客户端）
+├── docs/                 # 文档（cli / configuration / contributing / pic）
 ├── tests/                # 测试
 └── .env.example
 ```
 
+## 文档
+
+- [CLI 使用指南](docs/cli.md) · [配置说明](docs/configuration.md) · [贡献指南](docs/contributing.md) · [文档索引](docs/README.md)
+
 ## 贡献指南
 
-- 遇到 Bug 或有想法 → 直接开 Issue
-- 修复 Bug、加功能、优化体验 → 提 PR
-- 完善文档、补充示例 → 非常欢迎
-- 在你的工作流里用起来了 → 分享经验，帮助后来者
-
-代码风格：Python PEP 8 + 类型注解，TypeScript 严格模式 + 函数式组件，Commit 遵循 Conventional Commits。
+遇到 Bug 或有想法 → 直接开 Issue；修复、加功能、优化体验 → 提 PR。完整开发 / 测试 / 发布流程见 [贡献指南](docs/contributing.md)。
 
 ## 开发流程
 
