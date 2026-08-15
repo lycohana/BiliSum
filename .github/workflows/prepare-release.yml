@@ -71,23 +71,7 @@ jobs:
         run: |
           if [ -n "${MANUAL_BUMP}" ]; then
             # 手动触发：直接使用输入的 bump 级别或显式版本号（校验合法性）。
-            output="$(python - "$MANUAL_BUMP" <<'PY'
-            import sys
-            sys.path.insert(0, "scripts")
-            from versioning import bump_version, read_source_version
-            level = sys.argv[1]
-            try:
-                next_version = bump_version(read_source_version(), level)
-            except ValueError as exc:
-                raise SystemExit(f"Invalid bump target: {level} ({exc})")
-            bump = level if level in {"patch", "minor", "major"} else next_version
-            print(f"bump={bump}")
-            print(f"next_version={next_version}")
-            PY
-            )"
-            echo "$output"
-            printf '%s\n' "$output" | grep '^bump=' >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$output" | grep '^next_version=' >> "$GITHUB_OUTPUT"
+            python scripts/manual_release_version.py
           else
             python scripts/detect_bump.py --github-output "$GITHUB_OUTPUT"
           fi
