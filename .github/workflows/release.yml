@@ -106,6 +106,15 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
         run: |
+          set -euo pipefail
+          # Auto path (create-release-tag) already checks this; manual
+          # workflow_dispatch must too, otherwise the release tag and the
+          # packaged version would drift apart.
+          source_version="$(cat VERSION | tr -d '[:space:]')"
+          if [ "${source_version}" != "${RELEASE_VERSION}" ]; then
+            echo "VERSION (${source_version}) does not match release v${RELEASE_VERSION}." >&2
+            exit 1
+          fi
           python scripts/bump_version.py --check
 
       - name: Install desktop dependencies
@@ -249,6 +258,15 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
         run: |
+          set -euo pipefail
+          # Auto path (create-release-tag) already checks this; manual
+          # workflow_dispatch must too, otherwise the release tag and the
+          # packaged version would drift apart.
+          source_version="$(cat VERSION | tr -d '[:space:]')"
+          if [ "${source_version}" != "${RELEASE_VERSION}" ]; then
+            echo "VERSION (${source_version}) does not match release v${RELEASE_VERSION}." >&2
+            exit 1
+          fi
           python scripts/bump_version.py --check
 
       - name: Install desktop dependencies

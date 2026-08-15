@@ -224,6 +224,21 @@ docker run --rm -p 3838:3838 \
 docker pull lycohana/bilisum:latest
 ```
 
+### CLI（Agent 友好）`新增`
+
+`bilisum` 命令行直接控制已安装的 BiliSum（桌面端 / 已运行的服务）：同一个数据库、同一个知识库，Agent 无需浏览器即可做视频理解。服务未运行时命令会自动用桌面端数据目录后台拉起：
+
+```bash
+npm install -g bilisum
+
+bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
+bilisum transcribe ./demo.mp4 --output transcript.txt
+bilisum status <task-id> --json
+bilisum stop
+```
+
+详见 [`packages/npx/README.md`](packages/npx/README.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
+
 ### 从旧版迁移
 
 首次启动自动从 BriefVid 目录迁移数据到 BiliSum 目录，只复制缺失文件，不覆盖已有数据，不删除旧目录。

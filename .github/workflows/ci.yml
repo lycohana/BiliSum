@@ -118,6 +118,9 @@ jobs:
       - name: Run Python tests
         run: python -m pytest -q
 
+      - name: Run npx CLI tests
+        run: node --test "packages/npx/test/*.test.js"
+
       - name: Install desktop dependencies without package install scripts
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/

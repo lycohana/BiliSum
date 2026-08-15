@@ -44,7 +44,10 @@ TARGETS = VersionTargets(
         REPO_ROOT / "apps" / "desktop" / "package.json",
         REPO_ROOT / "packages" / "npx" / "package.json",
     ),
-    package_locks=(REPO_ROOT / "apps" / "desktop" / "package-lock.json",),
+    package_locks=(
+        REPO_ROOT / "apps" / "desktop" / "package-lock.json",
+        REPO_ROOT / "packages" / "npx" / "package-lock.json",
+    ),
 )
 
 

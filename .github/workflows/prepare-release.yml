@@ -112,7 +112,7 @@ jobs:
           git add VERSION pyproject.toml apps/service/pyproject.toml \
             packages/core/pyproject.toml packages/infra/pyproject.toml \
             apps/desktop/package.json apps/desktop/package-lock.json \
-            packages/npx/package.json
+            packages/npx/package.json packages/npx/package-lock.json
           git commit -m "chore(release): v${NEXT_VERSION} [skip ci]"
           git push origin "HEAD:release/v${NEXT_VERSION}"
 
