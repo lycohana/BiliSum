@@ -8,7 +8,7 @@ const extraResources = [
     // plane: `node resources/cli/bin/bilisum.js summarize <url>`.
     from: "../../packages/npx",
     to: "cli",
-    filter: ["**/*", "!test/**", "!package-lock.json", "!*.tgz"]
+    filter: ["**/*", "!test/**", "!runtime/**", "!package-lock.json", "!*.tgz"]
   },
   process.platform === "win32"
     ? {
