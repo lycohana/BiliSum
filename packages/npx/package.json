@@ -7,6 +7,7 @@
   },
   "files": [
     "bin",
+    "lib",
     "runtime",
     "README.md"
   ],
