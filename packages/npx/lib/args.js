@@ -53,6 +53,7 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     visualNote: "",
     promptPreset: "",
     withTranscript: false,
+    idleTimeout: Number.parseInt(process.env.BILISUM_CLI_IDLE_TIMEOUT || "600", 10) || 600,
     timeoutSeconds: 3600,
     startupTimeoutSeconds: 300,
   };
@@ -98,6 +99,8 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
       options.visualNote = mode;
     } else if (arg === "--prompt-preset") {
       options.promptPreset = readValue(args, ++index, arg);
+    } else if (arg === "--idle-timeout") {
+      options.idleTimeout = parsePositiveInt(readValue(args, ++index, arg), "--idle-timeout");
     } else if (arg === "--timeout") {
       options.timeoutSeconds = parsePositiveInt(readValue(args, ++index, arg), "--timeout");
     } else if (arg === "--startup-timeout") {

@@ -140,6 +140,13 @@ function spawnService(options, { background = false, accessToken = null } = {}) 
   }
 
   const env = buildServiceEnv(options, dataRoot, accessToken);
+  if (background) {
+    // CLI-managed background service: auto shut down after `idleTimeout`
+    // seconds without activity AND without active tasks. The desktop app never
+    // sets these vars, so it can never be affected.
+    env.VIDEO_SUM_CLI_MANAGED = "1";
+    env.VIDEO_SUM_CLI_IDLE_TIMEOUT_SECONDS = String(options.idleTimeout ?? 600);
+  }
   const url = baseUrlFor(options.host, options.port);
   const logPath = cliServiceLogPath(dataRoot, options.port);
 

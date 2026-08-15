@@ -63,6 +63,13 @@ test("parseTaskCommandArgs: --with-transcript", () => {
   assert.equal(without.withTranscript, false);
 });
 
+test("parseTaskCommandArgs: --idle-timeout", () => {
+  const { options } = parseTaskCommandArgs(["url", "--idle-timeout", "300"]);
+  assert.equal(options.idleTimeout, 300);
+  assert.throws(() => parseTaskCommandArgs(["url", "--idle-timeout", "0"]), UsageError);
+  assert.throws(() => parseTaskCommandArgs(["url", "--idle-timeout", "abc"]), UsageError);
+});
+
 test("parseTaskCommandArgs: missing source throws", () => {
   assert.throws(() => parseTaskCommandArgs([]), UsageError);
   assert.throws(() => parseTaskCommandArgs(["--quiet"]), UsageError);

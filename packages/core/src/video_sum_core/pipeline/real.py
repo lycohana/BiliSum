@@ -458,6 +458,7 @@ class RealPipelineRunner(PipelineRunner):
             title,
             emit,
             prompt_preset_id=task_input.options.prompt_preset_id,
+            summary_scope=task_input.options.summary_scope,
         )
         emit("exporting", 97, "正在导出任务结果")
         result = self._export_result(task_dir, title, transcript, segments, summary)
@@ -511,6 +512,7 @@ class RealPipelineRunner(PipelineRunner):
             emit,
             source_kind=source_kind,
             prompt_preset_id=context.task_input.options.prompt_preset_id,
+            summary_scope=context.task_input.options.summary_scope,
         )
         emit("exporting", 97, "正在导出新的摘要结果")
         result = self._export_result(task_dir, title, transcript, segments, summary)
@@ -581,6 +583,7 @@ class RealPipelineRunner(PipelineRunner):
             title,
             emit,
             prompt_preset_id=task_input.options.prompt_preset_id,
+            summary_scope=task_input.options.summary_scope,
             pegasus_video=pegasus_video,
         )
         emit("exporting", 97, "正在导出任务结果")
@@ -2189,6 +2192,7 @@ class RealPipelineRunner(PipelineRunner):
         emit: Callable[[str, int, str, dict[str, object] | None], None],
         source_kind: str | None = None,
         prompt_preset_id: str | None = None,
+        summary_scope: str = "knowledge_note",
         pegasus_video: dict[str, str] | None = None,
     ) -> dict[str, object]:
         emit(
@@ -2249,7 +2253,7 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "knowledge_cards",
             },
         )
-        if used_llm_summary:
+        if used_llm_summary and summary_scope != "summary":
             emit("summarizing", 96, "正在生成知识笔记")
             try:
                 note_payload = self._generate_knowledge_note_with_llm(

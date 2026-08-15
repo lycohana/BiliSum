@@ -8,6 +8,7 @@ const { existsSync } = require("node:fs");
 const {
   baseUrlFor,
   getTask,
+  getTaskProgress,
   listTasks,
   probeVideo,
   uploadLocalMedia,
@@ -37,7 +38,8 @@ function printHelp() {
   console.log("AI 视频总结与知识库工具：CLI 直接控制已安装的 BiliSum（桌面端/服务）。");
   console.log("");
   console.log("Usage:");
-  console.log("  npx bilisum summarize <url|file> [options]  Summarize a video (agent-friendly)");
+  console.log("  npx bilisum summarize <url|file> [options]  Summarize a video (knowledge note)");
+  console.log("  npx bilisum brief <url|file> [options]      Fast summary card only (skips note)");
   console.log("  npx bilisum transcribe <url|file> [options] Print the transcript of a video");
   console.log("  npx bilisum status <task-id> [--json]       Show task status");
   console.log("  npx bilisum tasks [--limit N] [--json]      List tasks");
@@ -56,7 +58,7 @@ function printHelp() {
   console.log("  --token <token>                      Access token (default: desktop token)");
   console.log("  --env KEY=VALUE                      Extra env for a CLI-started service");
   console.log("");
-  console.log("Options (summarize/transcribe):");
+  console.log("Options (summarize/brief/transcribe):");
   console.log("  --page <n>                           Process a specific P for multi-P videos");
   console.log("  --all-pages                          Process every P of a multi-P video");
   console.log("  --visual-note <mode>                 text | frame_insert | vlm_integrated");
@@ -65,11 +67,13 @@ function printHelp() {
   console.log("  --output <path> / -o <path>          Write result to a file instead of stdout");
   console.log("  --with-transcript                    Append the full transcript to markdown output");
   console.log("  --no-wait                            Create the task and exit immediately");
+  console.log("  --idle-timeout <sec>                 CLI 后台服务无任务自动关闭秒数，默认 600");
   console.log("  --timeout <sec>                      Max wait for completion, default 3600");
   console.log("  --startup-timeout <sec>              Max wait for service startup, default 300");
   console.log("  --quiet / -q                         Suppress progress output (stderr)");
   console.log("");
   console.log("默认输出为元数据 + 总结内容（不含字幕），需要字幕请加 --with-transcript。");
+  console.log("brief 只生成摘要卡片（跳过知识笔记 LLM 调用，更快）。");
   console.log("Options (start):");
   console.log("  --no-open                            Do not open the browser");
   console.log("");
@@ -220,6 +224,7 @@ async function resolveAndCreateTasks(source, options, token, baseUrl, log) {
       pageNumber,
       visualNoteMode: options.visualNote,
       promptPresetId: options.promptPreset,
+      summaryScope: options.brief ? "summary" : undefined,
     });
     created.push(task);
     log(`任务已创建：${task.task_id}`);
@@ -242,20 +247,25 @@ async function waitForTasks(taskIds, options, token, baseUrl, log) {
       }
       let progress = null;
       try {
-        progress = await getTask(baseUrl, token, taskId);
+        progress = await getTaskProgress(baseUrl, token, taskId);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           throw new Error(`任务不存在：${taskId}`);
         }
-        throw error;
+        // Fall back to the detail endpoint if progress is unavailable.
+        progress = await getTask(baseUrl, token, taskId);
       }
       state.status = progress.status;
       states.set(taskId, state);
       if (!TERMINAL_STATUSES.has(progress.status)) {
-        const marker = `${taskId}:${progress.status}`;
+        const marker = `${taskId}:${progress.status}:${progress.progress ?? ""}:${progress.latest_stage ?? ""}`;
         if (!seenProgress.has(marker)) {
           seenProgress.add(marker);
-          log(`[${taskId}] ${progress.status}（${progress.title || "视频"}）`);
+          const pct = Number(progress.progress);
+          const pctText = Number.isFinite(pct) ? `${String(Math.max(0, Math.min(100, Math.round(pct)))).padStart(3)}%` : "  -%";
+          const stage = progress.latest_stage ? ` [${progress.latest_stage}]` : "";
+          const message = progress.latest_message ? ` ${progress.latest_message}` : "";
+          log(`[${taskId}] ${pctText}${stage}${message}`);
         }
       }
       allTerminal.push(TERMINAL_STATUSES.has(progress.status));
@@ -277,8 +287,9 @@ async function waitForTasks(taskIds, options, token, baseUrl, log) {
   }
 }
 
-async function runTaskCommand(args, { defaultFormat }) {
+async function runTaskCommand(args, { defaultFormat, brief = false }) {
   const { source, options } = parseTaskCommandArgs(args, { defaultFormat });
+  options.brief = brief;
   if (options.help) {
     printHelp();
     return;
@@ -322,7 +333,7 @@ async function runTaskCommand(args, { defaultFormat }) {
     throw new Error(`${failed.length} 个任务失败。`);
   }
   const written = emit(
-    formatTasks(completed, options.format, { includeTranscript: options.withTranscript }),
+    formatTasks(completed, options.format, { includeTranscript: options.withTranscript, brief }),
     options,
   );
   if (written) {
@@ -461,6 +472,10 @@ async function main() {
     }
     if (command === "summarize" || command === "sum") {
       await runTaskCommand(args, { defaultFormat: "markdown" });
+      return;
+    }
+    if (command === "brief") {
+      await runTaskCommand(args, { defaultFormat: "markdown", brief: true });
       return;
     }
     if (command === "transcribe" || command === "trans") {
