@@ -72,17 +72,20 @@ function assertSpawnablePort(options) {
  * data/cache/tasks/db from VIDEO_SUM_APP_DATA_ROOT (same as the desktop app).
  * When an access token is known, it is injected like the desktop app does
  * (VIDEO_SUM_ACCESS_TOKEN), so the CLI and the spawned service always agree.
+ *
+ * `webStaticDir` (when provided) points the service's web UI at the static
+ * build bundled in this npm package; a later `--env` override still wins.
  */
-function buildServiceEnv(options, dataRoot, accessToken = null) {
-  const webStaticDir = join(dataRoot, "cli-web-static");
-  mkdirSync(webStaticDir, { recursive: true });
+function buildServiceEnv(options, dataRoot, accessToken = null, webStaticDir = null) {
   const env = {
     ...process.env,
     VIDEO_SUM_HOST: options.host,
     VIDEO_SUM_PORT: options.port,
     VIDEO_SUM_APP_DATA_ROOT: dataRoot,
-    VIDEO_SUM_WEB_STATIC_DIR: webStaticDir,
   };
+  if (webStaticDir) {
+    env.VIDEO_SUM_WEB_STATIC_DIR = webStaticDir;
+  }
   if (accessToken) {
     env.VIDEO_SUM_ACCESS_TOKEN = accessToken;
   }
@@ -131,16 +134,18 @@ function removeCliRuntimeFile(dataRoot, port) {
 function spawnService(options, { background = false, accessToken = null, log = console.error } = {}) {
   assertSpawnablePort(options);
   const dataRoot = options.data;
-  const env = buildServiceEnv(options, dataRoot, accessToken);
+  // Both desktop and cli headless services serve the web UI from the static
+  // build bundled in this npm package (runtime/apps/web/static): the desktop
+  // managed-runtime Python cannot reach the desktop app's frozen bundle, and
+  // the cli venv has no static of its own.
+  const bundledStatic = join(runtimeSourceDir(), "apps", "web", "static");
+  const webStaticDir = existsSync(bundledStatic) ? bundledStatic : null;
+  const env = buildServiceEnv(options, dataRoot, accessToken, webStaticDir);
 
   let python;
   if (options.environment === "cli") {
     // Standalone mode: the CLI venv serves the bundled runtime sources.
     python = { command: ensureCliVenv(options, log), args: [] };
-    const staticDir = join(runtimeSourceDir(), "apps", "web", "static");
-    if (existsSync(staticDir)) {
-      env.VIDEO_SUM_WEB_STATIC_DIR = staticDir;
-    }
   } else {
     python = options.python ? { command: options.python, args: [] } : findPython(dataRoot);
     if (!python) {
