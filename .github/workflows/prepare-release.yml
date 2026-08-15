@@ -1,9 +1,16 @@
 name: Prepare Release
 
-# 版本发布流程的第一阶段：推送带 * 标记（或 BREAKING CHANGE）的提交到
-# main/master 后，自动 bump 版本并创建「Release vX.Y.Z」PR。
-# 合并该 PR 会触发 create-release-tag.yml 打 tag，tag 再触发 release.yml
-# 构建并发布 GitHub Release。
+# 版本发布流程的第一阶段：创建「Release vX.Y.Z」PR。
+#
+# 触发方式：
+# - 推送带 * 标记（fix*: / feat*: / perf*: / refactor*:）、! 标记或
+#   BREAKING CHANGE footer 的提交到 main/master（自动检测 bump）
+# - 手动触发（workflow_dispatch）：在 Actions 页面手动运行并填写
+#   bump 级别（patch / minor / major）或显式版本号（如 1.20.0、
+#   1.20.0-beta.1），不依赖提交标记
+#
+# 合并该 PR 会触发 create-release-tag.yml 打 tag，并触发 release.yml
+# 构建与发布。
 #
 # 在 Release PR 里选择版本类型：
 #   - 默认（无 label）：发行版，版本号 vX.Y.Z
@@ -15,6 +22,13 @@ on:
     branches:
       - main
       - master
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "手动发版：patch / minor / major 或显式版本号（如 1.20.0、1.20.0-beta.1）"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -29,7 +43,10 @@ concurrency:
 
 jobs:
   detect-release:
-    if: ${{ github.event.head_commit != null && !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.head_commit != null &&
+       !startsWith(github.event.head_commit.message, 'chore(release):'))
     runs-on: ubuntu-latest
     outputs:
       bump: ${{ steps.detect.outputs.bump }}
@@ -49,7 +66,31 @@ jobs:
 
       - name: Detect bump level
         id: detect
-        run: python scripts/detect_bump.py --github-output "$GITHUB_OUTPUT"
+        env:
+          MANUAL_BUMP: ${{ github.event.inputs.bump }}
+        run: |
+          if [ -n "${MANUAL_BUMP}" ]; then
+            # 手动触发：直接使用输入的 bump 级别或显式版本号（校验合法性）。
+            output="$(python - "$MANUAL_BUMP" <<'PY'
+            import sys
+            sys.path.insert(0, "scripts")
+            from versioning import bump_version, read_source_version
+            level = sys.argv[1]
+            try:
+                next_version = bump_version(read_source_version(), level)
+            except ValueError as exc:
+                raise SystemExit(f"Invalid bump target: {level} ({exc})")
+            bump = level if level in {"patch", "minor", "major"} else next_version
+            print(f"bump={bump}")
+            print(f"next_version={next_version}")
+            PY
+            )"
+            echo "$output"
+            printf '%s\n' "$output" | grep '^bump=' >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$output" | grep '^next_version=' >> "$GITHUB_OUTPUT"
+          else
+            python scripts/detect_bump.py --github-output "$GITHUB_OUTPUT"
+          fi
 
       - name: Stop when no release is needed
         if: ${{ steps.detect.outputs.bump == '' }}
