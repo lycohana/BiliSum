@@ -18,7 +18,7 @@ const { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } =
 const { join } = require("node:path");
 
 const { ApiError, baseUrlFor, health } = require("./api");
-const { findPython } = require("./runtime");
+const { findPython, ensureCliVenv, runtimeSourceDir } = require("./runtime");
 
 const SERVICE_NAME = "BiliSum";
 const DEFAULT_STARTUP_TIMEOUT_MS = 300_000;
@@ -122,24 +122,35 @@ function removeCliRuntimeFile(dataRoot, port) {
 }
 
 /**
- * Start the service with the desktop data root. Returns { child, url }.
+ * Start the service. In desktop mode the desktop-managed runtime (or system
+ * Python) is used; in cli mode the CLI's own venv (built from the bundled
+ * runtime sources) is used. Returns { child, url, logPath }.
  * `background: true` detaches and ignores stdio; otherwise stdio is inherited
  * and process exit is tied to the child.
  */
-function spawnService(options, { background = false, accessToken = null } = {}) {
+function spawnService(options, { background = false, accessToken = null, log = console.error } = {}) {
   assertSpawnablePort(options);
   const dataRoot = options.data;
-  const python = options.python
-    ? { command: options.python, args: [] }
-    : findPython(dataRoot);
-  if (!python) {
-    throw new Error(
-      "没有找到可用的 Python 3.12。请先安装桌面版 BiliSum（自带运行时），" +
-      "或安装 Python 3.12 后重试。",
-    );
+  const env = buildServiceEnv(options, dataRoot, accessToken);
+
+  let python;
+  if (options.environment === "cli") {
+    // Standalone mode: the CLI venv serves the bundled runtime sources.
+    python = { command: ensureCliVenv(options, log), args: [] };
+    const staticDir = join(runtimeSourceDir(), "apps", "web", "static");
+    if (existsSync(staticDir)) {
+      env.VIDEO_SUM_WEB_STATIC_DIR = staticDir;
+    }
+  } else {
+    python = options.python ? { command: options.python, args: [] } : findPython(dataRoot);
+    if (!python) {
+      throw new Error(
+        "没有找到可用的 Python 3.12。请先安装桌面版 BiliSum（自带运行时），" +
+        "或安装 Python 3.12 后重试，或使用 cli 环境（bilisum env use cli）。",
+      );
+    }
   }
 
-  const env = buildServiceEnv(options, dataRoot, accessToken);
   if (background) {
     // CLI-managed background service: auto shut down after `idleTimeout`
     // seconds without activity AND without active tasks. The desktop app never

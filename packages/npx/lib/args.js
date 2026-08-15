@@ -5,6 +5,7 @@
  */
 
 const { locateBilisumDataRoot } = require("./runtime");
+const { ENV_NAMES } = require("./env");
 
 class UsageError extends Error {
   constructor(message) {
@@ -44,6 +45,9 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     data: process.env.BILISUM_DATA || locateBilisumDataRoot(),
     token: process.env.BILISUM_TOKEN || "",
     env: [],
+    environment: "",
+    _hostSet: false,
+    _portSet: false,
     format: defaultFormat,
     output: "",
     wait: true,
@@ -63,10 +67,18 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     const arg = args[index];
     if (arg === "--host") {
       options.host = readValue(args, ++index, arg);
+      options._hostSet = true;
     } else if (arg === "--port" || arg === "-p") {
       options.port = readValue(args, ++index, arg);
+      options._portSet = true;
     } else if (arg === "--python") {
       options.python = readValue(args, ++index, arg);
+    } else if (arg === "--environment" || arg === "--env-mode") {
+      const name = readValue(args, ++index, arg);
+      if (!ENV_NAMES.includes(name)) {
+        throw new UsageError(`--environment 仅支持 ${ENV_NAMES.join(" / ")}，收到：${name}`);
+      }
+      options.environment = name;
     } else if (arg === "--data") {
       options.data = readValue(args, ++index, arg);
     } else if (arg === "--token") {

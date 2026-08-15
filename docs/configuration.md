@@ -135,10 +135,29 @@ CLI（`bilisum`）不读 `.env`，使用 `BILISUM_*` 环境变量，详见 [CLI 
 | 变量 | 说明 |
 |------|------|
 | `BILISUM_HOST` / `BILISUM_PORT` | 服务地址 |
-| `BILISUM_DATA_ROOT` / `BILISUM_DATA` | 数据根目录 |
+| `BILISUM_DATA_ROOT` / `BILISUM_DATA` | 桌面端数据根覆盖 |
+| `BILISUM_CLI_HOME` | **CLI 独立环境（cli 模式）的数据根**：config.json + venv + 服务数据 |
 | `BILISUM_TOKEN` | 访问令牌 |
 | `BILISUM_PYTHON` | Python 可执行文件 |
 | `BILISUM_CLI_IDLE_TIMEOUT` | CLI 后台服务空闲自动关闭秒数（默认 600） |
+
+### CLI 环境与 config.json
+
+CLI 支持四种环境（`bilisum env` 查看 / `bilisum env use <name>` 切换）：
+
+- `desktop`：连接桌面端服务（127.0.0.1:3838，桌面端数据根与 token）
+- `cli`：独立环境（默认 127.0.0.1:3839，数据根 = `BILISUM_CLI_HOME`，自带 venv 与设置页，无需桌面端）
+- `custom`：任意 host/port/token（Docker、远程）
+- `auto`（默认）：桌面端可达则 desktop，否则 cli
+
+选择持久化在 `CLI_HOME/config.json`：
+
+```json
+{
+  "env": "auto",
+  "custom": { "host": "127.0.0.1", "port": "3838", "token": "" }
+}
+```
 
 CLI 自动拉起服务时会注入 `VIDEO_SUM_CLI_MANAGED=1` 与 `VIDEO_SUM_CLI_IDLE_TIMEOUT_SECONDS`，服务端据此启用空闲自动退出；**桌面端启动的服务不受影响**。
 

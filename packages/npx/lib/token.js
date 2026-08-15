@@ -46,6 +46,11 @@ function readToken(options, env) {
   }
 
   for (const candidate of desktopUserDataCandidates()) {
+    // cli / custom environments own their token; only desktop mode may reuse
+    // the desktop app's token file.
+    if (options.environment === "cli" || options.environment === "custom") {
+      break;
+    }
     const token = readJsonTokenFile(candidate, ["accessToken", "access_token"]);
     if (token) {
       return token;

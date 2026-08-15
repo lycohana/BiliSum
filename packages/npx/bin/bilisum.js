@@ -17,13 +17,20 @@ const {
 } = require("../lib/api");
 const { UsageError, parseTaskCommandArgs } = require("../lib/args");
 const { formatTasks, emit } = require("../lib/output");
-const { readVersion, locateBilisumDataRoot, findPython } = require("../lib/runtime");
+const { readVersion, locateBilisumDataRoot, findPython, cliHomeDir, ensureCliVenv, cliVenvPython, findSystemPython } = require("../lib/runtime");
 const { readToken } = require("../lib/token");
 const {
   ensureService,
   stopService,
   spawnService,
 } = require("../lib/server");
+const {
+  resolveEnvironment,
+  readConfig,
+  writeConfig,
+  ENV_NAMES,
+  isDesktopReachable,
+} = require("../lib/env");
 
 const RELEASES_URL = "https://github.com/lycohana/BiliSum/releases/latest";
 const REPO_URL = "https://github.com/lycohana/BiliSum";
@@ -43,19 +50,24 @@ function printHelp() {
   console.log("  npx bilisum transcribe <url|file> [options] Print the transcript of a video");
   console.log("  npx bilisum status <task-id> [--json]       Show task status");
   console.log("  npx bilisum tasks [--limit N] [--json]      List tasks");
-  console.log("  npx bilisum start [options]                 Start the service (desktop data dir)");
+  console.log("  npx bilisum env [use <name>|setup]          Environment status / switch / setup");
+  console.log("  npx bilisum --setting                       Open the web settings page");
+  console.log("  npx bilisum start [options]                 Start the service");
   console.log("  npx bilisum stop                            Stop the CLI-started BiliSum service");
-  console.log("  npx bilisum doctor                          Check service/Python setup");
+  console.log("  npx bilisum doctor                          Check environment/service/Python setup");
   console.log("  npx bilisum --version                       Print package version");
   console.log("  npx bilisum release                         Open the latest GitHub release");
+  console.log("");
+  console.log("环境（bilisum env）：desktop 连桌面端服务 / cli 独立环境（自带运行时）/ custom 自定义 / auto 自动");
   console.log("");
   console.log("默认连接桌面端服务 http://127.0.0.1:3838；未运行时自动用桌面端数据目录后台拉起。");
   console.log("");
   console.log("Options (all commands):");
   console.log("  --host <host>                        Host, default 127.0.0.1");
   console.log("  --port <port>                        Port, default 3838");
-  console.log("  --data <path>                        Desktop data root (default: desktop app data)");
-  console.log("  --token <token>                      Access token (default: desktop token)");
+  console.log("  --data <path>                        Data root (default: env-dependent)");
+  console.log("  --token <token>                      Access token (default: env-dependent)");
+  console.log("  --environment <name>                 desktop | cli | custom | auto (one-shot)");
   console.log("  --env KEY=VALUE                      Extra env for a CLI-started service");
   console.log("");
   console.log("Options (summarize/brief/transcribe):");
@@ -89,6 +101,9 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
     data: process.env.BILISUM_DATA || locateBilisumDataRoot(),
     token: process.env.BILISUM_TOKEN || "",
     env: [],
+    environment: "",
+    _hostSet: false,
+    _portSet: false,
     json: false,
     limit: 20,
     help: false,
@@ -106,14 +121,22 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
     const arg = args[index];
     if (arg === "--host") {
       options.host = readValue(++index, arg);
+      options._hostSet = true;
     } else if (arg === "--port" || arg === "-p") {
       options.port = readValue(++index, arg);
+      options._portSet = true;
     } else if (arg === "--python") {
       options.python = readValue(++index, arg);
     } else if (arg === "--data") {
       options.data = readValue(++index, arg);
     } else if (arg === "--token") {
       options.token = readValue(++index, arg);
+    } else if (arg === "--environment" || arg === "--env-mode") {
+      const name = readValue(++index, arg);
+      if (!ENV_NAMES.includes(name)) {
+        throw new UsageError(`--environment 仅支持 ${ENV_NAMES.join(" / ")}，收到：${name}`);
+      }
+      options.environment = name;
     } else if (arg === "--env" || arg === "-e") {
       options.env.push(readValue(++index, arg));
     } else if (arg === "--json") {
@@ -161,6 +184,12 @@ async function ensureAuthenticatedService(options, log) {
   // Resolve the token first (desktop token / auth.json / --token / env) and
   // inject it into a service the CLI spawns, so both always agree.
   let token = readToken(options);
+  if (!token && options.environment === "cli") {
+    // Standalone cli environment: generate a token and inject it into the
+    // service (same pattern as the desktop app), so we never depend on
+    // auth.json creation timing.
+    token = require("node:crypto").randomBytes(32).toString("hex");
+  }
   await ensureService(options, { log, accessToken: token });
   if (!token) {
     // The CLI just spawned the service, which may have created {data}/auth.json.
@@ -299,6 +328,7 @@ async function runTaskCommand(args, { defaultFormat, brief = false }) {
     throw new UsageError(`本地文件不存在：${source}`);
   }
   const log = options.quiet ? () => {} : console.error;
+  await resolveEnvironment(options);
   const baseUrl = baseUrlFor(options.host, options.port);
   const token = await ensureAuthenticatedService(options, log);
   const tasks = await resolveAndCreateTasks(source, options, token, baseUrl, log);
@@ -351,6 +381,7 @@ async function statusCommand(args) {
     throw new UsageError("缺少 task-id。用法：bilisum status <task-id> [--json]");
   }
   const log = console.error;
+  await resolveEnvironment(options);
   const baseUrl = baseUrlFor(options.host, options.port);
   const token = await ensureAuthenticatedService(options, log);
   const taskId = positional[0];
@@ -390,6 +421,7 @@ async function tasksCommand(args) {
     return;
   }
   const log = console.error;
+  await resolveEnvironment(options);
   const baseUrl = baseUrlFor(options.host, options.port);
   const token = await ensureAuthenticatedService(options, log);
   const tasks = await listTasks(baseUrl, token);
@@ -411,10 +443,12 @@ async function tasksCommand(args) {
   }
 }
 
-function startService(args) {
+async function startService(args) {
   const { options } = parseConnectionOptions(args);
+  await resolveEnvironment(options);
   const url = `http://${options.host}:${options.port}`;
   console.log(`Starting BiliSum at ${url}`);
+  console.log(`Environment:    ${options.environment}`);
   console.log(`Data root:      ${options.data}`);
   console.log("");
   const { child } = spawnService(options, { background: false });
@@ -430,16 +464,96 @@ function startService(args) {
   });
 }
 
-function doctor(args) {
+async function doctor(args) {
   const { options } = parseConnectionOptions(args);
-  const python = options.python
-    ? { command: options.python, args: [] }
-    : findPython(options.data);
+  await resolveEnvironment(options);
+  const python = options.environment === "cli"
+    ? { command: cliVenvPython(), args: [] }
+    : options.python
+      ? { command: options.python, args: [] }
+      : findPython(options.data);
   console.log(`BiliSum package: ${readVersion()}`);
-  console.log(`Data root:       ${options.data}`);
-  console.log(`Python:          ${python ? [python.command, ...python.args].join(" ") : "未找到（请安装桌面版 BiliSum 或 Python 3.12）"}`);
+  console.log(`Environment:     ${options.environment}`);
   console.log(`Service:         http://${options.host}:${options.port}`);
-  console.log(`Token:           ${readToken(options) ? "已找到" : "未找到（连接服务时需 --token 或启动一次桌面端）"}`);
+  console.log(`Data root:       ${options.data}`);
+  console.log(`Python:          ${python && python.command ? [python.command, ...python.args].join(" ") : "未找到（请安装桌面版 BiliSum、Python 3.12，或运行 bilisum env setup）"}`);
+  console.log(`Token:           ${readToken(options) ? "已找到" : "未找到（desktop 环境请先启动桌面端；cli 环境运行后自动生成）"}`);
+  if (options.environment === "cli") {
+    console.log(`CLI env status:  ${require("node:fs").existsSync(cliVenvPython()) ? "就绪" : "未初始化（运行 bilisum env setup）"}`);
+  }
+}
+
+async function settingsCommand(args) {
+  const { options } = parseConnectionOptions(args);
+  if (options.help) {
+    printHelp();
+    return;
+  }
+  const log = console.error;
+  await resolveEnvironment(options);
+  await ensureService(options, { log });
+  const url = `http://${options.host}:${options.port}/settings`;
+  log(`打开设置页：${url}`);
+  openUrl(url);
+}
+
+async function envCommand(args) {
+  const sub = (args[0] || "").toLowerCase();
+  const config = readConfig();
+
+  if (sub === "use") {
+    const name = String(args[1] || "").toLowerCase();
+    if (!ENV_NAMES.includes(name) || name === "auto") {
+      throw new UsageError(`用法：bilisum env use ${ENV_NAMES.filter((item) => item !== "auto").join("|")}`);
+    }
+    writeConfig({ ...config, env: name });
+    console.log(`已切换到 ${name} 环境。`);
+    return;
+  }
+
+  if (sub === "setup") {
+    console.log(`初始化 CLI 独立环境（${cliHomeDir()}）...`);
+    const python = ensureCliVenv({ python: process.env.BILISUM_PYTHON || "", environment: "cli" }, console.error);
+    console.log(`CLI 独立环境就绪：${python}`);
+    return;
+  }
+
+  if (sub === "help" || sub === "--help" || sub === "-h") {
+    printEnvHelp();
+    return;
+  }
+
+  // default: status
+  const current = await resolveEnvironment({ environment: config.env || "auto" });
+  const desktopUp = await isDesktopReachable();
+  console.log(`当前环境:      ${current.env}`);
+  console.log(`服务地址:      http://${current.host}:${current.port}`);
+  console.log(`数据根:        ${current.dataRoot}`);
+  console.log("");
+  console.log("可用环境:");
+  console.log(`  desktop    ${desktopUp ? "● 桌面端服务在运行" : "○ 未检测到桌面端服务（127.0.0.1:3838）"}`);
+  const venvReady = require("node:fs").existsSync(cliVenvPython());
+  console.log(`  cli        ${venvReady ? "● 独立环境已就绪" : "○ 未初始化（bilisum env setup）"}  CLI_HOME=${cliHomeDir()}`);
+  console.log(`  custom     ${config.custom ? "● 已配置" : "○ 未配置（--host/--port/--token）"}`);
+  console.log(`  auto       desktop 优先，否则 cli`);
+  console.log("");
+  console.log("切换：bilisum env use desktop|cli|custom");
+  if (config.env && config.env !== "auto") {
+    console.log(`已持久化选择：${config.env}`);
+  }
+}
+
+function printEnvHelp() {
+  console.log("Usage:");
+  console.log("  bilisum env                     Show environment status");
+  console.log("  bilisum env use <name>          Switch environment (desktop|cli|custom)");
+  console.log("  bilisum env setup               Initialize the standalone cli environment");
+  console.log("");
+  console.log("Environments:");
+  console.log("  desktop  Connect to the installed desktop app service (127.0.0.1:3838)");
+  console.log("  cli      Standalone: own data root, own venv, own settings page (127.0.0.1:3839)");
+  console.log("  custom   Any host/port/token (Docker, remote)");
+  console.log("  auto     Desktop if reachable, otherwise cli (default)");
 }
 
 function openUrl(url) {
@@ -490,13 +604,22 @@ async function main() {
       await tasksCommand(args);
       return;
     }
+    if (command === "env") {
+      await envCommand(args);
+      return;
+    }
+    if (command === "settings" || command === "--setting" || command === "config") {
+      await settingsCommand(args);
+      return;
+    }
     if (command === "stop") {
       const { options } = parseConnectionOptions(args);
+      await resolveEnvironment(options);
       await stopService(options);
       return;
     }
     if (command === "doctor") {
-      doctor(args);
+      await doctor(args);
       return;
     }
     if (command === "help" || command === "-h" || command === "--help") {

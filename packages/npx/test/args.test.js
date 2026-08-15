@@ -70,6 +70,23 @@ test("parseTaskCommandArgs: --idle-timeout", () => {
   assert.throws(() => parseTaskCommandArgs(["url", "--idle-timeout", "abc"]), UsageError);
 });
 
+test("parseTaskCommandArgs: --environment", () => {
+  const { options } = parseTaskCommandArgs(["url", "--environment", "cli"]);
+  assert.equal(options.environment, "cli");
+  assert.throws(() => parseTaskCommandArgs(["url", "--environment", "nope"]), UsageError);
+  const { options: none } = parseTaskCommandArgs(["url"]);
+  assert.equal(none.environment, "");
+});
+
+test("parseTaskCommandArgs: explicit host/port flags are tracked", () => {
+  const { options } = parseTaskCommandArgs(["url", "--host", "10.0.0.1", "--port", "9999"]);
+  assert.equal(options._hostSet, true);
+  assert.equal(options._portSet, true);
+  const { options: defaults } = parseTaskCommandArgs(["url"]);
+  assert.equal(defaults._hostSet, false);
+  assert.equal(defaults._portSet, false);
+});
+
 test("parseTaskCommandArgs: missing source throws", () => {
   assert.throws(() => parseTaskCommandArgs([]), UsageError);
   assert.throws(() => parseTaskCommandArgs(["--quiet"]), UsageError);

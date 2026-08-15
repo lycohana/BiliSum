@@ -1,19 +1,17 @@
 "use strict";
 
 /**
- * Locating the BiliSum desktop data root and a usable Python interpreter.
+ * Paths and Python resolution for the BiliSum CLI.
  *
- * The CLI is a thin client for the existing BiliSum program (desktop app or a
- * service started by the user). It does NOT bundle a Python runtime anymore:
- *
- * - Data root defaults to the same location the desktop app uses
- *   (Windows: %LOCALAPPDATA%\bilisum, macOS: ~/Library/Application Support/bilisum),
- *   overridable with BILISUM_DATA_ROOT or --data.
- * - When no service is reachable, the CLI can start one with the desktop's
- *   managed runtime first, then any system Python 3.12.
+ * Two environments share this module:
+ * - desktop: the installed BiliSum app (data root under %LOCALAPPDATA%\bilisum,
+ *   managed runtime under `<root>/runtime`). The CLI is a thin client.
+ * - cli: standalone mode — the CLI owns its data root (CLI_HOME), builds its
+ *   own venv from the Python sources bundled in the npm package (runtime/),
+ *   and runs its own service. Works without any installed BiliSum.
  */
 
-const { existsSync, readFileSync } = require("node:fs");
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { spawnSync } = require("node:child_process");
 
@@ -49,6 +47,22 @@ function locateBilisumDataRoot() {
     return override.trim();
   }
   return join(localAppDataDir(), APP_SLUG);
+}
+
+/** CLI home: own data root for the standalone (cli) environment. */
+function cliHomeDir() {
+  const override = process.env.BILISUM_CLI_HOME || "";
+  if (override.trim()) {
+    return override.trim();
+  }
+  if (process.platform === "win32") {
+    return join(
+      process.env.LOCALAPPDATA || join(process.env.USERPROFILE || "", "AppData", "Local"),
+      "BiliSum",
+      "cli",
+    );
+  }
+  return join(process.env.HOME || "", ".bilisum");
 }
 
 /** Paths where the desktop app may have written its access token. */
@@ -89,24 +103,8 @@ function isPython312OrNewer(command, args) {
   return check.status === 0;
 }
 
-/**
- * Find a Python 3.12+ interpreter. Priority:
- * 1. Desktop managed runtime under `<dataRoot>/runtime/<channel>` (base first,
- *    then any gpu-* channel). Candidates are version-checked.
- * 2. System Python (py -3.12 / python3.12 / python3 / python).
- * Returns { command, args } compatible with spawn, or null.
- */
-function findPython(dataRoot) {
-  const runtimeRoot = join(dataRoot, "runtime");
-  const channels = ["base", "gpu-cu128", "gpu-cu126", "gpu-cu124"];
-  for (const channel of channels) {
-    for (const candidate of pythonCandidatesForRuntime(join(runtimeRoot, channel))) {
-      if (existsSync(candidate) && isPython312OrNewer(candidate, [])) {
-        return { command: candidate, args: [] };
-      }
-    }
-  }
-
+/** System Python 3.12+ candidates only (used to bootstrap the CLI venv). */
+function findSystemPython() {
   const systemCandidates = [];
   if (process.platform === "win32") {
     systemCandidates.push({ command: "py", args: ["-3.12"] });
@@ -123,12 +121,113 @@ function findPython(dataRoot) {
   return null;
 }
 
+/**
+ * Find a Python 3.12+ interpreter for the desktop environment. Priority:
+ * 1. Desktop managed runtime under `<dataRoot>/runtime/<channel>`.
+ * 2. System Python.
+ */
+function findPython(dataRoot) {
+  const runtimeRoot = join(dataRoot, "runtime");
+  const channels = ["base", "gpu-cu128", "gpu-cu126", "gpu-cu124"];
+  for (const channel of channels) {
+    for (const candidate of pythonCandidatesForRuntime(join(runtimeRoot, channel))) {
+      if (existsSync(candidate) && isPython312OrNewer(candidate, [])) {
+        return { command: candidate, args: [] };
+      }
+    }
+  }
+  return findSystemPython();
+}
+
+/** Bundled Python sources inside the npm package (prepack copies these). */
+function runtimeSourceDir() {
+  return join(PACKAGE_ROOT, "runtime");
+}
+
+/** CLI venv lives under CLI_HOME/venv. */
+function cliVenvDir() {
+  return join(cliHomeDir(), "venv");
+}
+
+function cliVenvPython() {
+  return process.platform === "win32"
+    ? join(cliVenvDir(), "Scripts", "python.exe")
+    : join(cliVenvDir(), "bin", "python");
+}
+
+function ensureRuntime() {
+  if (!existsSync(join(runtimeSourceDir(), "apps", "service", "pyproject.toml"))) {
+    throw new Error("BiliSum runtime files are missing from this npm package. Please reinstall bilisum.");
+  }
+}
+
+function runChecked(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    windowsHide: false,
+    ...options,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status}`);
+  }
+}
+
+/**
+ * Make sure the CLI standalone venv exists and the bundled packages are
+ * installed into it. Returns the venv python path. First run creates the venv
+ * and installs dependencies (may take a few minutes).
+ */
+function ensureCliVenv(options, log) {
+  const pythonPath = cliVenvPython();
+  const marker = join(cliVenvDir(), ".bilisum-cli-installed");
+  if (existsSync(pythonPath) && existsSync(marker)) {
+    return pythonPath;
+  }
+
+  ensureRuntime();
+  const system = options.python ? { command: options.python, args: [] } : findSystemPython();
+  if (!system) {
+    throw new Error(
+      "CLI 独立环境需要 Python 3.12 来初始化运行时，但未找到。请安装 Python 3.12 后重试，或改用 desktop 环境连接桌面端。",
+    );
+  }
+
+  mkdirSync(cliHomeDir(), { recursive: true });
+  const runtimeRoot = runtimeSourceDir();
+  log("正在初始化 CLI 独立环境（首次运行需创建虚拟环境并安装依赖，可能需要几分钟）...");
+  runChecked(system.command, [...system.args, "-m", "venv", cliVenvDir()]);
+  runChecked(pythonPath, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "hatchling"]);
+  runChecked(pythonPath, [
+    "-m",
+    "pip",
+    "install",
+    join(runtimeRoot, "packages", "infra"),
+    join(runtimeRoot, "packages", "core"),
+    join(runtimeRoot, "apps", "service"),
+  ]);
+  writeFileSync(marker, readVersion(), "utf8");
+  log("CLI 独立环境就绪。");
+  return pythonPath;
+}
+
 module.exports = {
   APP_SLUG,
+  PACKAGE_ROOT,
   readVersion,
   localAppDataDir,
   locateBilisumDataRoot,
+  cliHomeDir,
   desktopUserDataCandidates,
   pythonCandidatesForRuntime,
+  findSystemPython,
   findPython,
+  runtimeSourceDir,
+  cliVenvDir,
+  cliVenvPython,
+  ensureRuntime,
+  ensureCliVenv,
+  runChecked,
 };

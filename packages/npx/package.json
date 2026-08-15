@@ -1,16 +1,19 @@
 {
   "name": "bilisum",
   "version": "1.20.0-alpha.1",
-  "description": "BiliSum CLI: control the installed BiliSum app from the command line.",
+  "description": "BiliSum CLI: control the installed BiliSum app, or run standalone with its own runtime.",
   "bin": {
     "bilisum": "bin/bilisum.js"
   },
   "files": [
     "bin",
     "lib",
+    "runtime",
     "README.md"
   ],
   "scripts": {
+    "prepack": "node scripts/prepare-runtime.js",
+    "postpack": "node scripts/cleanup-runtime.js",
     "test": "node --test"
   },
   "engines": {
