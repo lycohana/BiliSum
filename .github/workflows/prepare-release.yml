@@ -142,11 +142,13 @@ jobs:
           git push origin "HEAD:release/v${NEXT_VERSION}"
 
       - name: Open release pull request
+        id: open
         if: ${{ steps.existing.outputs.skip != 'true' }}
         env:
           NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
+          set -euo pipefail
           cat > /tmp/release-pr-body.md <<EOF
           ## 发布准备
 
@@ -166,12 +168,41 @@ jobs:
 
           ### 自定义发布说明（可选）
 
-          默认发布说明由提交记录自动生成。如需手写，请在**本 PR 的分支**中添加文件
-          `.release-notes/v${NEXT_VERSION}.md`（内容即 GitHub Release 说明），
-          发布时会优先使用该文件。
+          本 PR 创建后，机器人会在下方回复一条「发版说明」评论，内容为根据提交记录
+          自动生成的发布说明。你可以**直接编辑该评论**来修改发布说明，合并时工作流
+          会自动使用你修改后的内容。编辑时请保留评论第一行的
+          `<!-- release-notes:... -->` 标记。
+
+          > 旧方式（在本 PR 分支中添加 `.release-notes/v${NEXT_VERSION}.md`）
+          > 仍然可用，但优先级低于上述评论。
           EOF
-          gh pr create \
+          pr_url="$(gh pr create \
             --base "${{ github.ref_name }}" \
             --head "release/v${NEXT_VERSION}" \
             --title "Release v${NEXT_VERSION}" \
-            --body-file /tmp/release-pr-body.md
+            --body-file /tmp/release-pr-body.md)"
+          pr_number="$(printf '%s' "${pr_url}" | sed -E 's#.*/pull/([0-9]+)$#\1#')"
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+
+      - name: Post editable release notes comment
+        if: ${{ steps.existing.outputs.skip != 'true' }}
+        env:
+          NEXT_VERSION: ${{ needs.detect-release.outputs.next_version }}
+          PR_NUMBER: ${{ steps.open.outputs.pr_number }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/generate_release_notes.py \
+            --version "${NEXT_VERSION}" \
+            --repo "${{ github.repository }}" \
+            --output /tmp/release-notes.md \
+            --target-ref HEAD
+          {
+            echo "<!-- release-notes:v${NEXT_VERSION} -->"
+            echo ""
+            cat /tmp/release-notes.md
+          } > /tmp/release-notes-comment.md
+          gh pr comment "${PR_NUMBER}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/release-notes-comment.md
+          echo "Posted editable release notes comment on PR #${PR_NUMBER}."

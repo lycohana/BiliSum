@@ -478,18 +478,26 @@ jobs:
       - name: Prepare release notes
         env:
           RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -euo pipefail
-          custom_notes=".release-notes/v${RELEASE_VERSION}.md"
-          if [ -f "${custom_notes}" ]; then
-            cp "${custom_notes}" dist/release-notes.md
-            echo "Using custom release notes from ${custom_notes}."
+          # Priority: (1) the (possibly hand-edited) release-notes comment on the
+          # merged Release PR, (2) a checked-in .release-notes/vX.Y.Z.md file,
+          # (3) auto-generated notes from conventional commits.
+          if python scripts/fetch_release_notes_from_pr.py \
+              --repo "${{ github.repository }}" \
+              --version "${RELEASE_VERSION}" \
+              --output dist/release-notes.md; then
+            echo "Using release notes from the Release PR comment."
+          elif [ -f ".release-notes/v${RELEASE_VERSION}.md" ]; then
+            cp ".release-notes/v${RELEASE_VERSION}.md" dist/release-notes.md
+            echo "Using custom release notes from .release-notes/v${RELEASE_VERSION}.md."
           else
             python scripts/generate_release_notes.py \
-              --version "${{ needs.meta.outputs.release_version }}" \
+              --version "${RELEASE_VERSION}" \
               --repo "${{ github.repository }}" \
               --output dist/release-notes.md \
-              --target-ref "v${{ needs.meta.outputs.release_version }}"
+              --target-ref "v${RELEASE_VERSION}"
             echo "Generated release notes from conventional commits."
           fi
 
