@@ -61,14 +61,6 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
           registry-url: https://registry.npmjs.org
 
-      - name: Install desktop dependencies without package install scripts
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
-
-      - name: Build web static assets
-        run: npm run build:web
-
       - name: Validate npx package
         run: npm run npx:test
 
