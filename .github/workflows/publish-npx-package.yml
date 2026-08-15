@@ -2,6 +2,12 @@ name: Publish npx Package
 
 # 手动触发：构建并发布 packages/npx 到 npm（带 provenance）。
 # release_tag 留空时使用最新的已发布 release tag。
+#
+# 修复记录：
+# - npm publish 缺少 NODE_AUTH_TOKEN 认证（NPM_TOKEN secret 此前从未被引用）→ 401 ENEEDAUTH
+# - prerelease 版本（如 v1.19.3-alpha.1）发布未带 --tag，会污染 latest
+# - setup-node cache 指向已不再安装依赖的 apps/desktop/package-lock.json（死引用）
+# - 发布前未校验 npx 包版本与 VERSION 同步
 
 on:
   workflow_dispatch:
@@ -57,14 +63,28 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
           registry-url: https://registry.npmjs.org
+
+      - name: Verify version files are synced
+        run: python scripts/bump_version.py --check
 
       - name: Validate npx package
         run: npm run npx:test
 
       - name: Publish npx package to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
+          TAG="${{ needs.resolve-tag.outputs.tag }}"
           cd packages/npx
-          npm publish --access public --provenance
+          PRERELEASE="${TAG#*-}"
+          if [ "${PRERELEASE}" != "${TAG}" ]; then
+            # v1.19.3-alpha.1 -> publish with --tag alpha (never pollute latest)
+            KIND="${PRERELEASE%%.*}"
+            echo "Publishing prerelease with --tag ${KIND}"
+            npm publish --access public --provenance --tag "${KIND}"
+          else
+            echo "Publishing release (latest)"
+            npm publish --access public --provenance
+          fi
