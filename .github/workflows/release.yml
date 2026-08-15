@@ -511,6 +511,18 @@ jobs:
             dist/release-assets/latest.yml
             dist/release-assets/latest-mac.yml
 
+      - name: Trigger npx and Docker publishing
+        # npm / Docker 跟随 GitHub Release 发布自动触发（prerelease 也发，
+        # Docker 侧已有「预发布不覆盖 latest」逻辑）。
+        env:
+          TAG: v${{ needs.meta.outputs.release_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish-npx-package.yml -f release_tag="${TAG}"
+          gh workflow run publish-docker-image.yml -f release_tag="${TAG}"
+          echo "Dispatched npx + Docker publishing for ${TAG}."
+
   report-status:
     # Final release/build status on the commit, visible next to the merged
     # Release PR / commit. Runs on every outcome (including build failures).
