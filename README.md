@@ -224,6 +224,19 @@ docker run --rm -p 3838:3838 \
 docker pull lycohana/bilisum:latest
 ```
 
+### CLI（Agent 友好）`新增`
+
+`bilisum` 命令行可以让 Agent / 脚本直接做视频理解，不依赖浏览器界面。服务未运行时命令会自动后台拉起并等待就绪：
+
+```bash
+npx bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
+npx bilisum transcribe ./demo.mp4 --output transcript.txt
+npx bilisum status <task-id> --json
+npx bilisum stop
+```
+
+详见 [`packages/npx/README.md`](packages/npx/README.md)。
+
 ### 从旧版迁移
 
 首次启动自动从 BriefVid 目录迁移数据到 BiliSum 目录，只复制缺失文件，不覆盖已有数据，不删除旧目录。

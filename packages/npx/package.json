@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "prepack": "node scripts/prepare-runtime.js",
-    "postpack": "node scripts/cleanup-runtime.js"
+    "postpack": "node scripts/cleanup-runtime.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"

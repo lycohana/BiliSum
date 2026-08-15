@@ -9,7 +9,7 @@
     "build": "npm --prefix apps/desktop run build",
     "build:desktop": "npm --prefix apps/desktop run build",
     "docker:build": "npm run build:web && docker build -t bilisum:local .",
-    "npx:test": "node packages/npx/bin/bilisum.js --version && cd packages/npx && npm pack --dry-run",
+    "npx:test": "node packages/npx/bin/bilisum.js --version && cd packages/npx && npm test && npm pack --dry-run",
     "package:win": "npm --prefix apps/desktop run package:win",
     "package:win-notfront": "npm --prefix apps/desktop run package:win-notfront",
     "package:mac": "npm --prefix apps/desktop run package:mac",
