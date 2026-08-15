@@ -101,6 +101,21 @@ jobs:
           git push origin "refs/tags/${tag}"
           echo "tag_created=true" >> "$GITHUB_OUTPUT"
 
+      - name: Report tag status on the commit
+        if: ${{ steps.push_tag.outputs.tag_created == 'true' }}
+        env:
+          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          TAG: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/statuses/${SHA}" \
+            -f state=success \
+            -f context=release/tag \
+            -f description="v${TAG} tag 已创建" \
+            -f target_url="${RUN_URL}" >/dev/null
+          echo "release/tag -> success (v${TAG})"
+
       - name: Trigger release build
         # A tag pushed by a workflow token does not fire the `push.tags`
         # workflow trigger (GitHub platform behaviour), so dispatch the

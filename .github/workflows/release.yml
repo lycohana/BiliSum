@@ -42,8 +42,20 @@ jobs:
     outputs:
       release_version: ${{ steps.define.outputs.release_version }}
       prerelease: ${{ steps.define.outputs.prerelease }}
+      commit_sha: ${{ steps.sha.outputs.commit_sha }}
 
     steps:
+      - name: Check out release ref
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Resolve commit sha
+        id: sha
+        run: echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Define release version and prerelease flag
         id: define
         env:
@@ -65,6 +77,19 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
           echo "release_version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Mark release build pending on the commit
+        env:
+          SHA: ${{ steps.sha.outputs.commit_sha }}
+          VERSION: ${{ steps.define.outputs.release_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/statuses/${SHA}" \
+            -f state=pending \
+            -f context=release/build \
+            -f description="正在构建并发布 v${VERSION}..." \
+            -f target_url="${RUN_URL}" >/dev/null
 
   validate-windows-package:
     needs: meta
@@ -483,3 +508,38 @@ jobs:
             dist/release-assets/BiliSum-*.zip.blockmap
             dist/release-assets/latest.yml
             dist/release-assets/latest-mac.yml
+
+  report-status:
+    # Final release/build status on the commit, visible next to the merged
+    # Release PR / commit. Runs on every outcome (including build failures).
+    needs:
+      - meta
+      - validate-windows-package
+      - validate-macos-package
+      - publish-release
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Report release build status
+        env:
+          SHA: ${{ needs.meta.outputs.commit_sha }}
+          VERSION: ${{ needs.meta.outputs.release_version }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PUBLISH_RESULT: ${{ needs.publish-release.result }}
+        run: |
+          set -euo pipefail
+          if [ "${PUBLISH_RESULT}" = "success" ]; then
+            state="success"
+            description="v${VERSION} 已构建并发布"
+          else
+            state="failure"
+            description="v${VERSION} 构建/发布失败"
+          fi
+          gh api -X POST "repos/${{ github.repository }}/statuses/${SHA}" \
+            -f state="${state}" \
+            -f context=release/build \
+            -f description="${description}" \
+            -f target_url="${RUN_URL}" >/dev/null
+          echo "release/build -> ${state}"
