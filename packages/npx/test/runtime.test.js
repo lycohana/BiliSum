@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { join } = require("node:path");
 
-const { locateBilisumDataRoot, desktopUserDataCandidates, findPython } = require("../lib/runtime");
+const { locateBilisumDataRoot, desktopUserDataCandidates, pythonCandidatesForRuntime, findPython } = require("../lib/runtime");
 
 test("locateBilisumDataRoot honors BILISUM_DATA_ROOT", () => {
   const previous = process.env.BILISUM_DATA_ROOT;
@@ -54,6 +54,18 @@ test("desktopUserDataCandidates include BiliSum and bilisum-desktop", () => {
       process.env.APPDATA = previousAppData;
     }
   }
+});
+
+test("pythonCandidatesForRuntime mirrors desktop candidates incl. macOS paths", () => {
+  const candidates = pythonCandidatesForRuntime("R:/runtime/base");
+  const names = candidates.map((candidate) => candidate.replace(/\\/g, "/"));
+  // Windows portable builds
+  assert.ok(names.includes("R:/runtime/base/python.exe"));
+  assert.ok(names.includes("R:/runtime/base/Scripts/python.exe"));
+  // macOS / Linux runtimes
+  assert.ok(names.includes("R:/runtime/base/bin/python"));
+  assert.ok(names.includes("R:/runtime/base/bin/python3"));
+  assert.ok(names.includes("R:/runtime/base/python"));
 });
 
 test("findPython returns a candidate object or null (never throws)", () => {

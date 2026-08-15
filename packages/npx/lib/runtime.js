@@ -64,30 +64,44 @@ function desktopUserDataCandidates() {
   ];
 }
 
+/**
+ * Possible managed-runtime Python interpreters, mirroring the desktop app's
+ * runtime_python_candidates() (packages/infra/.../runtime.py):
+ * Windows portable builds use python.exe / Scripts\python.exe; macOS/Linux
+ * runtimes use bin/python, bin/python3 or a bare `python` at the root.
+ */
 function pythonCandidatesForRuntime(runtimeRoot) {
   return [
     join(runtimeRoot, "python.exe"),
     join(runtimeRoot, "Scripts", "python.exe"),
     join(runtimeRoot, "bin", "python"),
+    join(runtimeRoot, "bin", "python3"),
+    join(runtimeRoot, "python"),
   ];
+}
+
+function isPython312OrNewer(command, args) {
+  const check = spawnSync(command, [
+    ...args,
+    "-c",
+    "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)",
+  ], { stdio: "ignore", windowsHide: true });
+  return check.status === 0;
 }
 
 /**
  * Find a Python 3.12+ interpreter. Priority:
  * 1. Desktop managed runtime under `<dataRoot>/runtime/<channel>` (base first,
- *    then any gpu-* channel).
+ *    then any gpu-* channel). Candidates are version-checked.
  * 2. System Python (py -3.12 / python3.12 / python3 / python).
  * Returns { command, args } compatible with spawn, or null.
  */
 function findPython(dataRoot) {
   const runtimeRoot = join(dataRoot, "runtime");
-  const channels = [];
-  for (const name of ["base", "gpu-cu128", "gpu-cu126", "gpu-cu124"]) {
-    channels.push(name);
-  }
+  const channels = ["base", "gpu-cu128", "gpu-cu126", "gpu-cu124"];
   for (const channel of channels) {
     for (const candidate of pythonCandidatesForRuntime(join(runtimeRoot, channel))) {
-      if (existsSync(candidate)) {
+      if (existsSync(candidate) && isPython312OrNewer(candidate, [])) {
         return { command: candidate, args: [] };
       }
     }
@@ -102,12 +116,7 @@ function findPython(dataRoot) {
   systemCandidates.push({ command: "python", args: [] });
 
   for (const candidate of systemCandidates) {
-    const check = spawnSync(candidate.command, [
-      ...candidate.args,
-      "-c",
-      "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)",
-    ], { stdio: "ignore", windowsHide: true });
-    if (check.status === 0) {
+    if (isPython312OrNewer(candidate.command, candidate.args)) {
       return candidate;
     }
   }
@@ -120,5 +129,6 @@ module.exports = {
   localAppDataDir,
   locateBilisumDataRoot,
   desktopUserDataCandidates,
+  pythonCandidatesForRuntime,
   findPython,
 };
