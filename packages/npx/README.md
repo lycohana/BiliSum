@@ -1,6 +1,6 @@
 # BiliSum CLI
 
-`bilisum` 是 BiliSum 的命令行控制面：**直接控制已安装的 BiliSum（桌面端 / 已运行的服务）**，让 Agent / 脚本做视频理解（转写 + 摘要），不打开浏览器、不复用任何独立环境。
+`bilisum` 是 BiliSum 的命令行控制面：**控制已安装的 BiliSum（桌面端 / 已运行的服务），或完全独立运行**（未安装桌面端也能用），让 Agent / 脚本做视频理解（转写 + 摘要）。
 
 ```bash
 # 摘要一个视频（默认输出：元数据 + 总结内容，不含字幕）
@@ -28,6 +28,27 @@ bilisum tasks --limit 10
 bilisum --help
 bilisum summarize --help
 ```
+
+## 环境（Environment）
+
+四种环境决定连接哪个服务、用哪套数据：
+
+| 环境 | 说明 | 地址 |
+|------|------|------|
+| `desktop` | 连接桌面端服务（控制现有程序，同库同知识库） | `127.0.0.1:3838` |
+| `cli` | **独立环境**：自带运行时与配置，无需桌面端 | `127.0.0.1:3839` |
+| `custom` | 任意 host/port/token（Docker、远程） | 自定 |
+| `auto` | 默认：桌面端可达则 desktop，否则 cli | 自动 |
+
+```bash
+bilisum env                      # 查看环境状态
+bilisum env use cli              # 切换到独立环境
+bilisum env setup                # 初始化独立环境（内置运行时，需 Python 3.12）
+bilisum --setting                # 打开当前环境的网页设置（cli 环境无需桌面端）
+bilisum summarize <url> --environment cli   # 单次使用某环境
+```
+
+> 完整文档见 [BiliSum CLI 使用指南](https://github.com/lycohana/BiliSum/blob/master/docs/cli.md)。
 
 ## 输出格式
 

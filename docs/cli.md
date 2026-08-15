@@ -1,6 +1,6 @@
 # BiliSum CLI 使用指南
 
-`bilisum` 是 BiliSum 的命令行控制面：**直接控制已安装的 BiliSum（桌面端 / 已运行的服务）**，让 Agent / 脚本做视频理解（转写 + 摘要），不打开浏览器、不复用任何独立环境。
+`bilisum` 是 BiliSum 的命令行控制面：**既可以直接控制已安装的 BiliSum（桌面端 / 已运行的服务），也可以完全独立运行**（自带运行时与配置），让 Agent / 脚本做视频理解（转写 + 摘要），不打开浏览器。
 
 ## 安装
 
@@ -9,9 +9,21 @@ npm install -g bilisum      # 全局安装（推荐）
 npx bilisum --help          # 或临时使用
 ```
 
-包内**不包含 Python 运行时**（CLI 是纯客户端）。首次使用要求机器上已有桌面版 BiliSum（自带运行时）或系统 Python 3.12。
+npm 包内**内置 Python 运行时源码**（首次使用时本地构建独立 venv），因此：
+- **已有桌面端** → 默认直接连接桌面端服务（推荐，配置跟随桌面端）
+- **只有 CLI** → 初始化独立环境（`bilisum env setup`）后即可独立使用
 
 > 桌面版 BiliSum 安装包内也内置了 CLI（`resources/cli`）：`node "<安装目录>\resources\cli\bin\bilisum.js" ...`
+
+## 纯 CLI 首次使用（未安装桌面端）
+
+```bash
+npm install -g bilisum
+bilisum env                       # 查看环境状态（auto 会提示走 cli）
+bilisum env setup                 # 初始化独立环境（建 venv + 装依赖，需 Python 3.12，几分钟）
+bilisum --setting                 # 打开网页设置，填入 LLM / ASR Key
+bilisum summarize "https://www.bilibili.com/video/BV1xxxx"   # 开跑
+```
 
 ## 快速开始
 
@@ -47,19 +59,64 @@ bilisum summarize --help
 | `bilisum transcribe <url\|file>` | 输出转写全文（任务仍会顺带生成摘要） |
 | `bilisum status <task-id> [--json]` | 查询任务状态 / 进度 |
 | `bilisum tasks [--limit N] [--json]` | 列出任务 |
-| `bilisum start [--no-open]` | 前台启动服务（桌面端数据目录） |
+| `bilisum env` | 环境状态 |
+| `bilisum env use desktop\|cli\|custom` | 切换环境（写入 `~/.bilisum/config.json`） |
+| `bilisum env setup` | 初始化 CLI 独立环境（建 venv + 装依赖） |
+| `bilisum --setting` | 打开当前环境的网页设置页 |
+| `bilisum start [--no-open]` | 前台启动服务 |
 | `bilisum stop` | 停止 CLI 后台拉起的服务 |
-| `bilisum doctor` | 检查数据根 / Python / 服务 / 令牌状态 |
+| `bilisum doctor` | 检查环境 / 服务 / Python / 令牌状态 |
 | `bilisum --version` | 打印版本 |
 | `bilisum release` | 打开最新 GitHub Release |
+
+## 环境（Environment）
+
+CLI 支持四种环境，决定**连接哪个服务、用哪套数据与配置**：
+
+| 环境 | 说明 | 服务地址 | 数据根 |
+|------|------|----------|--------|
+| `desktop` | 连接已安装桌面端的服务（控制现有程序） | `127.0.0.1:3838` | 桌面端数据根（`%LOCALAPPDATA%\bilisum`） |
+| `cli` | **独立环境**：自带运行时、自己的数据与设置页（无需桌面端） | `127.0.0.1:3839` | CLI_HOME（`%LOCALAPPDATA%\BiliSum\cli` 或 `~/.bilisum`） |
+| `custom` | 任意 host / port / token（Docker、远程等） | 自定 | CLI_HOME |
+| `auto` | **默认**：探测桌面端服务，有则用 desktop，否则用 cli | 自动 | 随环境 |
+
+选择优先级：`--host/--port` 显式指定（视为 custom）> `--environment <name>` 单次覆盖 > `config.json` 持久化选择（`bilisum env use`）> auto。
+
+```bash
+bilisum env                          # 查看当前环境与各环境状态
+bilisum env use cli                  # 固定使用独立环境
+bilisum env use desktop              # 固定使用桌面端
+bilisum summarize <url> --environment cli   # 单次使用 cli 环境
+bilisum summarize <url> --host 127.0.0.1 --port 3838 --token xxx  # 自定义连接
+```
+
+CLI 配置保存在 `CLI_HOME/config.json`（`BILISUM_CLI_HOME` 可覆盖路径）：
+
+```json
+{
+  "env": "auto",
+  "custom": { "host": "127.0.0.1", "port": "3838", "token": "" }
+}
+```
+
+### 网页设置（--setting）
+
+```bash
+bilisum --setting          # 打开当前环境的设置页
+```
+
+- `desktop` 环境 → 打开桌面端 Web UI 设置页
+- `cli` 环境 → 自动拉起 CLI 服务并打开其设置页（同一套页面，配置保存在 CLI 数据根）
+- 服务未运行时会自动启动（cli 环境首次会提示初始化）
 
 ## 常用选项
 
 | 选项 | 说明 |
 |------|------|
-| `--host <host>` / `--port <port>` | 服务地址，默认 `127.0.0.1:3838` |
-| `--data <path>` | 数据根目录（默认与桌面端一致，见下文） |
-| `--token <token>` | 访问令牌（默认自动获取，见下文） |
+| `--host <host>` / `--port <port>` | 服务地址（显式指定 = custom 连接） |
+| `--data <path>` | 数据根目录（默认随环境） |
+| `--token <token>` | 访问令牌（默认随环境） |
+| `--environment <name>` | 单次覆盖环境：`desktop` / `cli` / `custom` / `auto` |
 | `--env KEY=VALUE` | 为 CLI 拉起的服务附加环境变量 |
 | `--page <n>` / `--all-pages` | 多 P 视频分 P 选择 |
 | `--visual-note <mode>` | `text` / `frame_insert` / `vlm_integrated` |
@@ -81,18 +138,20 @@ bilisum summarize --help
 
 任务等待期间，进度显示在 **stderr**（`[task_id]  12% [stage] 消息`），stdout 保持干净，方便 Agent 直接解析 `--format json`。
 
-## 它如何"控制现有程序"
+## 它如何"控制现有程序" / 独立运行
 
-- 默认连接桌面端服务 `http://127.0.0.1:3838`，任务、结果、知识库都与桌面端**同一个数据库**。
-- 访问令牌自动获取：`--token` → `VIDEO_SUM_ACCESS_TOKEN` → 桌面端 token 文件（`%APPDATA%\BiliSum\access-token.json` 等）→ 服务侧 `{数据根}\data\auth.json`。
-- 数据根默认与桌面端一致：Windows `%LOCALAPPDATA%\bilisum`，macOS `~/Library/Application Support/bilisum`。
-- 配置（LLM / ASR Key 等）跟随服务端设置，桌面端里配好了，CLI 直接用。
+- **desktop 环境**：默认连接桌面端服务 `http://127.0.0.1:3838`，任务、结果、知识库都与桌面端**同一个数据库**；访问令牌自动获取（`--token` → env → 桌面端 token 文件 → 服务侧 `auth.json`）；配置跟随桌面端设置。
+- **cli 环境**：完全独立——自己的数据根（CLI_HOME）、自己的 venv 与服务、自己的设置页（`bilisum --setting`），不需要任何已安装的 BiliSum。
 
 ## 服务生命周期
 
 ### 自动拉起
 
-`summarize / brief / transcribe / status / tasks` 会先探活；`127.0.0.1:3838` 没有服务时，**用桌面端数据目录自动后台拉起一个**（优先桌面端托管 Python 运行时，其次系统 Python 3.12），等 `/health` 就绪后继续。CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`，日志在 `{数据根}\cli-service-<port>.log`。
+`summarize / brief / transcribe / status / tasks / --setting` 会先探活当前环境：
+- **desktop**：`127.0.0.1:3838` 无服务时，用桌面端数据目录自动后台拉起（优先桌面端托管 Python 运行时，其次系统 Python 3.12）。
+- **cli**：用 CLI 自己的 venv（未初始化时提示 `bilisum env setup`）在 `127.0.0.1:3839` 拉起。
+
+CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`，日志在 `{数据根}\cli-service-<port>.log`。
 
 ### 无任务自动关闭
 
@@ -124,8 +183,9 @@ CLI 侧（shell 环境变量）：
 
 | 变量 | 说明 | 默认 |
 |------|------|------|
-| `BILISUM_HOST` / `BILISUM_PORT` | 服务地址 | `127.0.0.1` / `3838` |
-| `BILISUM_DATA_ROOT` / `BILISUM_DATA` | 数据根目录 | 桌面端数据根 |
+| `BILISUM_HOST` / `BILISUM_PORT` | 服务地址（desktop/custom 时） | `127.0.0.1` / `3838` |
+| `BILISUM_DATA_ROOT` / `BILISUM_DATA` | 桌面端数据根覆盖 | 桌面端数据根 |
+| `BILISUM_CLI_HOME` | CLI 独立环境的数据根（cli 模式） | `%LOCALAPPDATA%\BiliSum\cli` / `~/.bilisum` |
 | `BILISUM_TOKEN` | 访问令牌 | 自动获取 |
 | `BILISUM_PYTHON` | 指定 Python 可执行文件 | 自动查找 |
 | `BILISUM_CLI_IDLE_TIMEOUT` | 后台服务空闲自动关闭秒数 | `600` |

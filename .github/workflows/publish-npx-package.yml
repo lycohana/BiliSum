@@ -63,7 +63,18 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
           registry-url: https://registry.npmjs.org
+
+      - name: Install desktop dependencies without package install scripts
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: npm ci --prefix apps/desktop --prefer-offline --no-audit --fund=false --ignore-scripts
+
+      - name: Build web static assets
+        # prepack 会把 apps/web/static 打进 npm 包（CLI --setting 网页需要）
+        run: npm run build:web
 
       - name: Verify version files are synced
         run: python scripts/bump_version.py --check

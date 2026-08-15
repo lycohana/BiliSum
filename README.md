@@ -220,9 +220,11 @@ docker run --rm -p 3838:3838 \
 docker pull lycohana/bilisum:latest
 ```
 
-### CLI（Agent 友好）`新增`
+### CLI（Agent 友好 / 可独立运行）`新增`
 
-`bilisum` 命令行直接控制已安装的 BiliSum（桌面端 / 已运行的服务）：同一个数据库、同一个知识库，Agent 无需浏览器即可做视频理解。服务未运行时命令会自动用桌面端数据目录后台拉起，空闲 10 分钟（可配）自动关闭：
+`bilisum` 命令行：**直接控制已安装的 BiliSum（桌面端 / 已运行的服务），或完全独立运行**（未安装桌面端也能用）。支持四种环境（`bilisum env`）：`desktop`（连桌面端）/ `cli`（独立环境，自带运行时）/ `custom`（Docker 等）/ `auto`（默认自动选择）。
+
+**已有桌面端**：装好即用，同一个数据库、同一个知识库：
 
 ```bash
 npm install -g bilisum
@@ -234,7 +236,16 @@ bilisum status <task-id> --json
 bilisum stop
 ```
 
-完整用法见 [CLI 使用指南](docs/cli.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
+**只有 CLI（未装桌面端）**：
+
+```bash
+npm install -g bilisum
+bilisum env setup          # 初始化独立环境（内置运行时，需 Python 3.12）
+bilisum --setting          # 打开网页设置，填入 LLM / ASR Key
+bilisum summarize "https://www.bilibili.com/video/BV1xxxx"
+```
+
+服务未运行时命令会自动拉起，空闲 10 分钟（可配 `--idle-timeout`）自动关闭。完整用法见 [CLI 使用指南](docs/cli.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
 
 ### 从旧版迁移
 
