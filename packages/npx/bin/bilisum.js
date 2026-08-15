@@ -152,14 +152,20 @@ function extractUrlPageParam(source) {
 }
 
 async function ensureAuthenticatedService(options, log) {
-  const token = readToken(options);
+  // Resolve the token first (desktop token / auth.json / --token / env) and
+  // inject it into a service the CLI spawns, so both always agree.
+  let token = readToken(options);
+  await ensureService(options, { log, accessToken: token });
+  if (!token) {
+    // The CLI just spawned the service, which may have created {data}/auth.json.
+    token = readToken(options);
+  }
   if (!token) {
     throw new UsageError(
       "无法获取访问令牌：请用 --token 指定，或设置 VIDEO_SUM_ACCESS_TOKEN，" +
-      "或使用 CLI 管理的数据目录（--data 默认值）让服务自动生成 auth.json。",
+      "或先启动一次桌面端 BiliSum 生成令牌。",
     );
   }
-  await ensureService(options, { log });
   return token;
 }
 
@@ -274,6 +280,10 @@ async function runTaskCommand(args, { defaultFormat }) {
   if (options.help) {
     printHelp();
     return;
+  }
+  // Validate local inputs before any service work (no pointless auto-start).
+  if (!/^https?:\/\//i.test(source) && !existsSync(source)) {
+    throw new UsageError(`本地文件不存在：${source}`);
   }
   const log = options.quiet ? () => {} : console.error;
   const baseUrl = baseUrlFor(options.host, options.port);
@@ -488,7 +498,8 @@ async function main() {
       console.error("");
       printHelp();
     }
-    process.exitCode = 1;
+    // Exit immediately so orphaned pollers/timers cannot keep the process alive.
+    process.exit(1);
   }
 }
 

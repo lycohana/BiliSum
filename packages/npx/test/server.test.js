@@ -3,16 +3,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { mkdtempSync, rmSync, readFileSync } = require("node:fs");
+const { mkdtempSync, mkdirSync, rmSync, readFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const {
   buildServiceEnv,
   cliRuntimeFilePath,
+  cliServiceLogPath,
   writeCliRuntimeFile,
   readCliRuntimeFile,
   removeCliRuntimeFile,
+  readServiceSettings,
+  assertSpawnablePort,
 } = require("../lib/server");
 const { baseUrlFor, ApiError } = require("../lib/api");
 
@@ -56,16 +59,20 @@ test("buildServiceEnv rejects malformed --env", () => {
   );
 });
 
-test("cli runtime file roundtrip", () => {
+test("cli runtime file roundtrip is per port", () => {
   const dir = mkdtempSync(join(tmpdir(), "bilisum-cli-"));
   try {
-    writeCliRuntimeFile(dir, { pid: 1234, host: "127.0.0.1", port: "3838" });
-    const info = readCliRuntimeFile(dir);
-    assert.equal(info.pid, 1234);
-    assert.equal(info.host, "127.0.0.1");
-    assert.ok(readFileSync(cliRuntimeFilePath(dir), "utf8").includes("1234"));
-    removeCliRuntimeFile(dir);
-    assert.equal(readCliRuntimeFile(dir), null);
+    writeCliRuntimeFile(dir, "3838", { pid: 1234, host: "127.0.0.1", port: "3838" });
+    writeCliRuntimeFile(dir, "3839", { pid: 5678, host: "127.0.0.1", port: "3839" });
+    assert.equal(readCliRuntimeFile(dir, "3838").pid, 1234);
+    assert.equal(readCliRuntimeFile(dir, "3839").pid, 5678);
+    assert.ok(readFileSync(cliRuntimeFilePath(dir, "3838"), "utf8").includes("1234"));
+    removeCliRuntimeFile(dir, "3838");
+    assert.equal(readCliRuntimeFile(dir, "3838"), null);
+    // The other port's record must survive.
+    assert.equal(readCliRuntimeFile(dir, "3839").pid, 5678);
+    // Log path is per port too.
+    assert.equal(cliServiceLogPath(dir, "3839"), join(dir, "cli-service-3839.log"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -74,10 +81,49 @@ test("cli runtime file roundtrip", () => {
 test("readCliRuntimeFile tolerates missing/corrupt file", () => {
   const dir = mkdtempSync(join(tmpdir(), "bilisum-cli-"));
   try {
-    assert.equal(readCliRuntimeFile(dir), null);
+    assert.equal(readCliRuntimeFile(dir, "3838"), null);
     const { writeFileSync } = require("node:fs");
-    writeFileSync(cliRuntimeFilePath(dir), "not json", "utf8");
-    assert.equal(readCliRuntimeFile(dir), null);
+    writeFileSync(cliRuntimeFilePath(dir, "3838"), "not json", "utf8");
+    assert.equal(readCliRuntimeFile(dir, "3838"), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("readServiceSettings reads persisted settings and tolerates absence", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bilisum-settings-"));
+  try {
+    assert.equal(readServiceSettings(dir), null);
+    mkdirSync(join(dir, "data"), { recursive: true });
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(
+      join(dir, "data", "settings.json"),
+      JSON.stringify({ port: 3838, data_dir: "C:/legacy/briefvid/data" }),
+      "utf8",
+    );
+    const settings = readServiceSettings(dir);
+    assert.equal(settings.port, 3838);
+    assert.equal(settings.data_dir, "C:/legacy/briefvid/data");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("assertSpawnablePort rejects --port conflicting with persisted settings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bilisum-settings-"));
+  try {
+    mkdirSync(join(dir, "data"), { recursive: true });
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(join(dir, "data", "settings.json"), JSON.stringify({ port: 3838 }), "utf8");
+    assert.throws(() => assertSpawnablePort({ data: dir, port: "3839" }), /settings\.json 中服务端口为 3838/);
+    // Matching port is fine; absent settings are fine.
+    assert.doesNotThrow(() => assertSpawnablePort({ data: dir, port: "3838" }));
+    const emptyDir = mkdtempSync(join(tmpdir(), "bilisum-settings-empty-"));
+    try {
+      assert.doesNotThrow(() => assertSpawnablePort({ data: emptyDir, port: "3839" }));
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
