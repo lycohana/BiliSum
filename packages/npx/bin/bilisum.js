@@ -180,16 +180,22 @@ function extractUrlPageParam(source) {
   }
 }
 
+function resolveServiceToken(options) {
+  // Resolve a token to inject into a CLI-spawned service. The standalone cli
+  // environment has no desktop token file, so generate one (same pattern as
+  // the desktop app) to avoid depending on auth.json creation timing; desktop
+  // mode reuses the desktop token / auth.json so both sides always agree.
+  let token = readToken(options);
+  if (!token && options.environment === "cli") {
+    token = require("node:crypto").randomBytes(32).toString("hex");
+  }
+  return token;
+}
+
 async function ensureAuthenticatedService(options, log) {
   // Resolve the token first (desktop token / auth.json / --token / env) and
   // inject it into a service the CLI spawns, so both always agree.
-  let token = readToken(options);
-  if (!token && options.environment === "cli") {
-    // Standalone cli environment: generate a token and inject it into the
-    // service (same pattern as the desktop app), so we never depend on
-    // auth.json creation timing.
-    token = require("node:crypto").randomBytes(32).toString("hex");
-  }
+  let token = resolveServiceToken(options);
   await ensureService(options, { log, accessToken: token });
   if (!token) {
     // The CLI just spawned the service, which may have created {data}/auth.json.
@@ -446,14 +452,16 @@ async function tasksCommand(args) {
 async function startService(args) {
   const { options } = parseConnectionOptions(args);
   await resolveEnvironment(options);
-  const url = `http://${options.host}:${options.port}`;
-  console.log(`Starting BiliSum at ${url}`);
+  const token = resolveServiceToken(options);
+  const baseUrl = `http://${options.host}:${options.port}`;
+  console.log(`Starting BiliSum at ${baseUrl}`);
   console.log(`Environment:    ${options.environment}`);
   console.log(`Data root:      ${options.data}`);
   console.log("");
-  const { child } = spawnService(options, { background: false });
+  const { child } = spawnService(options, { background: false, accessToken: token });
   if (options.open) {
-    setTimeout(() => openUrl(url), 1800);
+    const openTarget = token ? `${baseUrl}#token=${encodeURIComponent(token)}` : baseUrl;
+    setTimeout(() => openUrl(openTarget), 1800);
   }
   child.on("exit", (code, signal) => {
     if (signal) {
@@ -491,8 +499,11 @@ async function settingsCommand(args) {
   }
   const log = console.error;
   await resolveEnvironment(options);
-  await ensureService(options, { log });
-  const url = `http://${options.host}:${options.port}/settings`;
+  const token = await ensureAuthenticatedService(options, log);
+  // Pass the token in the URL fragment so the web UI can auto-authenticate
+  // (the frontend consumes it and clears the fragment). The fragment is never
+  // sent to the server.
+  const url = `http://${options.host}:${options.port}/settings#token=${encodeURIComponent(token)}`;
   log(`打开设置页：${url}`);
   openUrl(url);
 }

@@ -38,6 +38,26 @@ function isAuthRequiredError(error: unknown): error is AuthRequiredError {
     || (error instanceof Error && /访问密钥|unauthorized|401/i.test(error.message));
 }
 
+function readAuthTokenFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const match = window.location.hash.match(/[#&]token=([^&]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function clearAuthTokenFromUrl(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  // Drop the #token fragment without triggering a router navigation.
+  window.history.replaceState(
+    window.history.state,
+    "",
+    window.location.pathname + window.location.search,
+  );
+}
+
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -116,6 +136,23 @@ export function App() {
           setAuthenticated(true);
           setAuthChecked(true);
         }
+        return;
+      }
+      const urlToken = readAuthTokenFromUrl();
+      if (urlToken) {
+        try {
+          const status = await api.createAuthSession(urlToken);
+          if (!disposed) {
+            setAuthenticated(Boolean(status.authenticated));
+            setAuthChecked(true);
+          }
+        } catch {
+          if (!disposed) {
+            setAuthenticated(false);
+            setAuthChecked(true);
+          }
+        }
+        clearAuthTokenFromUrl();
         return;
       }
       try {
