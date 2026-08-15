@@ -226,16 +226,18 @@ docker pull lycohana/bilisum:latest
 
 ### CLI（Agent 友好）`新增`
 
-`bilisum` 命令行可以让 Agent / 脚本直接做视频理解，不依赖浏览器界面。服务未运行时命令会自动后台拉起并等待就绪：
+`bilisum` 命令行直接控制已安装的 BiliSum（桌面端 / 已运行的服务）：同一个数据库、同一个知识库，Agent 无需浏览器即可做视频理解。服务未运行时命令会自动用桌面端数据目录后台拉起：
 
 ```bash
-npx bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
-npx bilisum transcribe ./demo.mp4 --output transcript.txt
-npx bilisum status <task-id> --json
-npx bilisum stop
+npm install -g bilisum
+
+bilisum summarize "https://www.bilibili.com/video/BV1xxxx" --format json
+bilisum transcribe ./demo.mp4 --output transcript.txt
+bilisum status <task-id> --json
+bilisum stop
 ```
 
-详见 [`packages/npx/README.md`](packages/npx/README.md)。
+详见 [`packages/npx/README.md`](packages/npx/README.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
 
 ### 从旧版迁移
 

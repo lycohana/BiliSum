@@ -16,7 +16,7 @@ const {
 } = require("../lib/api");
 const { UsageError, parseTaskCommandArgs } = require("../lib/args");
 const { formatTasks, emit } = require("../lib/output");
-const { readVersion } = require("../lib/runtime");
+const { readVersion, locateBilisumDataRoot, findPython } = require("../lib/runtime");
 const { readToken } = require("../lib/token");
 const {
   ensureService,
@@ -34,28 +34,27 @@ function printHelp() {
   const version = readVersion();
   console.log(`BiliSum ${version}`);
   console.log("");
-  console.log("AI 视频总结与知识库工具，深度优化 B 站体验，同时支持 YouTube 和本地视频。");
+  console.log("AI 视频总结与知识库工具：CLI 直接控制已安装的 BiliSum（桌面端/服务）。");
   console.log("");
   console.log("Usage:");
-  console.log("  npx bilisum                                 Start the local BiliSum service");
-  console.log("  npx bilisum start [options]                 Start the local BiliSum service");
   console.log("  npx bilisum summarize <url|file> [options]  Summarize a video (agent-friendly)");
   console.log("  npx bilisum transcribe <url|file> [options] Print the transcript of a video");
   console.log("  npx bilisum status <task-id> [--json]       Show task status");
   console.log("  npx bilisum tasks [--limit N] [--json]      List tasks");
+  console.log("  npx bilisum start [options]                 Start the service (desktop data dir)");
   console.log("  npx bilisum stop                            Stop the CLI-started BiliSum service");
-  console.log("  npx bilisum doctor                          Check Python/runtime setup");
+  console.log("  npx bilisum doctor                          Check service/Python setup");
   console.log("  npx bilisum --version                       Print package version");
   console.log("  npx bilisum release                         Open the latest GitHub release");
   console.log("");
-  console.log("Options (start/summarize/transcribe):");
+  console.log("默认连接桌面端服务 http://127.0.0.1:3838；未运行时自动用桌面端数据目录后台拉起。");
+  console.log("");
+  console.log("Options (all commands):");
   console.log("  --host <host>                        Host, default 127.0.0.1");
   console.log("  --port <port>                        Port, default 3838");
-  console.log("  --python <path>                      Python 3.12 executable");
-  console.log("  --data <path>                        Data directory");
-  console.log("  --token <token>                      Access token (default: env or auth.json)");
-  console.log("  --env KEY=VALUE                      Pass an environment variable");
-  console.log("  --reinstall                          Recreate the managed Python venv");
+  console.log("  --data <path>                        Desktop data root (default: desktop app data)");
+  console.log("  --token <token>                      Access token (default: desktop token)");
+  console.log("  --env KEY=VALUE                      Extra env for a CLI-started service");
   console.log("");
   console.log("Options (summarize/transcribe):");
   console.log("  --page <n>                           Process a specific P for multi-P videos");
@@ -69,8 +68,8 @@ function printHelp() {
   console.log("  --startup-timeout <sec>              Max wait for service startup, default 300");
   console.log("  --quiet / -q                         Suppress progress output (stderr)");
   console.log("");
-  console.log("If no BiliSum service is running, summarize/transcribe/status start one");
-  console.log("headlessly in the background. Use `bilisum stop` to shut it down.");
+  console.log("Options (start):");
+  console.log("  --no-open                            Do not open the browser");
   console.log("");
   console.log(`Latest release: ${RELEASES_URL}`);
   console.log(`Repository:     ${REPO_URL}`);
@@ -81,13 +80,13 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
     host: process.env.BILISUM_HOST || "127.0.0.1",
     port: process.env.BILISUM_PORT || DEFAULT_PORT,
     python: process.env.BILISUM_PYTHON || "",
-    data: process.env.BILISUM_DATA || require("../lib/runtime").defaultDataDir(),
+    data: process.env.BILISUM_DATA || locateBilisumDataRoot(),
     token: process.env.BILISUM_TOKEN || "",
     env: [],
-    reinstall: false,
     json: false,
     limit: 20,
     help: false,
+    open: true,
   };
   const positional = [];
   const readValue = (index, option) => {
@@ -111,10 +110,10 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
       options.token = readValue(++index, arg);
     } else if (arg === "--env" || arg === "-e") {
       options.env.push(readValue(++index, arg));
-    } else if (arg === "--reinstall") {
-      options.reinstall = true;
     } else if (arg === "--json") {
       options.json = true;
+    } else if (arg === "--no-open") {
+      options.open = false;
     } else if (arg === "--limit") {
       options.limit = Number.parseInt(readValue(++index, arg), 10);
       if (!Number.isFinite(options.limit) || options.limit <= 0) {
@@ -388,13 +387,14 @@ async function tasksCommand(args) {
 
 function startService(args) {
   const { options } = parseConnectionOptions(args);
-  const dataDir = options.data;
   const url = `http://${options.host}:${options.port}`;
   console.log(`Starting BiliSum at ${url}`);
-  console.log(`Data directory: ${dataDir}`);
+  console.log(`Data root:      ${options.data}`);
   console.log("");
   const { child } = spawnService(options, { background: false });
-  setTimeout(() => openUrl(url), 1800);
+  if (options.open) {
+    setTimeout(() => openUrl(url), 1800);
+  }
   child.on("exit", (code, signal) => {
     if (signal) {
       process.kill(process.pid, signal);
@@ -406,14 +406,14 @@ function startService(args) {
 
 function doctor(args) {
   const { options } = parseConnectionOptions(args);
-  const runtime = require("../lib/runtime");
-  runtime.ensureRuntime();
-  const python = runtime.findPython(options.python);
-  console.log(`BiliSum package: ${runtime.readVersion()}`);
-  console.log(`Python command: ${[python.command, ...python.args].join(" ")}`);
-  console.log(`Runtime root:   ${runtime.RUNTIME_ROOT}`);
-  console.log(`Venv:           ${runtime.venvDir()}`);
-  console.log(`Data:           ${options.data}`);
+  const python = options.python
+    ? { command: options.python, args: [] }
+    : findPython(options.data);
+  console.log(`BiliSum package: ${readVersion()}`);
+  console.log(`Data root:       ${options.data}`);
+  console.log(`Python:          ${python ? [python.command, ...python.args].join(" ") : "未找到（请安装桌面版 BiliSum 或 Python 3.12）"}`);
+  console.log(`Service:         http://${options.host}:${options.port}`);
+  console.log(`Token:           ${readToken(options) ? "已找到" : "未找到（连接服务时需 --token 或启动一次桌面端）"}`);
 }
 
 function openUrl(url) {

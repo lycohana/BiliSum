@@ -3,6 +3,13 @@ const extraResources = [
     from: "../../dist/BiliSum",
     to: "backend/BiliSum"
   },
+  {
+    // Bundle the CLI so the installed desktop app ships a `bilisum` control
+    // plane: `node resources/cli/bin/bilisum.js summarize <url>`.
+    from: "../../packages/npx",
+    to: "cli",
+    filter: ["**/*", "!test/**", "!scripts/**", "!package-lock.json", "!*.tgz"]
+  },
   process.platform === "win32"
     ? {
         from: "../../apps/desktop/build/icon.ico",

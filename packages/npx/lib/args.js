@@ -4,7 +4,7 @@
  * Shared option parsing for BiliSum task commands (summarize / transcribe).
  */
 
-const { defaultDataDir } = require("./runtime");
+const { locateBilisumDataRoot } = require("./runtime");
 
 class UsageError extends Error {
   constructor(message) {
@@ -41,10 +41,9 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     host: process.env.BILISUM_HOST || "127.0.0.1",
     port: process.env.BILISUM_PORT || "3838",
     python: process.env.BILISUM_PYTHON || "",
-    data: process.env.BILISUM_DATA || defaultDataDir(),
+    data: process.env.BILISUM_DATA || locateBilisumDataRoot(),
     token: process.env.BILISUM_TOKEN || "",
     env: [],
-    reinstall: false,
     format: defaultFormat,
     output: "",
     wait: true,
@@ -72,8 +71,6 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
       options.token = readValue(args, ++index, arg);
     } else if (arg === "--env" || arg === "-e") {
       options.env.push(readValue(args, ++index, arg));
-    } else if (arg === "--reinstall") {
-      options.reinstall = true;
     } else if (arg === "--format" || arg === "-f") {
       const format = readValue(args, ++index, arg);
       if (!FORMATS.has(format)) {

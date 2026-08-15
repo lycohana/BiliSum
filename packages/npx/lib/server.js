@@ -1,13 +1,16 @@
 "use strict";
 
 /**
- * Service lifecycle for the BiliSum CLI.
+ * Service lifecycle for the BiliSum CLI (thin-client mode).
  *
- * Task commands need a reachable service. If none is running on the target
- * host/port, the CLI starts one headlessly in the background (reusing the same
- * managed venv as `bilisum start`) and waits for /health to come up. The
- * spawned process pid is recorded in {dataDir}/runtime.json so `bilisum stop`
- * can shut it down later.
+ * The CLI talks to the existing BiliSum program — normally the desktop app's
+ * backend on http://127.0.0.1:3838. When nothing is reachable there, task
+ * commands may start a headless service that shares the desktop data root
+ * (`VIDEO_SUM_APP_DATA_ROOT` = desktop app data root), so it uses the same
+ * database, tasks, cache and auth as the desktop app.
+ *
+ * The spawned process pid is recorded in `<dataRoot>/cli-runtime.json` so
+ * `bilisum stop` can shut it down.
  */
 
 const { spawn } = require("node:child_process");
@@ -15,30 +18,30 @@ const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require("
 const { join } = require("node:path");
 
 const { ApiError, baseUrlFor, health } = require("./api");
-const { ensureVenv } = require("./runtime");
+const { findPython } = require("./runtime");
 
 const SERVICE_NAME = "BiliSum";
-const RUNTIME_FILE_NAME = "runtime.json";
+const CLI_RUNTIME_FILE = "cli-runtime.json";
 const DEFAULT_STARTUP_TIMEOUT_MS = 300_000;
 const HEALTH_POLL_INTERVAL_MS = 1000;
 
-function runtimeFilePath(dataDir) {
-  return join(dataDir, RUNTIME_FILE_NAME);
+function cliRuntimeFilePath(dataRoot) {
+  return join(dataRoot, CLI_RUNTIME_FILE);
 }
 
-function buildServiceEnv(options, dataDir) {
-  const cacheDir = join(dataDir, "cache");
-  const tasksDir = join(dataDir, "tasks");
+/**
+ * Build the environment for a spawned service. The service derives
+ * data/cache/tasks/db from VIDEO_SUM_APP_DATA_ROOT (same as the desktop app).
+ */
+function buildServiceEnv(options, dataRoot) {
+  const webStaticDir = join(dataRoot, "cli-web-static");
+  mkdirSync(webStaticDir, { recursive: true });
   const env = {
     ...process.env,
     VIDEO_SUM_HOST: options.host,
     VIDEO_SUM_PORT: options.port,
-    VIDEO_SUM_APP_DATA_ROOT: dataDir,
-    VIDEO_SUM_DATA_DIR: dataDir,
-    VIDEO_SUM_CACHE_DIR: cacheDir,
-    VIDEO_SUM_TASKS_DIR: tasksDir,
-    VIDEO_SUM_DATABASE_URL: `sqlite:///${join(dataDir, "video_sum.db").replace(/\\/g, "/")}`,
-    VIDEO_SUM_WEB_STATIC_DIR: join(require("./runtime").RUNTIME_ROOT, "apps", "web", "static"),
+    VIDEO_SUM_APP_DATA_ROOT: dataRoot,
+    VIDEO_SUM_WEB_STATIC_DIR: webStaticDir,
   };
   for (const item of options.env || []) {
     const equals = item.indexOf("=");
@@ -50,13 +53,13 @@ function buildServiceEnv(options, dataDir) {
   return env;
 }
 
-function writeRuntimeFile(dataDir, payload) {
-  mkdirSync(dataDir, { recursive: true });
-  writeFileSync(runtimeFilePath(dataDir), JSON.stringify(payload, null, 2), "utf8");
+function writeCliRuntimeFile(dataRoot, payload) {
+  mkdirSync(dataRoot, { recursive: true });
+  writeFileSync(cliRuntimeFilePath(dataRoot), JSON.stringify(payload, null, 2), "utf8");
 }
 
-function readRuntimeFile(dataDir) {
-  const path = runtimeFilePath(dataDir);
+function readCliRuntimeFile(dataRoot) {
+  const path = cliRuntimeFilePath(dataRoot);
   if (!existsSync(path)) {
     return null;
   }
@@ -67,37 +70,48 @@ function readRuntimeFile(dataDir) {
   }
 }
 
-function removeRuntimeFile(dataDir) {
+function removeCliRuntimeFile(dataRoot) {
   try {
-    rmSync(runtimeFilePath(dataDir), { force: true });
+    rmSync(cliRuntimeFilePath(dataRoot), { force: true });
   } catch {
     // Best effort cleanup.
   }
 }
 
-function spawnService(options, { background = false, open = false } = {}) {
-  const pythonPath = ensureVenv(options);
-  const dataDir = options.data;
-  const cacheDir = join(dataDir, "cache");
-  const tasksDir = join(dataDir, "tasks");
-  mkdirSync(cacheDir, { recursive: true });
-  mkdirSync(tasksDir, { recursive: true });
+/**
+ * Start the service with the desktop data root. Returns { child, url }.
+ * `background: true` detaches and ignores stdio; otherwise stdio is inherited
+ * and process exit is tied to the child.
+ */
+function spawnService(options, { background = false } = {}) {
+  const dataRoot = options.data;
+  const python = options.python
+    ? { command: options.python, args: [] }
+    : findPython(dataRoot);
+  if (!python) {
+    throw new Error(
+      "没有找到可用的 Python 3.12。请先安装桌面版 BiliSum（自带运行时），" +
+      "或安装 Python 3.12 后重试。",
+    );
+  }
 
-  const env = buildServiceEnv(options, dataDir);
+  const env = buildServiceEnv(options, dataRoot);
   const url = baseUrlFor(options.host, options.port);
 
-  const child = spawn(pythonPath, ["-m", "video_sum_service"], {
+  const child = spawn(python.command, [...python.args, "-m", "video_sum_service"], {
     env,
+    cwd: dataRoot,
     stdio: background ? "ignore" : "inherit",
-    windowsHide: false,
+    windowsHide: true,
     detached: background,
   });
 
-  writeRuntimeFile(dataDir, {
+  writeCliRuntimeFile(dataRoot, {
     pid: child.pid,
+    python: [python.command, ...python.args].join(" "),
     host: options.host,
     port: String(options.port),
-    dataDir,
+    dataRoot,
     startedAt: new Date().toISOString(),
   });
 
@@ -105,7 +119,7 @@ function spawnService(options, { background = false, open = false } = {}) {
     child.unref();
   } else {
     child.on("exit", (code, signal) => {
-      removeRuntimeFile(dataDir);
+      removeCliRuntimeFile(dataRoot);
       if (signal) {
         process.kill(process.pid, signal);
         return;
@@ -159,8 +173,8 @@ async function isServiceReachable(baseUrl) {
 }
 
 /**
- * Make sure a BiliSum service is reachable, starting one headlessly if needed.
- * Returns { started, payload } where payload is the /health response.
+ * Make sure a BiliSum service is reachable. If none is running, start one
+ * headlessly sharing the desktop data root. Returns { started, payload }.
  */
 async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS, log = console.error } = {}) {
   const url = baseUrlFor(options.host, options.port);
@@ -168,7 +182,7 @@ async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEO
     return { started: false, payload: await health(url) };
   }
 
-  log(`BiliSum 服务未在 ${url} 运行，正在后台启动...`);
+  log(`BiliSum 服务未在 ${url} 运行，正在用桌面端数据目录后台启动...`);
   const { child } = spawnService(options, { background: true });
   const earlyExit = new Promise((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
@@ -190,7 +204,7 @@ async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEO
         if (info && info.code !== null && info.code !== undefined) {
           throw new Error(
             `BiliSum 服务启动后立即退出（exit code=${info.code}${info.signal ? `, signal=${info.signal}` : ""}）。` +
-            "请先运行 `bilisum start` 前台启动查看日志。",
+            "请先运行 `bilisum start` 前台启动查看日志，或直接打开桌面端 BiliSum。",
           );
         }
         if (info && info.error) {
@@ -200,7 +214,7 @@ async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEO
       }),
     ]);
   } catch (error) {
-    removeRuntimeFile(options.data);
+    removeCliRuntimeFile(options.data);
     throw error;
   }
   log(`BiliSum 服务已就绪：${url}`);
@@ -232,12 +246,12 @@ function killPid(pid) {
 }
 
 async function stopService(options, { log = console.error } = {}) {
-  const runtimeInfo = readRuntimeFile(options.data);
+  const runtimeInfo = readCliRuntimeFile(options.data);
   if (runtimeInfo && runtimeInfo.pid) {
     const killed = killPid(runtimeInfo.pid);
-    removeRuntimeFile(options.data);
+    removeCliRuntimeFile(options.data);
     if (killed) {
-      log(`已停止 BiliSum 服务（pid=${runtimeInfo.pid}）。`);
+      log(`已停止 CLI 启动的 BiliSum 服务（pid=${runtimeInfo.pid}）。`);
     } else {
       log(`未找到进程 pid=${runtimeInfo.pid}，已清理运行记录。`);
     }
@@ -247,8 +261,8 @@ async function stopService(options, { log = console.error } = {}) {
   const url = baseUrlFor(options.host, options.port);
   if (await isServiceReachable(url)) {
     throw new Error(
-      `BiliSum 服务正在 ${url} 运行，但它不是由 CLI 启动的（没有运行记录）。` +
-      "请手动停止它，或用 --data 指定 CLI 管理的数据目录。",
+      `BiliSum 服务正在 ${url} 运行，但它不是由 CLI 启动的（没有 cli-runtime.json 记录）。` +
+      "请直接关闭桌面端 BiliSum，或用 --data 指定正确的数据根目录。",
     );
   }
   log("没有检测到由 CLI 启动的 BiliSum 服务。");
@@ -262,8 +276,8 @@ module.exports = {
   stopService,
   waitForHealth,
   isServiceReachable,
-  readRuntimeFile,
-  writeRuntimeFile,
-  removeRuntimeFile,
-  runtimeFilePath,
+  readCliRuntimeFile,
+  writeCliRuntimeFile,
+  removeCliRuntimeFile,
+  cliRuntimeFilePath,
 };
