@@ -45,6 +45,7 @@ from video_sum_infra.runtime import (
     runtime_library_dirs,
     runtime_python_candidates,
     runtime_python_executable,
+    runtime_python_stdlib_healthy,
     runtime_pythonpath_dirs,
     runtime_site_packages_dir,
     sanitized_subprocess_dll_search,
@@ -1248,7 +1249,14 @@ def ensure_runtime_channel(runtime_channel: str) -> Path | None:
 
     base_metadata = read_runtime_metadata(base_dir)
     target_metadata = read_runtime_metadata(target_dir)
-    target_ready = runtime_python_executable(runtime_channel) is not None
+    # "Ready" means more than python.exe existing: a portable runtime whose
+    # DLLs went missing (interrupted refresh) still passes the metadata check
+    # but fails every subprocess with "No module named '_socket'".  Treat it
+    # as not ready so the runtime gets re-synced from base / the seed below.
+    target_ready = (
+        runtime_python_executable(runtime_channel) is not None
+        and runtime_python_stdlib_healthy(target_dir)
+    )
     target_matches_base = runtime_metadata_matches_base(target_metadata, base_metadata)
     if target_ready and target_matches_base:
         _ensure_runtime_sitecustomize(runtime_channel)
@@ -1400,7 +1408,10 @@ def inspect_runtime_channels() -> dict[str, object]:
         metadata = read_runtime_metadata(runtime_dir)
         python_executable = runtime_python_executable(runtime_channel)
         exists = runtime_dir.exists()
-        ready = python_executable is not None
+        ready = (
+            python_executable is not None
+            and runtime_python_stdlib_healthy(runtime_dir)
+        )
         app_version = str(metadata.get("appVersion") or "")
         layout = str(metadata.get("runtimeLayout") or "")
         cached_environment = (
