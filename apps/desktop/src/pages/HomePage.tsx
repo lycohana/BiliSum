@@ -148,6 +148,7 @@ export function HomePage({
   const [hiddenPromptPresetIds, setHiddenPromptPresetIds] = useState<Set<string>>(() => loadHiddenPromptPresetIds());
   const [promptPresetId, setPromptPresetId] = useState(() => loadPromptPresetId());
   const [promptContextMenu, setPromptContextMenu] = useState<{ x: number; y: number; presetId: string } | null>(null);
+  const [promptSelectOpen, setPromptSelectOpen] = useState(false);
   const [promptLoading, setPromptLoading] = useState(false);
   const [promptStatus, setPromptStatus] = useState("");
   const [promptModeSaving, setPromptModeSaving] = useState(false);
@@ -219,12 +220,19 @@ export function HomePage({
 
   useEffect(() => {
     if (!preferenceMenuOpen) {
+      setPromptSelectOpen(false);
       return;
     }
 
     function handlePointerDown(event: globalThis.MouseEvent) {
       const target = event.target as Node;
-      if (preferenceMenuRef.current?.contains(target) || promptMenuRef.current?.contains(target)) {
+      if (preferenceMenuRef.current?.contains(target)) {
+        if (!(target instanceof Element) || !target.closest(".home-prompt-select-shell")) {
+          setPromptSelectOpen(false);
+        }
+        return;
+      }
+      if (promptMenuRef.current?.contains(target)) {
         return;
       }
       setPreferenceMenuOpen(false);
@@ -232,6 +240,7 @@ export function HomePage({
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        setPromptSelectOpen(false);
         setPreferenceMenuOpen(false);
       }
     }
@@ -284,6 +293,7 @@ export function HomePage({
     setPromptPresetId(nextPresetId || "general");
     setPromptStatus("");
     setPromptContextMenu(null);
+    setPromptSelectOpen(false);
   }
 
   function openPromptContextMenu(event: MouseEvent<HTMLElement>) {
@@ -588,20 +598,36 @@ export function HomePage({
                       </button>
                     </div>
                     <div className="home-prompt-select-shell">
-                      <select
+                      <button
                         className="select-field home-prompt-select"
+                        type="button"
+                        role="combobox"
                         aria-label="选择摘要 Prompt"
-                        value={selectedPrompt?.id || promptPresetId}
+                        aria-expanded={promptSelectOpen}
+                        aria-controls="summary-prompt-options"
                         disabled={promptRouterMode === "auto" || promptLoading || !selectablePromptPresets.length}
-                        onChange={(event) => updatePromptPreset(event.target.value)}
+                        onClick={() => setPromptSelectOpen((open) => !open)}
                       >
-                        {selectablePromptPresets.map((preset) => (
-                          <option key={preset.id} value={preset.id}>
-                            {preset.name}
-                          </option>
-                        ))}
-                      </select>
-                      <IconChevronDown />
+                        <span>{selectedPrompt?.name || "暂无可用 Prompt"}</span>
+                        <IconChevronDown />
+                      </button>
+                      {promptSelectOpen && selectablePromptPresets.length ? (
+                        <div className="home-prompt-options" id="summary-prompt-options" role="listbox" aria-label="摘要 Prompt 选项">
+                          {selectablePromptPresets.map((preset) => (
+                            <button
+                              key={preset.id}
+                              className={`home-prompt-option ${preset.id === selectedPrompt?.id ? "is-selected" : ""}`}
+                              type="button"
+                              role="option"
+                              aria-selected={preset.id === selectedPrompt?.id}
+                              onClick={() => updatePromptPreset(preset.id)}
+                            >
+                              <span>{preset.name}</span>
+                              {preset.id === selectedPrompt?.id ? <span aria-hidden="true">✓</span> : null}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                     {selectedPrompt?.description ? (
                       <span className="home-prompt-description">{selectedPrompt.description}</span>
