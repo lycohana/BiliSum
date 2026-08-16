@@ -378,23 +378,42 @@ def update_settings(payload: SettingsUpdatePayload, request: Request, background
     )
     if payload.runtime_channel is not None:
         payload = payload.model_copy(update={"runtime_channel": requested_runtime_channel})
-    ensure_runtime_channel(requested_runtime_channel)
+    # Runtime bootstrap/sync is expensive (it can copy the whole managed
+    # runtime tree when the channel metadata mismatches) and is only needed
+    # when the runtime channel itself changes. Ordinary saves (e.g. toggling
+    # the summary prompt router mode) must not re-sync the runtime — doing so
+    # blocks the response and can fail with a bare 500 under concurrent saves.
+    runtime_channel_changed = requested_runtime_channel != previous_settings.runtime_channel
+    if runtime_channel_changed:
+        try:
+            ensure_runtime_channel(requested_runtime_channel)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "settings save: ensure runtime channel failed channel=%s error=%s",
+                requested_runtime_channel,
+                exc,
+            )
+            raise HTTPException(status_code=500, detail=f"运行环境切换失败：{exc}") from exc
 
     current_settings = settings_manager.save(payload)
     active_runtime_channel = normalize_runtime_channel(current_settings.runtime_channel, allow_unknown_gpu=True)
-    bootstrap_managed_runtime(active_runtime_channel)
-    prepend_runtime_path(active_runtime_channel)
-    activate_runtime_pythonpath(active_runtime_channel)
-    current_settings.data_dir.mkdir(parents=True, exist_ok=True)
-    current_settings.cache_dir.mkdir(parents=True, exist_ok=True)
-    current_settings.tasks_dir.mkdir(parents=True, exist_ok=True)
-    runtime_channel_changed = previous_settings.runtime_channel != current_settings.runtime_channel
     if runtime_channel_changed:
+        bootstrap_managed_runtime(active_runtime_channel)
+        prepend_runtime_path(active_runtime_channel)
+        activate_runtime_pythonpath(active_runtime_channel)
         clear_environment_probe_cache(previous_settings.runtime_channel)
         clear_environment_probe_cache(current_settings.runtime_channel)
         _clear_knowledge_service_cache(request.app.state)
+    current_settings.data_dir.mkdir(parents=True, exist_ok=True)
+    current_settings.cache_dir.mkdir(parents=True, exist_ok=True)
+    current_settings.tasks_dir.mkdir(parents=True, exist_ok=True)
     # Defer worker rebuild + env probe to background so the save response
     # returns immediately instead of blocking on subprocess / thread init.
+    # build_worker() re-runs bootstrap_managed_runtime / prepend_runtime_path /
+    # activate_runtime_pythonpath for the active channel, so the process-level
+    # runtime environment stays in sync even for channel-unchanged saves.
     background_tasks.add_task(
         _rebuild_worker_after_save,
         request.app.state,

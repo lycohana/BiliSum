@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Literal
 
@@ -151,6 +153,10 @@ class SettingsManager:
         self._base_settings = base_settings
         self._settings = base_settings
         self._settings_path = Path(base_settings.data_dir) / "settings.json"
+        # Serialize saves: concurrent PUT /settings requests (e.g. a quick
+        # double-click on the summary prompt mode toggle) must not race on
+        # the shared settings file.
+        self._save_lock = threading.Lock()
 
     @property
     def current(self) -> ServiceSettings:
@@ -212,16 +218,25 @@ class SettingsManager:
         return self._settings
 
     def save(self, payload: SettingsUpdatePayload) -> ServiceSettings:
-        current_dump = self._settings.model_dump(mode="json")
-        updates = payload.model_dump(exclude_none=True, exclude={"llm_test_scope"})
-        for field in SECRET_SETTINGS_FIELDS:
-            if field in updates and is_blank_or_masked_secret(updates[field]) and current_dump.get(field):
-                updates.pop(field)
-        next_settings = ServiceSettings.model_validate({**current_dump, **updates})
-        self._settings_path.parent.mkdir(parents=True, exist_ok=True)
-        self._settings_path.write_text(
-            json.dumps(next_settings.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        self._settings = next_settings
-        return self._settings
+        with self._save_lock:
+            current_dump = self._settings.model_dump(mode="json")
+            updates = payload.model_dump(exclude_none=True, exclude={"llm_test_scope"})
+            for field in SECRET_SETTINGS_FIELDS:
+                if (
+                    field in updates
+                    and is_blank_or_masked_secret(updates[field])
+                    and current_dump.get(field)
+                ):
+                    updates.pop(field)
+            next_settings = ServiceSettings.model_validate({**current_dump, **updates})
+            self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+            # Write atomically (temp file + rename) so an interrupted or
+            # concurrent write can never leave a truncated settings.json.
+            tmp_path = self._settings_path.with_name(self._settings_path.name + ".tmp")
+            tmp_path.write_text(
+                json.dumps(next_settings.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp_path, self._settings_path)
+            self._settings = next_settings
+            return self._settings
