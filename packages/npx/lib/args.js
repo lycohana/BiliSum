@@ -8,9 +8,10 @@ const { locateBilisumDataRoot } = require("./runtime");
 const { ENV_NAMES } = require("./env");
 
 class UsageError extends Error {
-  constructor(message) {
+  constructor(message, { showHelp = true } = {}) {
     super(message);
     this.name = "UsageError";
+    this.showHelp = showHelp;
   }
 }
 

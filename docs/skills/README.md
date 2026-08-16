@@ -71,6 +71,14 @@ bilisum --setting
 
 `bilisum --setting` 会打开设置页。API Key 应在设置页中填写，不要要求用户把密钥发送到对话中。
 
+## 失败时的处理
+
+Agent 应先运行 `bilisum --version`，并使用同一个 CLI 完成后续命令。在 PowerShell 中命令写作 `bilisum`，不要写成 `$bilisum`；后者会被当作变量。
+
+`bilisum doctor` 只说明运行环境是否正常，不代表访问令牌或视频任务已经成功。执行摘要、转写或状态查询时，Agent 必须分别检查退出码、stderr 和 stdout，并确认 stdout 是有效 JSON 后才能报告“已处理”。
+
+如果出现“无法获取访问令牌”，应停止当前任务并提示用户选择一种本地恢复方式：启动桌面端、执行 `bilisum env setup` 后使用 `--environment cli`，或通过 `--token` / `VIDEO_SUM_ACCESS_TOKEN` 配置已有令牌。不要反复使用不同 `--data` 路径重试，也不要在 BiliSum 失败后擅自改用网页搜索或上传其他服务。
+
 ## 更新 Skill
 
 目标目录已存在时，安装器默认不会覆盖。确认需要更新后执行：

@@ -207,7 +207,8 @@ async function ensureAuthenticatedService(options, log) {
   if (!token) {
     throw new UsageError(
       "无法获取访问令牌：请用 --token 指定，或设置 VIDEO_SUM_ACCESS_TOKEN，" +
-      "或先启动一次桌面端 BiliSum 生成令牌。",
+      "或先启动一次桌面端 BiliSum 生成令牌；没有桌面端时可使用 --environment cli。",
+      { showHelp: false },
     );
   }
   return token;
@@ -673,7 +674,7 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
-    if (error instanceof UsageError) {
+    if (error instanceof UsageError && error.showHelp) {
       console.error("");
       printHelp();
     }

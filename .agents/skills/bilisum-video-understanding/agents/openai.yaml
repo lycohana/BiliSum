@@ -1,4 +1,4 @@
 interface:
   display_name: "BiliSum Video Understanding"
   short_description: "Analyze videos through the BiliSum CLI"
-  default_prompt: "Use $bilisum-video-understanding to analyze this video and return a structured answer."
+  default_prompt: "请使用 $bilisum-video-understanding 分析这个视频，并在确认 CLI 成功返回结果后用中文给出有依据的结构化摘要。"

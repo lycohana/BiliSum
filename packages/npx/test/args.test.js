@@ -5,6 +5,11 @@ const assert = require("node:assert/strict");
 
 const { parseTaskCommandArgs, UsageError } = require("../lib/args");
 
+test("UsageError 默认显示帮助，也可以抑制帮助", () => {
+  assert.equal(new UsageError("usage").showHelp, true);
+  assert.equal(new UsageError("configuration", { showHelp: false }).showHelp, false);
+});
+
 test("parseTaskCommandArgs: returns source and defaults", () => {
   const { source, options } = parseTaskCommandArgs(["https://bilibili.com/video/BV1xx"]);
   assert.equal(source, "https://bilibili.com/video/BV1xx");
