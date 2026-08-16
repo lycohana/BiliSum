@@ -74,7 +74,7 @@ function parseTaskCommandArgs(args, { defaultFormat = "markdown" } = {}) {
     } else if (arg === "--python") {
       options.python = readValue(args, ++index, arg);
     } else if (arg === "--environment" || arg === "--env-mode") {
-      const name = readValue(args, ++index, arg);
+      const name = readValue(args, ++index, arg).toLowerCase();
       if (!ENV_NAMES.includes(name)) {
         throw new UsageError(`--environment 仅支持 ${ENV_NAMES.join(" / ")}，收到：${name}`);
       }

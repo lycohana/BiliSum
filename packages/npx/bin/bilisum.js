@@ -51,6 +51,7 @@ function printHelp() {
   console.log("  npx bilisum status <task-id> [--json]       Show task status");
   console.log("  npx bilisum tasks [--limit N] [--json]      List tasks");
   console.log("  npx bilisum env [use <name>|setup]          Environment status / switch / setup");
+  console.log("  npx bilisum desktop|cli|custom|auto         Switch environment (shortcut)");
   console.log("  npx bilisum --setting                       Open the web settings page");
   console.log("  npx bilisum start [options]                 Start the service");
   console.log("  npx bilisum stop                            Stop the CLI-started BiliSum service");
@@ -60,7 +61,7 @@ function printHelp() {
   console.log("");
   console.log("环境（bilisum env）：desktop 连桌面端服务 / cli 独立环境（自带运行时）/ custom 自定义 / auto 自动");
   console.log("");
-  console.log("默认连接桌面端服务 http://127.0.0.1:3838；未运行时自动用桌面端数据目录后台拉起。");
+  console.log("默认按已保存的环境连接；auto 模式优先桌面端，否则使用 CLI 独立环境。");
   console.log("");
   console.log("Options (all commands):");
   console.log("  --host <host>                        Host, default 127.0.0.1");
@@ -132,7 +133,7 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
     } else if (arg === "--token") {
       options.token = readValue(++index, arg);
     } else if (arg === "--environment" || arg === "--env-mode") {
-      const name = readValue(++index, arg);
+      const name = readValue(++index, arg).toLowerCase();
       if (!ENV_NAMES.includes(name)) {
         throw new UsageError(`--environment 仅支持 ${ENV_NAMES.join(" / ")}，收到：${name}`);
       }
@@ -514,11 +515,12 @@ async function envCommand(args) {
 
   if (sub === "use") {
     const name = String(args[1] || "").toLowerCase();
-    if (!ENV_NAMES.includes(name) || name === "auto") {
-      throw new UsageError(`用法：bilisum env use ${ENV_NAMES.filter((item) => item !== "auto").join("|")}`);
+    if (!ENV_NAMES.includes(name) || args.length !== 2) {
+      throw new UsageError(`用法：bilisum env use ${ENV_NAMES.join("|")}`);
     }
     writeConfig({ ...config, env: name });
-    console.log(`已切换到 ${name} 环境。`);
+    const suffix = name === "auto" ? "（桌面端可用时优先 desktop，否则 cli）" : "";
+    console.log(`已切换到 ${name} 环境${suffix}。`);
     return;
   }
 
@@ -532,6 +534,10 @@ async function envCommand(args) {
   if (sub === "help" || sub === "--help" || sub === "-h") {
     printEnvHelp();
     return;
+  }
+
+  if (sub) {
+    throw new UsageError(`未知 env 子命令：${sub}`);
   }
 
   // default: status
@@ -548,7 +554,7 @@ async function envCommand(args) {
   console.log(`  custom     ${config.custom ? "● 已配置" : "○ 未配置（--host/--port/--token）"}`);
   console.log(`  auto       desktop 优先，否则 cli`);
   console.log("");
-  console.log("切换：bilisum env use desktop|cli|custom");
+  console.log("切换：bilisum env use desktop|cli|custom|auto（也可直接 bilisum desktop|cli|custom|auto）");
   if (config.env && config.env !== "auto") {
     console.log(`已持久化选择：${config.env}`);
   }
@@ -557,7 +563,8 @@ async function envCommand(args) {
 function printEnvHelp() {
   console.log("Usage:");
   console.log("  bilisum env                     Show environment status");
-  console.log("  bilisum env use <name>          Switch environment (desktop|cli|custom)");
+  console.log("  bilisum env use <name>          Switch environment (desktop|cli|custom|auto)");
+  console.log("  bilisum <name>                  Shortcut for `bilisum env use <name>`");
   console.log("  bilisum env setup               Initialize the standalone cli environment");
   console.log("");
   console.log("Environments:");
@@ -617,6 +624,13 @@ async function main() {
     }
     if (command === "env") {
       await envCommand(args);
+      return;
+    }
+    if (ENV_NAMES.includes(command)) {
+      if (args.length > 0) {
+        throw new UsageError(`用法：bilisum ${command}`);
+      }
+      await envCommand(["use", command]);
       return;
     }
     if (command === "settings" || command === "--setting" || command === "config") {

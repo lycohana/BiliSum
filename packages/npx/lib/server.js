@@ -275,10 +275,17 @@ function buildStartupFailureHint(logPath) {
   return `详细日志：${logPath}`;
 }
 
+function buildAutoStartMessage(options) {
+  const url = baseUrlFor(options.host, options.port);
+  const dataRootLabel = options.environment === "cli" ? "CLI 独立数据目录" : "桌面端数据目录";
+  return `BiliSum 服务未在 ${url} 运行，正在用 ${dataRootLabel} 后台启动...`;
+}
+
 /**
- * Make sure a BiliSum service is reachable. If none is running, start one
- * headlessly sharing the desktop data root. When `accessToken` is known it is
- * injected into the spawned service so CLI and service always agree.
+ * Make sure a BiliSum service is reachable. If none is running, start a local
+ * service for the desktop/cli environments. A custom target is connection-only
+ * and is never replaced with an unrelated local process. When `accessToken` is
+ * known it is injected into the spawned service so CLI and service always agree.
  * Returns { started, payload }.
  */
 async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS, log = console.error, accessToken = null } = {}) {
@@ -287,7 +294,13 @@ async function ensureService(options, { startupTimeoutMs = DEFAULT_STARTUP_TIMEO
     return { started: false, payload: await health(url) };
   }
 
-  log(`BiliSum 服务未在 ${url} 运行，正在用桌面端数据目录后台启动...`);
+  if (options.environment === "custom") {
+    throw new Error(
+      `无法连接自定义 BiliSum 服务（${url}）。请确认服务已启动，并检查 --host/--port 配置。`,
+    );
+  }
+
+  log(buildAutoStartMessage(options));
   const { child, logPath } = spawnService(options, { background: true, accessToken });
   const controller = new AbortController();
   const earlyExit = new Promise((resolve) => {
@@ -396,4 +409,5 @@ module.exports = {
   cliServiceLogPath,
   readServiceSettings,
   assertSpawnablePort,
+  buildAutoStartMessage,
 };

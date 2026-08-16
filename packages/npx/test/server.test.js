@@ -16,6 +16,8 @@ const {
   removeCliRuntimeFile,
   readServiceSettings,
   assertSpawnablePort,
+  ensureService,
+  buildAutoStartMessage,
 } = require("../lib/server");
 const { baseUrlFor, ApiError } = require("../lib/api");
 
@@ -144,4 +146,25 @@ test("assertSpawnablePort rejects --port conflicting with persisted settings", (
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("ensureService does not auto-start an unreachable custom target", async () => {
+  await assert.rejects(
+    ensureService(
+      { host: "127.0.0.1", port: "1", environment: "custom" },
+      { log: () => {} },
+    ),
+    /无法连接自定义 BiliSum 服务/,
+  );
+});
+
+test("auto-start message describes the resolved environment data root", () => {
+  assert.match(
+    buildAutoStartMessage({ host: "127.0.0.1", port: "3839", environment: "cli" }),
+    /CLI 独立数据目录/,
+  );
+  assert.match(
+    buildAutoStartMessage({ host: "127.0.0.1", port: "3838", environment: "desktop" }),
+    /桌面端数据目录/,
+  );
 });

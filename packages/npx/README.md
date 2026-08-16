@@ -43,6 +43,8 @@ bilisum summarize --help
 ```bash
 bilisum env                      # 查看环境状态
 bilisum env use cli              # 切换到独立环境
+bilisum desktop                  # 快捷切换到桌面端环境
+bilisum auto                     # 恢复自动选择
 bilisum env setup                # 初始化独立环境（内置运行时，需 Python 3.12）
 bilisum --setting                # 打开当前环境的网页设置（cli 环境无需桌面端）
 bilisum summarize <url> --environment cli   # 单次使用某环境
@@ -60,14 +62,14 @@ bilisum summarize <url> --environment cli   # 单次使用某环境
 
 ## 它如何"控制现有程序"
 
-- 默认连接桌面端服务 `http://127.0.0.1:3838`，任务、结果、知识库都与桌面端**同一个数据库**。
+- `desktop` 环境连接桌面端服务 `http://127.0.0.1:3838`，任务、结果、知识库都与桌面端**同一个数据库**；默认 `auto` 会优先探测 desktop，不可达时使用 cli 独立环境。
 - 访问令牌自动获取：`--token` → `VIDEO_SUM_ACCESS_TOKEN` → 桌面端自己的 token 文件（`%APPDATA%\BiliSum\access-token.json` 等）→ 服务侧 `{数据根}\data\auth.json`。桌面端正在运行时通常无需任何配置。
-- 数据根默认与桌面端一致（Windows `%LOCALAPPDATA%\bilisum`，macOS `~/Library/Application Support/bilisum`），可用 `--data` / `BILISUM_DATA_ROOT` 覆盖。
+- desktop 数据根默认与桌面端一致（Windows `%LOCALAPPDATA%\bilisum`，macOS `~/Library/Application Support/bilisum`）；cli 使用独立的 `CLI_HOME`。
 - 配置（LLM / ASR Key 等）跟随服务端设置，桌面端里配好了，CLI 直接用。
 
 ## 服务不在线时
 
-`summarize / brief / transcribe / status / tasks` 会先探活；如果 `127.0.0.1:3838` 没有服务，就**用桌面端数据目录自动后台拉起一个**（优先用桌面端自带的托管 Python 运行时，其次系统 Python 3.12），等 `/health` 就绪后继续。CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`：
+`summarize / brief / transcribe / status / tasks` 会先探活当前环境。desktop 不可达时用桌面端数据目录拉起服务，cli 不可达时用 CLI 独立数据目录和 venv 拉起服务；custom 只连接指定地址，不会在本机拉起替代服务。CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`：
 
 ```bash
 bilisum start --no-open   # 前台启动（可选，一般不用）
@@ -84,13 +86,13 @@ bilisum stop              # 停止 CLI 拉起的服务
 npm install -g bilisum          # 或 npx bilisum ...
 ```
 
-包内**不包含 Python 运行时**（CLI 是纯客户端），首次使用要求机器上已有桌面版 BiliSum 或 Python 3.12。
+包内包含构建独立环境所需的 Python 源码；首次执行 `bilisum env setup` 仍要求系统已有 Python 3.12。
 
 ## 常用选项
 
 | 选项 | 说明 |
 |------|------|
-| `--host / --port` | 服务地址（默认 `127.0.0.1:3838`） |
+| `--host / --port` | 自定义服务地址（显式指定时进入 custom 环境） |
 | `--data <path>` | 桌面端数据根（默认 `%LOCALAPPDATA%\bilisum`） |
 | `--token <token>` | 访问令牌（默认自动读桌面端 token） |
 | `--format json\|markdown\|transcript` | 输出格式，默认 markdown |
