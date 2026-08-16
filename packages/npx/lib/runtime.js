@@ -12,7 +12,7 @@
  */
 
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { join, resolve } = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const PACKAGE_ROOT = join(__dirname, "..");
@@ -139,9 +139,28 @@ function findPython(dataRoot) {
   return findSystemPython();
 }
 
-/** Bundled Python sources inside the npm package (prepack copies these). */
+function isRuntimeSourceRoot(path) {
+  return existsSync(join(path, "apps", "service", "pyproject.toml"));
+}
+
+/**
+ * Python/runtime sources for both supported layouts:
+ * - published package: packages/npx/runtime (created by prepack)
+ * - repository checkout: repository root (runtime is removed by postpack)
+ */
 function runtimeSourceDir() {
-  return join(PACKAGE_ROOT, "runtime");
+  const packagedRoot = join(PACKAGE_ROOT, "runtime");
+  if (isRuntimeSourceRoot(packagedRoot)) {
+    return packagedRoot;
+  }
+
+  const repositoryRoot = resolve(PACKAGE_ROOT, "..", "..");
+  if (isRuntimeSourceRoot(repositoryRoot)) {
+    return repositoryRoot;
+  }
+
+  // Keep the packaged path in error messages for an incomplete npm install.
+  return packagedRoot;
 }
 
 /** CLI venv lives under CLI_HOME/venv. */

@@ -2,9 +2,16 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { join } = require("node:path");
+const { existsSync } = require("node:fs");
+const { join, resolve } = require("node:path");
 
-const { locateBilisumDataRoot, desktopUserDataCandidates, pythonCandidatesForRuntime, findPython } = require("../lib/runtime");
+const {
+  locateBilisumDataRoot,
+  desktopUserDataCandidates,
+  pythonCandidatesForRuntime,
+  findPython,
+  runtimeSourceDir,
+} = require("../lib/runtime");
 
 test("locateBilisumDataRoot honors BILISUM_DATA_ROOT", () => {
   const previous = process.env.BILISUM_DATA_ROOT;
@@ -77,4 +84,11 @@ test("findPython returns a candidate object or null (never throws)", () => {
     assert.equal(typeof result.command, "string");
     assert.ok(Array.isArray(result.args));
   }
+});
+
+test("runtimeSourceDir falls back to the repository after postpack cleanup", () => {
+  const expectedRepoRoot = resolve(__dirname, "..", "..", "..");
+  assert.equal(runtimeSourceDir(), expectedRepoRoot);
+  assert.equal(existsSync(join(runtimeSourceDir(), "apps", "service", "pyproject.toml")), true);
+  assert.equal(existsSync(join(runtimeSourceDir(), "apps", "web", "static", "index.html")), true);
 });

@@ -122,4 +122,5 @@ node "<安装目录>\resources\cli\bin\bilisum.js" summarize "https://..."
 ```bash
 npm test --prefix packages/npx   # node:test 单元测试
 npm run npx:test                 # 版本 + 单测 + npm pack 校验（根目录）
+node packages/npx/bin/bilisum.js --setting  # 可直接从仓库运行；自动使用仓库内 runtime/web 资源
 ```
