@@ -20,6 +20,18 @@ from video_sum_service.schemas import KnowledgeIndexChunkRecord, KnowledgeSearch
 
 logger = logging.getLogger("video_sum_service.knowledge")
 
+_SILICONFLOW_EMBEDDING_BATCH_SIZE = 16
+_SILICONFLOW_MODEL_CHAR_LIMITS = {
+    # SiliconFlow documents a 512-token limit for the classic BGE v1.5 models.
+    # A conservative character cap also works for Chinese text, where a single
+    # character is frequently close to a token, without requiring a tokenizer.
+    "BAAI/bge-large-zh-v1.5": 400,
+    "BAAI/bge-large-en-v1.5": 400,
+    "netease-youdao/bce-embedding-base_v1": 400,
+    "BAAI/bge-m3": 6000,
+    "Pro/BAAI/bge-m3": 6000,
+}
+
 
 def format_anchor_seconds(seconds: float | None) -> str | None:
     if seconds is None:
@@ -211,40 +223,57 @@ class KnowledgeIndexService:
         base_url = self._settings.siliconflow_embedding_base_url.rstrip("/")
         model = self._settings.siliconflow_embedding_model or self._model_name
 
+        prepared_texts = self._prepare_siliconflow_texts(texts, model)
+        embeddings: list[list[float]] = []
         try:
             with httpx.Client(timeout=60.0) as client:
-                response = client.post(
-                    f"{base_url}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "input": texts,
-                        "encoding_format": "float",
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()
-                data = result.get("data", [])
-                if not data:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="硅基流动 Embedding API 返回数据为空。",
+                for offset in range(0, len(prepared_texts), _SILICONFLOW_EMBEDDING_BATCH_SIZE):
+                    batch = prepared_texts[offset : offset + _SILICONFLOW_EMBEDDING_BATCH_SIZE]
+                    response = client.post(
+                        f"{base_url}/embeddings",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "input": batch,
+                            "encoding_format": "float",
+                        },
                     )
-                embeddings = [item["embedding"] for item in sorted(data, key=lambda x: x["index"])]
-                return embeddings
+                    response.raise_for_status()
+                    result = response.json()
+                    data = result.get("data", []) if isinstance(result, dict) else []
+                    if len(data) != len(batch):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=(
+                                "硅基流动 Embedding API 返回向量数量不匹配"
+                                f"（请求 {len(batch)}，返回 {len(data)}）。"
+                            ),
+                        )
+                    embeddings.extend(
+                        [list(map(float, item["embedding"])) for item in sorted(data, key=lambda item: item["index"])]
+                    )
+            return embeddings
         except httpx.HTTPStatusError as exc:
+            api_detail = self._siliconflow_error_detail(exc.response)
             logger.exception(
-                "siliconflow embedding API error status=%s model=%s",
+                "siliconflow embedding API error status=%s model=%s detail=%s trace_id=%s",
                 exc.response.status_code,
                 model,
+                api_detail,
+                exc.response.headers.get("x-siliconcloud-trace-id", ""),
             )
             raise HTTPException(
                 status_code=502,
-                detail=f"硅基流动 Embedding API 请求失败（HTTP {exc.response.status_code}）。",
+                detail=(
+                    f"硅基流动 Embedding API 请求失败（HTTP {exc.response.status_code}）"
+                    f"：{api_detail}"
+                ),
             ) from exc
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.exception(
                 "siliconflow embedding API error model=%s",
@@ -254,6 +283,44 @@ class KnowledgeIndexService:
                 status_code=500,
                 detail=f"硅基流动 Embedding API 调用异常：{self._short_error(exc)}。",
             ) from exc
+
+    def _prepare_siliconflow_texts(self, texts: list[str], model: str) -> list[str]:
+        char_limit = _SILICONFLOW_MODEL_CHAR_LIMITS.get(model, 12000)
+        prepared: list[str] = []
+        truncated_count = 0
+        for raw_text in texts:
+            text = str(raw_text or "").strip() or "（空内容）"
+            if len(text) > char_limit:
+                text = text[:char_limit].rstrip()
+                truncated_count += 1
+            prepared.append(text)
+        if truncated_count:
+            logger.info(
+                "siliconflow embedding inputs shortened model=%s count=%s char_limit=%s",
+                model,
+                truncated_count,
+                char_limit,
+            )
+        return prepared
+
+    def _siliconflow_error_detail(self, response: Any) -> str:
+        detail = "上游服务未提供错误详情"
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    detail = str(error.get("message") or error.get("detail") or detail)
+                elif error:
+                    detail = str(error)
+                else:
+                    detail = str(payload.get("message") or payload.get("detail") or detail)
+        except Exception:
+            response_text = str(getattr(response, "text", "") or "").strip()
+            if response_text:
+                detail = response_text
+        detail = re.sub(r"\s+", " ", detail).strip()
+        return detail[:300] or "上游服务未提供错误详情"
 
     def _split_markdown_sections(self, markdown: str) -> list[tuple[str, str]]:
         content = str(markdown or "").strip()
@@ -425,7 +492,13 @@ class KnowledgeIndexService:
                 count += 1
         return count
 
-    def _fetch_candidate_chunks(self, query: str, limit: int = 10, tag_filter: list[str] | None = None) -> list[dict[str, object]]:
+    def _fetch_candidate_chunks(
+        self,
+        query: str,
+        limit: int = 10,
+        tag_filter: list[str] | None = None,
+        video_ids: set[str] | None = None,
+    ) -> list[dict[str, object]]:
         cleaned_query = str(query or "").strip()
         if not cleaned_query:
             return []
@@ -453,6 +526,9 @@ class KnowledgeIndexService:
                     if item.tag in selected
                 }
 
+        if video_ids is not None:
+            allowed_video_ids = set(video_ids) if allowed_video_ids is None else allowed_video_ids & set(video_ids)
+
         candidates: list[dict[str, object]] = []
         for index, chunk_id in enumerate(ids):
             metadata = metadatas[index] if index < len(metadatas) and isinstance(metadatas[index], dict) else {}
@@ -472,8 +548,14 @@ class KnowledgeIndexService:
             )
         return candidates
 
-    def search(self, query: str, limit: int = 10, tag_filter: list[str] | None = None) -> list[KnowledgeSearchResult]:
-        candidates = self._fetch_candidate_chunks(query, limit=limit, tag_filter=tag_filter)
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        tag_filter: list[str] | None = None,
+        video_ids: set[str] | None = None,
+    ) -> list[KnowledgeSearchResult]:
+        candidates = self._fetch_candidate_chunks(query, limit=limit, tag_filter=tag_filter, video_ids=video_ids)
         if not candidates:
             return []
 
@@ -519,5 +601,11 @@ class KnowledgeIndexService:
             )
         return results
 
-    def search_chunks(self, query: str, limit: int = 5, tag_filter: list[str] | None = None) -> list[dict[str, object]]:
-        return self._fetch_candidate_chunks(query, limit=limit, tag_filter=tag_filter)[: max(1, limit)]
+    def search_chunks(
+        self,
+        query: str,
+        limit: int = 5,
+        tag_filter: list[str] | None = None,
+        video_ids: set[str] | None = None,
+    ) -> list[dict[str, object]]:
+        return self._fetch_candidate_chunks(query, limit=limit, tag_filter=tag_filter, video_ids=video_ids)[: max(1, limit)]

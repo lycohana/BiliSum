@@ -11,6 +11,12 @@ import type {
   KnowledgeStatsResponse,
   KnowledgeTagListResponse,
   KnowledgeToolTrace,
+  KnowledgeConversation,
+  KnowledgeMessage,
+  KnowledgeJob,
+  KnowledgeReference,
+  KnowledgeReferenceItem,
+  KnowledgeSuggestionsResponse,
   LlmTestResponse,
   PromptMatchResult,
   PromptPreset,
@@ -609,7 +615,46 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  askKnowledge(payload: { query: string; context_limit?: number; history?: Array<{ role: "user" | "assistant"; content: string }> }) {
+  listKnowledgeConversations() {
+    return fetchJson<KnowledgeConversation[]>("/api/v1/knowledge/conversations");
+  },
+  createKnowledgeConversation(title?: string) {
+    return fetchJson<KnowledgeConversation>("/api/v1/knowledge/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(title ? { title } : {}),
+    });
+  },
+  renameKnowledgeConversation(conversationId: string, title: string) {
+    return fetchJson<KnowledgeConversation>(`/api/v1/knowledge/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+  },
+  deleteKnowledgeConversation(conversationId: string) {
+    return fetchJson<{ deleted: boolean }>(`/api/v1/knowledge/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE" });
+  },
+  getKnowledgeMessages(conversationId: string) {
+    return fetchJson<{ conversation_id: string; messages: KnowledgeMessage[] }>(`/api/v1/knowledge/conversations/${encodeURIComponent(conversationId)}/messages`);
+  },
+  getKnowledgeReferences(query = "") {
+    const url = new URL("/api/v1/knowledge/references", window.location.origin);
+    if (query.trim()) {
+      url.searchParams.set("q", query.trim());
+    }
+    return fetchJson<{ items: KnowledgeReferenceItem[] }>(url.toString());
+  },
+  getKnowledgeSuggestions() {
+    return fetchJson<KnowledgeSuggestionsResponse>("/api/v1/knowledge/suggestions");
+  },
+  getKnowledgeJob(jobId: string) {
+    return fetchJson<KnowledgeJob>(`/api/v1/knowledge/jobs/${encodeURIComponent(jobId)}`);
+  },
+  reaggregateKnowledgeJob(jobId: string) {
+    return fetchJson<KnowledgeJob>(`/api/v1/knowledge/jobs/${encodeURIComponent(jobId)}/reaggregate`, { method: "POST" });
+  },
+  askKnowledge(payload: { query: string; context_limit?: number; history?: Array<{ role: "user" | "assistant"; content: string }>; references?: KnowledgeReference[] }) {
     return fetchJson<KnowledgeAskResponse>("/api/v1/knowledge/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -617,18 +662,23 @@ export const api = {
     });
   },
   async streamKnowledgeAsk(
-    payload: { query: string; context_limit?: number; history?: Array<{ role: "user" | "assistant"; content: string }> },
+    payload: { query: string; context_limit?: number; history?: Array<{ role: "user" | "assistant"; content: string }>; references?: KnowledgeReference[] },
     handlers: {
       onTool?(tool: KnowledgeToolTrace): void;
       onReasoningDelta?(delta: string): void;
       onTextDelta?(delta: string): void;
       onSources?(sources: KnowledgeAskResponse["sources"]): void;
       onDone?(result: KnowledgeAskResponse): void;
+      onJob?(job: KnowledgeJob): void;
+      onMessage?(message: { user_message_id?: string; assistant_message_id?: string }): void;
       onError?(message: string): void;
     },
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; conversationId?: string },
   ) {
-    const response = await fetch("/api/v1/knowledge/ask/stream", await withDesktopAuth({
+    const streamPath = options?.conversationId
+      ? `/api/v1/knowledge/conversations/${encodeURIComponent(options.conversationId)}/ask/stream`
+      : "/api/v1/knowledge/ask/stream";
+    const response = await fetch(streamPath, await withDesktopAuth({
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify(payload),
@@ -664,6 +714,9 @@ export const api = {
           data = parsed.data;
         }
         switch (parsed.event) {
+          case "message":
+            handlers.onMessage?.(data as { user_message_id?: string; assistant_message_id?: string });
+            break;
           case "tool":
             handlers.onTool?.(data as KnowledgeToolTrace);
             break;
@@ -678,6 +731,9 @@ export const api = {
             break;
           case "done":
             handlers.onDone?.(data as KnowledgeAskResponse);
+            break;
+          case "job":
+            handlers.onJob?.((data as { job?: KnowledgeJob }).job as KnowledgeJob);
             break;
           case "error":
             handlers.onError?.(String((data as { message?: string }).message || "流式问答失败"));

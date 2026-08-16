@@ -119,6 +119,12 @@ def extract_llm_message_content(body: object) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
 
+    output = body.get("output")
+    if isinstance(output, list):
+        output_text = extract_text_from_content_blocks(output)
+        if output_text:
+            return output_text
+
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""
@@ -142,6 +148,44 @@ def extract_llm_message_content(body: object) -> str:
     return ""
 
 
+def extract_llm_reasoning_content(body: object) -> str:
+    if not isinstance(body, dict):
+        return ""
+
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        first = choices[0]
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = first.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        message = first.get("message")
+        if isinstance(message, dict):
+            for key in ("reasoning_content", "reasoning", "thinking"):
+                value = message.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+
+
+def extract_llm_finish_reason(body: object) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    value = body.get("finish_reason")
+    if isinstance(value, str):
+        return value
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        value = choices[0].get("finish_reason")
+        return value if isinstance(value, str) else None
+    return None
+
+
 def extract_text_from_content_blocks(content: object) -> str:
     if isinstance(content, str):
         return content.strip()
@@ -154,6 +198,9 @@ def extract_text_from_content_blocks(content: object) -> str:
                 text_parts.append(item.strip())
             continue
         if not isinstance(item, dict):
+            continue
+        block_type = str(item.get("type") or "").strip().lower()
+        if block_type in {"thinking", "reasoning", "redacted_thinking"}:
             continue
         text = item.get("text")
         if isinstance(text, str) and text.strip():

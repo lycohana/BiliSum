@@ -10,6 +10,16 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from video_sum_service.context import settings_manager
+from video_sum_service.knowledge.conversation_service import (
+    get_conversation,
+    get_job,
+    get_messages,
+    get_suggestions,
+    list_conversations,
+    search_references,
+    stream_conversation,
+)
+from video_sum_service.knowledge.job_coordinator import KnowledgeJobCoordinator
 from video_sum_service.runtime_support import detect_environment
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import (
@@ -22,6 +32,13 @@ from video_sum_service.schemas import (
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
     KnowledgeStatsResponse,
+    KnowledgeConversationCreateRequest,
+    KnowledgeConversationMessagesResponse,
+    KnowledgeConversationResponse,
+    KnowledgeConversationUpdateRequest,
+    KnowledgeJobResponse,
+    KnowledgeReferencesResponse,
+    KnowledgeSuggestionsResponse,
     KnowledgeTagCreateRequest,
     TagListResponse,
     VideoTagListResponse,
@@ -118,6 +135,87 @@ def _require_knowledge_runtime() -> None:
         )
 
 
+def _get_job_coordinator(request: Request) -> KnowledgeJobCoordinator:
+    coordinator = getattr(request.app.state, "knowledge_job_coordinator", None)
+    if coordinator is None:
+        coordinator = KnowledgeJobCoordinator(request.app.state.task_repository, settings_manager.current)
+        coordinator.start()
+        request.app.state.knowledge_job_coordinator = coordinator
+    return coordinator
+
+
+@router.get("/conversations", response_model=list[KnowledgeConversationResponse])
+def get_knowledge_conversations(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> list[KnowledgeConversationResponse]:
+    return list_conversations(request.app.state.task_repository, limit)
+
+
+@router.post("/conversations", response_model=KnowledgeConversationResponse, status_code=201)
+def create_knowledge_conversation(body: KnowledgeConversationCreateRequest, request: Request) -> KnowledgeConversationResponse:
+    repository: SqliteTaskRepository = request.app.state.task_repository
+    payload = repository.create_knowledge_conversation(body.title)
+    return KnowledgeConversationResponse.model_validate(payload)
+
+
+@router.get("/conversations/{conversation_id}", response_model=KnowledgeConversationResponse)
+def get_knowledge_conversation(conversation_id: str, request: Request) -> KnowledgeConversationResponse:
+    return get_conversation(request.app.state.task_repository, conversation_id)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=KnowledgeConversationResponse)
+def update_knowledge_conversation(conversation_id: str, body: KnowledgeConversationUpdateRequest, request: Request) -> KnowledgeConversationResponse:
+    repository: SqliteTaskRepository = request.app.state.task_repository
+    updated = repository.update_knowledge_conversation_title(conversation_id, body.title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="会话不存在或标题不能为空。")
+    return KnowledgeConversationResponse.model_validate(updated)
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_knowledge_conversation(conversation_id: str, request: Request) -> dict[str, object]:
+    if not request.app.state.task_repository.delete_knowledge_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="会话不存在。")
+    return {"deleted": True, "conversation_id": conversation_id}
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=KnowledgeConversationMessagesResponse)
+def get_knowledge_messages(conversation_id: str, request: Request) -> KnowledgeConversationMessagesResponse:
+    return get_messages(request.app.state.task_repository, conversation_id)
+
+
+@router.get("/references", response_model=KnowledgeReferencesResponse)
+def get_knowledge_references(request: Request, q: str = Query(default=""), limit: int = Query(default=12, ge=1, le=50)) -> KnowledgeReferencesResponse:
+    return search_references(request.app.state.task_repository, q, limit)
+
+
+@router.get("/suggestions", response_model=KnowledgeSuggestionsResponse)
+def get_knowledge_suggestions(request: Request) -> KnowledgeSuggestionsResponse:
+    return get_suggestions(request.app.state.task_repository, settings_manager.current)
+
+
+@router.get("/jobs/{job_id}", response_model=KnowledgeJobResponse)
+def get_knowledge_job(job_id: str, request: Request) -> KnowledgeJobResponse:
+    return get_job(request.app.state.task_repository, job_id)
+
+
+@router.post("/jobs/{job_id}/reaggregate", response_model=KnowledgeJobResponse)
+def reaggregate_knowledge_job(job_id: str, request: Request) -> KnowledgeJobResponse:
+    repository: SqliteTaskRepository = request.app.state.task_repository
+    current = repository.get_knowledge_job(job_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    repository.update_knowledge_job(
+        job_id,
+        status="running",
+        error_message=None,
+        completed_at=None,
+        agent_round=1,
+        agent_state={"phase": "waiting_tasks", "review": None, "rounds": []},
+    )
+    repository.update_knowledge_message(str(current["assistant_message_id"]), content="正在重新聚合已完成的视频摘要……", status="waiting_tasks")
+    _get_job_coordinator(request).submit(job_id)
+    return get_job(repository, job_id)
+
+
 @router.get("/tags", response_model=TagListResponse | VideoTagListResponse)
 def get_tags(request: Request, video_id: str | None = None) -> TagListResponse | VideoTagListResponse:
     tag_service, _index_service, _rag_service = _get_services(request)
@@ -184,6 +282,77 @@ def ask_knowledge(body: KnowledgeAskRequest, request: Request) -> KnowledgeAskRe
         body.query,
         context_limit=body.context_limit,
         history=getattr(body, "history", []),
+        references=getattr(body, "references", []),
+    )
+
+
+@router.post("/conversations/{conversation_id}/ask/stream")
+async def ask_conversation_stream(conversation_id: str, body: KnowledgeAskRequest, request: Request) -> StreamingResponse:
+    _require_knowledge_enabled()
+    _tag_service, _index_service, rag_service = _get_services(request)
+    coordinator = _get_job_coordinator(request)
+
+    async def event_generator():
+        event_queue: Queue[object] = Queue()
+        cancel_event = Event()
+
+        def produce_events() -> None:
+            acquired = _ASK_STREAM_SEMAPHORE.acquire(blocking=False)
+            if not acquired:
+                event_queue.put(HTTPException(status_code=429, detail="知识库问答任务较多，请等待当前回答结束后再试。"))
+                event_queue.put(None)
+                return
+            try:
+                for event in stream_conversation(
+                    request.app.state,
+                    request.app.state.task_repository,
+                    rag_service,
+                    conversation_id,
+                    body.query,
+                    body.context_limit,
+                    body.references,
+                    cancel_event.is_set,
+                    coordinator.submit,
+                ):
+                    if cancel_event.is_set():
+                        return
+                    event_queue.put(event)
+            except Exception as exc:  # surfaced to the SSE client below
+                event_queue.put(exc)
+            finally:
+                _ASK_STREAM_SEMAPHORE.release()
+                event_queue.put(None)
+
+        worker = Thread(target=produce_events, daemon=True, name="knowledge-conversation-stream")
+        worker.start()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    cancel_event.set()
+                    return
+                item = await asyncio.to_thread(_get_queue_item, event_queue, 1.5)
+                if item is _QUEUE_TIMEOUT:
+                    yield ": keep-alive\n\n"
+                    continue
+                if item is None:
+                    return
+                if isinstance(item, HTTPException):
+                    raise item
+                if isinstance(item, Exception):
+                    raise item
+                event_name, payload = item
+                yield f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except HTTPException as exc:
+            yield f"event: error\ndata: {json.dumps({'message': str(exc.detail), 'status_code': exc.status_code}, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            yield f"event: error\ndata: {json.dumps({'message': f'知识库问答失败：{exc}'}, ensure_ascii=False)}\n\n"
+        finally:
+            cancel_event.set()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 

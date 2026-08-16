@@ -2,14 +2,53 @@
   display: grid;
   gap: 14px;
   min-height: calc(100vh - var(--title-bar-height) - 48px);
+  padding-top: 72px;
 }
 
 .knowledge-topbar {
+  position: fixed;
+  top: var(--title-bar-height);
+  left: var(--sidebar-width);
+  right: 0;
+  z-index: 90;
   display: flex;
   justify-content: space-between;
   gap: 14px;
   align-items: center;
   flex-wrap: wrap;
+  margin: 0;
+  padding: 16px max(32px, calc((100vw - var(--sidebar-width) - 1400px) / 2 + 32px));
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-base) 84%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+  backdrop-filter: blur(20px) saturate(135%);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg-base) 38%, transparent);
+  isolation: isolate;
+}
+
+.knowledge-topbar::before {
+  content: none;
+}
+
+[data-theme="dark"] .knowledge-topbar {
+  background: color-mix(in srgb, var(--bg-base) 76%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border-default) 82%, transparent);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.app-shell.sidebar-collapsed .knowledge-topbar {
+  left: var(--sidebar-collapsed-width);
+  padding-inline: max(32px, calc((100vw - var(--sidebar-collapsed-width) - 1400px) / 2 + 32px));
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .knowledge-topbar,
+  [data-theme="dark"] .knowledge-topbar {
+    background: var(--bg-base);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
 }
 
 .knowledge-view-tabs {
@@ -285,6 +324,7 @@
 }
 
 .knowledge-chat-composer-surface {
+  position: relative;
   width: 100%;
   margin: 0;
   border-radius: 28px;
@@ -1196,6 +1236,344 @@
   align-items: stretch;
 }
 
+.knowledge-chat-suggestion-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.knowledge-chat-suggestion-heading button {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.knowledge-chat-suggestion-heading button:hover,
+.knowledge-chat-suggestion-heading button:focus-visible {
+  background: var(--bg-soft);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.knowledge-chat-suggestion-heading svg {
+  width: 16px;
+  height: 16px;
+}
+
+.knowledge-chat-suggestion-heading button.is-refreshing {
+  background: var(--bg-soft);
+  color: var(--brand-600);
+  cursor: progress;
+}
+
+.knowledge-chat-suggestion-heading button.is-refreshing svg {
+  animation: knowledge-suggestion-refresh-spin 720ms linear infinite;
+  transform-origin: center;
+}
+
+@keyframes knowledge-suggestion-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-chat-suggestion-heading button {
+    transition: none;
+  }
+
+  .knowledge-chat-suggestion-heading button.is-refreshing svg {
+    animation: none;
+  }
+}
+
+.knowledge-chat-message-reference-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 2px;
+}
+
+.knowledge-chat-message-reference-row span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-500) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.knowledge-chat-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: calc(100vh - var(--title-bar-height) - 118px);
+  gap: 18px;
+}
+
+.knowledge-conversation-sidebar {
+  min-width: 0;
+  padding: 12px 0 12px 2px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.knowledge-conversation-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.knowledge-conversation-sidebar-head {
+  padding: 0 10px 10px;
+  font-weight: 750;
+}
+
+.knowledge-conversation-sidebar-head button {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.knowledge-conversation-sidebar-head button {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 1.2rem;
+}
+
+.knowledge-conversation-sidebar-head button:hover {
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+
+.knowledge-conversation-list {
+  display: grid;
+  gap: 3px;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
+
+.knowledge-conversation-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.knowledge-conversation-item:hover,
+.knowledge-conversation-item.is-active {
+  border-color: var(--border-subtle);
+  background: var(--bg-soft);
+}
+
+.knowledge-conversation-item strong,
+.knowledge-conversation-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-conversation-item strong {
+  font-size: 0.84rem;
+  font-weight: 720;
+}
+
+.knowledge-conversation-item span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.knowledge-chat-message-actions {
+  display: flex;
+  gap: 2px;
+  min-height: 26px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.knowledge-chat-message-row:hover .knowledge-chat-message-actions,
+.knowledge-chat-message-actions:focus-within {
+  opacity: 1;
+}
+
+.knowledge-chat-message-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.knowledge-chat-message-actions button:hover,
+.knowledge-chat-message-actions button:focus-visible {
+  background: var(--bg-soft);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.knowledge-chat-message-actions svg {
+  width: 16px;
+  height: 16px;
+}
+
+.knowledge-chat-reference-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 8px 0;
+}
+
+.knowledge-chat-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--brand-500) 25%, var(--border-subtle));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-500) 7%, var(--bg-card));
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.knowledge-reference-popover {
+  position: absolute;
+  right: 16px;
+  bottom: 108px;
+  z-index: 20;
+  width: min(360px, calc(100% - 32px));
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+}
+
+.knowledge-reference-search {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+
+.knowledge-reference-popover button:not(.knowledge-reference-search) {
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.knowledge-reference-popover button:hover {
+  background: var(--bg-soft);
+}
+
+.knowledge-reference-popover button span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.knowledge-chat-job-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-soft);
+}
+
+.knowledge-chat-job-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.knowledge-chat-job-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.knowledge-chat-job-head button {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.knowledge-chat-job-head button:hover,
+.knowledge-chat-job-head button:focus-visible {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.knowledge-chat-job-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text-tertiary) 18%, transparent);
+}
+
+.knowledge-chat-job-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-500);
+  transition: width 180ms ease;
+}
+
+.knowledge-chat-job-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.knowledge-chat-job-items .is-failed { color: var(--danger); }
+.knowledge-chat-job-items .is-completed { color: var(--success); }
+.knowledge-chat-job-items a { text-decoration: none; }
+
 .knowledge-sidebar-card,
 .knowledge-results-card,
 .knowledge-network-card {
@@ -1574,6 +1952,37 @@
 }
 
 @media (max-width: 768px) {
+  .knowledge-chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-conversation-sidebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+
+  .knowledge-conversation-sidebar-head {
+    flex: 0 0 auto;
+    padding: 0 4px;
+  }
+
+  .knowledge-conversation-list {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+  }
+
+  .knowledge-conversation-item {
+    width: 150px;
+    flex: 0 0 auto;
+  }
+
   .knowledge-chat-scroll {
     padding: 18px 16px 230px;
     scroll-padding-bottom: 230px;
@@ -1635,6 +2044,10 @@
 }
 
 @media (max-width: 640px) {
+  .knowledge-chat-layout {
+    gap: 8px;
+  }
+
   .knowledge-chat-bubble.is-user {
     width: 100%;
   }
@@ -1646,5 +2059,378 @@
   .knowledge-chat-action-row {
     width: 100%;
     justify-content: flex-end;
+  }
+}
+
+/* Knowledge chat v2: a single focused canvas with history on demand. */
+.knowledge-topbar-leading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.knowledge-history-trigger {
+  min-width: 0;
+  max-width: 240px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.knowledge-history-trigger:hover,
+.knowledge-history-trigger:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+
+.knowledge-history-trigger svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.knowledge-history-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.knowledge-status-banner {
+  width: min(920px, 100%);
+  margin-inline: auto;
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.knowledge-status-banner.danger {
+  border-color: var(--danger-border);
+  background: var(--bg-danger);
+  color: var(--danger);
+}
+
+.knowledge-status-banner.progress {
+  border-color: var(--accent-border);
+  background: var(--bg-accent);
+  color: var(--brand-700);
+}
+
+.knowledge-status-banner.success {
+  border-color: var(--success-border);
+  background: var(--bg-success);
+  color: var(--success);
+}
+
+.knowledge-chat-layout {
+  display: block;
+  position: relative;
+  min-height: calc(100vh - var(--title-bar-height) - 118px);
+}
+
+.knowledge-chat-shell {
+  position: relative;
+}
+
+.knowledge-chat-scroll,
+.knowledge-chat-shell.has-thread .knowledge-chat-scroll {
+  padding: 24px 24px 168px;
+  scroll-padding-bottom: 168px;
+}
+
+.knowledge-chat-shell.is-empty .knowledge-chat-scroll {
+  align-items: center;
+}
+
+.knowledge-chat-welcome {
+  width: min(820px, 100%);
+  justify-items: start;
+  text-align: left;
+  padding: clamp(32px, 7vh, 72px) 20px 80px;
+}
+
+.knowledge-chat-welcome h2 {
+  font-size: clamp(1.8rem, 2.2vw, 2.5rem);
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+}
+
+.knowledge-chat-suggestion-grid {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.knowledge-chat-suggestion-card {
+  min-height: 54px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--bg-card) 72%, var(--bg-soft) 28%);
+}
+
+.knowledge-chat-composer-dock,
+.app-shell.sidebar-collapsed .knowledge-chat-composer-dock {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  bottom: 18px;
+  transform: translateX(-50%);
+  width: min(820px, calc(100% - 40px));
+}
+
+.knowledge-chat-scroll-bottom,
+.app-shell.sidebar-collapsed .knowledge-chat-scroll-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 148px;
+  transform: translateX(-50%);
+}
+
+.knowledge-chat-composer-surface {
+  border-radius: var(--radius-xl);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.knowledge-chat-shell.is-empty .knowledge-chat-textarea {
+  min-height: 44px;
+}
+
+.knowledge-chat-new-session {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.knowledge-chat-new-session svg {
+  width: 18px;
+  height: 18px;
+}
+
+.knowledge-history-backdrop {
+  position: fixed;
+  inset: var(--title-bar-height) 0 0 var(--sidebar-width);
+  z-index: 41;
+  border: 0;
+  background: color-mix(in srgb, var(--bg-base) 18%, transparent);
+  cursor: default;
+}
+
+.app-shell.sidebar-collapsed .knowledge-history-backdrop {
+  left: var(--sidebar-collapsed-width);
+}
+
+.knowledge-conversation-sidebar {
+  position: fixed;
+  left: calc(var(--sidebar-width) + 24px);
+  top: calc(var(--title-bar-height) + 72px);
+  bottom: auto;
+  z-index: 42;
+  width: min(320px, calc(100vw - var(--sidebar-width) - 48px));
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: min(560px, calc(100vh - var(--title-bar-height) - 104px));
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  animation: knowledge-drawer-in 180ms ease-out;
+}
+
+.app-shell.sidebar-collapsed .knowledge-conversation-sidebar {
+  left: calc(var(--sidebar-collapsed-width) + 24px);
+}
+
+.knowledge-conversation-sidebar-head {
+  flex: 0 0 auto;
+  padding: 4px 4px 12px;
+}
+
+.knowledge-conversation-sidebar-head > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.knowledge-conversation-sidebar-head > div:first-child span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.knowledge-conversation-head-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.knowledge-conversation-list {
+  display: grid;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 4px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.knowledge-conversation-item {
+  min-height: 58px;
+  padding: 10px 12px;
+}
+
+.knowledge-conversation-context-menu {
+  position: fixed;
+  z-index: 44;
+  display: grid;
+  min-width: 132px;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.knowledge-conversation-context-menu button {
+  border: 0;
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.knowledge-conversation-context-menu button:hover,
+.knowledge-conversation-context-menu button:focus-visible {
+  outline: none;
+  background: var(--bg-soft);
+  color: var(--text-primary);
+}
+
+.knowledge-conversation-context-menu button.is-danger:hover,
+.knowledge-conversation-context-menu button.is-danger:focus-visible {
+  background: var(--bg-danger);
+  color: var(--danger);
+}
+
+@keyframes knowledge-drawer-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 768px) {
+  .knowledge-topbar,
+  .app-shell.sidebar-collapsed .knowledge-topbar {
+    left: 0;
+    padding-inline: 16px;
+  }
+
+  .knowledge-topbar-leading {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+    justify-content: space-between;
+  }
+
+  .knowledge-topbar-actions > .helper-chip {
+    display: none;
+  }
+
+  .knowledge-conversation-sidebar,
+  .app-shell.sidebar-collapsed .knowledge-conversation-sidebar {
+    left: 16px;
+    right: 16px;
+    top: calc(var(--title-bar-height) + 64px);
+    bottom: auto;
+    width: auto;
+    max-height: min(560px, calc(100vh - var(--title-bar-height) - 80px));
+    display: grid;
+    padding: 12px;
+    border: 1px solid var(--border-default);
+    overflow: hidden;
+  }
+
+  .knowledge-conversation-list {
+    max-height: min(400px, calc(100vh - var(--title-bar-height) - 210px));
+  }
+
+  .knowledge-history-backdrop,
+  .app-shell.sidebar-collapsed .knowledge-history-backdrop {
+    left: 0;
+  }
+
+  .knowledge-chat-scroll,
+  .knowledge-chat-shell.has-thread .knowledge-chat-scroll {
+    padding: 18px 16px 156px;
+  }
+
+  .knowledge-chat-welcome {
+    padding: 24px 4px 64px;
+  }
+
+  .knowledge-chat-welcome h2 {
+    font-size: 1.9rem;
+  }
+
+  .knowledge-chat-composer-dock,
+  .app-shell.sidebar-collapsed .knowledge-chat-composer-dock {
+    left: 50%;
+    right: auto;
+    bottom: 12px;
+    width: calc(100% - 24px);
+  }
+}
+
+@media (max-width: 1200px) {
+  .knowledge-topbar-actions > .helper-chip {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .knowledge-page-refined {
+    padding-top: 126px;
+  }
+
+  .knowledge-topbar {
+    flex-wrap: wrap;
+  }
+
+  .knowledge-topbar-leading {
+    width: 100%;
+  }
+
+  .knowledge-topbar-actions {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .knowledge-chat-suggestion-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-chat-composer-hint {
+    display: none;
+  }
+
+  .knowledge-chat-action-row {
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-conversation-sidebar {
+    animation: none;
   }
 }

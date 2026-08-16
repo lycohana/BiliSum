@@ -659,6 +659,69 @@ export type KnowledgeChatHistoryItem = {
   content: string;
 };
 
+export type KnowledgeReference = {
+  kind: "video" | "folder";
+  id: string;
+  label: string;
+};
+
+export type KnowledgeConversation = {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at?: string | null;
+  message_count: number;
+  preview: string;
+};
+
+export type KnowledgeMessage = {
+  message_id: string;
+  conversation_id: string;
+  sequence: number;
+  role: "user" | "assistant" | "system";
+  content: string;
+  reasoning: string;
+  status: "streaming" | "completed" | "error" | "interrupted" | "waiting_tasks";
+  sources: KnowledgeSourceRef[];
+  tools: KnowledgeToolTrace[];
+  references: KnowledgeReference[];
+  job_id?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeJobItem = {
+  task_id: string;
+  video_id?: string | null;
+  title: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  message: string;
+  error_message?: string | null;
+};
+
+export type KnowledgeJob = {
+  job_id: string;
+  conversation_id: string;
+  assistant_message_id: string;
+  kind: string;
+  status: string;
+  query: string;
+  progress: number;
+  error_message?: string | null;
+  items: KnowledgeJobItem[];
+  agent_round: number;
+  agent_phase: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+};
+
+export type KnowledgeSuggestion = { text: string; reason: string };
+export type KnowledgeSuggestionsResponse = { suggestions: KnowledgeSuggestion[]; generated_at: string; based_on: string[] };
+export type KnowledgeReferenceItem = KnowledgeReference & { subtitle: string; cover_url: string; updated_at?: string | null };
+
 export type KnowledgeToolTrace = {
   id: string;
   label: string;

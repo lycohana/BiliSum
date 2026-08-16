@@ -491,6 +491,47 @@ def test_knowledge_ask_stream_falls_back_when_stream_has_no_text(monkeypatch) ->
     assert done_payload["answer"] == "流式无正文后切换为普通回答。"
 
 
+def test_knowledge_ask_stream_continues_after_length_finish(monkeypatch) -> None:
+    repository = create_repository()
+    video = seed_video_with_real_task(repository, "ask-stream-length")
+    settings = ServiceSettings(
+        knowledge_llm_mode="custom",
+        knowledge_llm_enabled=True,
+        knowledge_llm_base_url="https://api.example.com/v1",
+        knowledge_llm_model="remote-model",
+    )
+    tag_service = TagService(repository, settings)
+    index_service = FakeKnowledgeIndexService(repository, settings)
+    rag_service = RagService(repository, index_service, tag_service, settings)
+    index_service.index_video(video.video_id)
+    continuation_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "video_sum_service.knowledge.rag_service.stream_knowledge_llm",
+        lambda *args, **kwargs: iter([
+            KnowledgeLlmStreamEvent(kind="content", delta="第一部分，最后讲到《高数"),
+            KnowledgeLlmStreamEvent(kind="finish", delta="length"),
+        ]),
+    )
+
+    def continue_chat(*args, **kwargs):
+        del args
+        continuation_calls.append(kwargs)
+        return "《高数》的复习方法。回答完成。", {"choices": [{"finish_reason": "stop"}]}
+
+    monkeypatch.setattr("video_sum_service.knowledge.rag_service.chat_knowledge_llm", continue_chat)
+
+    events = list(rag_service.ask_stream("整理最近学习主题", context_limit=3))
+
+    assert continuation_calls[0]["max_tokens"] == 3000
+    assert any(
+        name == "tool" and payload.get("meta", {}).get("fallback") == "continue_after_length"
+        for name, payload in events
+    )
+    done_payload = next(payload for name, payload in events if name == "done")
+    assert done_payload["answer"] == "第一部分，最后讲到《高数》的复习方法。回答完成。"
+
+
 def test_knowledge_ask_stream_does_not_fallback_on_llm_timeout(monkeypatch) -> None:
     repository = create_repository()
     video = seed_video_with_real_task(repository, "ask-stream-timeout")
@@ -652,6 +693,46 @@ def test_chat_knowledge_llm_normalizes_mimo_model(monkeypatch) -> None:
 
     assert content == "答案"
     assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
+
+
+def test_chat_knowledge_llm_disables_thinking_for_official_deepseek_v4(monkeypatch) -> None:
+    settings = ServiceSettings(
+        knowledge_llm_mode="custom",
+        knowledge_llm_enabled=True,
+        knowledge_llm_base_url="https://api.deepseek.com",
+        knowledge_llm_api_key="test-key",
+        knowledge_llm_model="deepseek-v4-pro",
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"choices":[{"message":{"content":"完整答案"},"finish_reason":"stop"}]}'
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "完整答案"}, "finish_reason": "stop"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr("video_sum_service.knowledge.local_llm.httpx.Client", FakeClient)
+
+    content, _body = chat_knowledge_llm(settings, system_prompt="system", user_prompt="user", max_tokens=3000)
+
+    assert content == "完整答案"
+    assert calls[0]["json"]["thinking"] == {"type": "disabled"}
+    assert calls[0]["json"]["max_tokens"] == 3000
 
 
 def test_knowledge_llm_availability_requires_api_key() -> None:

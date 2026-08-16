@@ -3,7 +3,7 @@ import type { SVGProps } from "react";
 import { Link } from "react-router-dom";
 
 import { MarkdownContent } from "../../components/MarkdownContent";
-import type { KnowledgeSourceRef, KnowledgeToolTrace } from "../../types";
+import type { KnowledgeJob, KnowledgeReference, KnowledgeReferenceItem, KnowledgeSourceRef, KnowledgeSuggestion, KnowledgeToolTrace } from "../../types";
 
 export type KnowledgeChatMessage = {
   id: string;
@@ -12,7 +12,9 @@ export type KnowledgeChatMessage = {
   reasoning?: string;
   sources?: KnowledgeSourceRef[];
   tools?: KnowledgeToolTrace[];
-  status?: "streaming" | "completed" | "error";
+  status?: "streaming" | "completed" | "error" | "interrupted" | "waiting_tasks";
+  references?: KnowledgeReference[];
+  job?: KnowledgeJob;
 };
 
 type AskPanelProps = {
@@ -27,6 +29,18 @@ type AskPanelProps = {
   hasContext: boolean;
   messages: KnowledgeChatMessage[];
   recentQueries: string[];
+  suggestions?: KnowledgeSuggestion[];
+  references: KnowledgeReference[];
+  referenceOptions: KnowledgeReferenceItem[];
+  referenceQuery: string;
+  referenceOpen: boolean;
+  onReferenceQuery(value: string): void;
+  onReferenceSelect(item: KnowledgeReferenceItem): void;
+  onReferenceRemove(id: string): void;
+  onRetry(message: KnowledgeChatMessage): void;
+  suggestionsRefreshing?: boolean;
+  onRefreshSuggestions?(): void;
+  onReaggregate?(jobId: string): void;
 };
 
 const DEFAULT_SUGGESTIONS = [
@@ -82,6 +96,16 @@ function SummaryToolIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M8 12.75h3" />
     </svg>
   );
+}
+
+function MessageActionIcon({ kind }: { kind: "copy" | "retry" | "save" }) {
+  if (kind === "retry") {
+    return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 8a6 6 0 1 1 1.6 6.7" /><path d="M4 4.5V8h3.5" /></svg>;
+  }
+  if (kind === "save") {
+    return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 3.5h7l3 3v10H5z" /><path d="M8 3.5v4h5" /><path d="M8 12.5h4" /></svg>;
+  }
+  return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="8" height="9" rx="1.5" /><path d="M5 12.5H4.5A1.5 1.5 0 0 1 3 11V5.5A1.5 1.5 0 0 1 4.5 4h5.5A1.5 1.5 0 0 1 11.5 5v1.5" /></svg>;
 }
 
 function formatSourceMeta(source: KnowledgeSourceRef) {
@@ -196,6 +220,18 @@ export function AskPanel({
   hasContext,
   messages,
   recentQueries,
+  suggestions = [],
+  references,
+  referenceOptions,
+  referenceQuery,
+  referenceOpen,
+  onReferenceQuery,
+  onReferenceSelect,
+  onReferenceRemove,
+  onRetry,
+  suggestionsRefreshing = false,
+  onRefreshSuggestions,
+  onReaggregate,
 }: AskPanelProps) {
   const threadRef = useRef<HTMLDivElement | null>(null);
   const threadContentRef = useRef<HTMLDivElement | null>(null);
@@ -206,7 +242,7 @@ export function AskPanel({
 
   const suggestionItems = useMemo(() => {
     const seen = new Set<string>();
-    const merged = [...recentQueries, ...DEFAULT_SUGGESTIONS];
+    const merged = [...suggestions.map((item) => item.text), ...recentQueries, ...DEFAULT_SUGGESTIONS];
     return merged.filter((item) => {
       const cleaned = item.trim();
       if (!cleaned || seen.has(cleaned)) {
@@ -215,7 +251,7 @@ export function AskPanel({
       seen.add(cleaned);
       return true;
     }).slice(0, 6);
-  }, [recentQueries]);
+  }, [recentQueries, suggestions]);
 
   const hasMessages = messages.length > 0;
   const lastMessage = hasMessages ? messages[messages.length - 1] : null;
@@ -311,9 +347,25 @@ export function AskPanel({
       <div ref={threadRef} className="knowledge-chat-scroll" onScroll={updateScrollState}>
         {!hasMessages ? (
           <div className="knowledge-chat-welcome">
-            <span className="library-kicker">Knowledge Chat</span>
-            <h2>直接问你的知识库</h2>
-            <p>搜索、整理和追问你的视频知识库。</p>
+            <span className="library-kicker">知识库助手</span>
+            <h2>今天想从哪里继续？</h2>
+            <p>问一段视频、梳理最近所学，或直接粘贴链接创建总结任务。</p>
+            <div className="knowledge-chat-suggestion-heading">
+              <span>基于你的最近内容</span>
+              {onRefreshSuggestions ? (
+                <button
+                  type="button"
+                  className={suggestionsRefreshing ? "is-refreshing" : undefined}
+                  aria-label={suggestionsRefreshing ? "正在刷新推荐问题" : "刷新推荐问题"}
+                  aria-busy={suggestionsRefreshing}
+                  title={suggestionsRefreshing ? "正在刷新" : "刷新推荐问题"}
+                  disabled={suggestionsRefreshing}
+                  onClick={onRefreshSuggestions}
+                >
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 1 4" /><path d="M16 4v4h-4" /></svg>
+                </button>
+              ) : null}
+            </div>
             <div className="knowledge-chat-suggestion-grid">
               {suggestionItems.map((item) => (
                 <button key={item} className="knowledge-chat-suggestion-card" type="button" onClick={() => onPickSuggestion(item)}>
@@ -349,10 +401,32 @@ export function AskPanel({
                           </details>
                         ) : null}
                         <MarkdownContent className="knowledge-chat-markdown" content={message.content || (message.status === "streaming" ? "正在整理回答..." : "")} />
+                        {message.job ? (
+                          <div className="knowledge-chat-job-card" aria-live="polite">
+                            <div className="knowledge-chat-job-head"><strong>视频总结任务</strong><span>{message.job.progress}% · Agent 第 {message.job.agent_round} 轮：{message.job.agent_phase === "agent_review" ? "审阅中" : message.job.agent_phase === "agent_writing" ? "写作中" : message.job.agent_phase === "completed" ? "已完成" : "等待视频任务"} {message.job.status === "completed" && onReaggregate ? <button type="button" aria-label="重新聚合" title="重新聚合" onClick={() => onReaggregate(message.job?.job_id || "")}><MessageActionIcon kind="retry" /></button> : null}</span></div>
+                            <div className="knowledge-chat-job-progress"><i style={{ width: `${message.job.progress}%` }} /></div>
+                            <div className="knowledge-chat-job-items">
+                              {message.job.items.map((item) => (
+                                item.video_id ? (
+                                  <Link key={item.task_id} className={`is-${item.status}`} to={`/videos/${item.video_id}`} title={item.error_message || item.message}>{item.status === "completed" ? "✓" : item.status === "failed" ? "!" : "·"} {item.title}</Link>
+                                ) : (
+                                  <span key={item.task_id} className={`is-${item.status}`} title={item.error_message || item.message}>{item.status === "completed" ? "✓" : item.status === "failed" ? "!" : "·"} {item.title}</span>
+                                )
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     </>
                   ) : (
-                    <p className="knowledge-chat-user-text">{message.content}</p>
+                    <>
+                      {message.references?.length ? (
+                        <div className="knowledge-chat-message-reference-row">
+                          {message.references.map((reference) => <span key={`${reference.kind}-${reference.id}`}>@{reference.label}</span>)}
+                        </div>
+                      ) : null}
+                      <p className="knowledge-chat-user-text">{message.content}</p>
+                    </>
                   )}
                   {message.role === "assistant" && message.sources?.length ? (
                     <details className="knowledge-chat-source-drawer">
@@ -370,6 +444,21 @@ export function AskPanel({
                         ))}
                       </div>
                     </details>
+                  ) : null}
+                  {message.role === "assistant" && message.status !== "streaming" ? (
+                    <div className="knowledge-chat-message-actions">
+                      <button type="button" aria-label="复制 Markdown" title="复制 Markdown" onClick={() => void navigator.clipboard?.writeText(message.content)}><MessageActionIcon kind="copy" /></button>
+                      <button type="button" aria-label="重新回答" title="重新回答" onClick={() => onRetry(message)}><MessageActionIcon kind="retry" /></button>
+                      <button type="button" aria-label="保存 Markdown" title="保存 Markdown" onClick={() => {
+                        const blob = new Blob([message.content], { type: "text/markdown;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const anchor = document.createElement("a");
+                        anchor.href = url;
+                        anchor.download = "bilisum-answer.md";
+                        anchor.click();
+                        URL.revokeObjectURL(url);
+                      }}><MessageActionIcon kind="save" /></button>
+                    </div>
                   ) : null}
                 </div>
               </article>
@@ -393,11 +482,20 @@ export function AskPanel({
 
       <div className="knowledge-chat-composer-dock">
         <div className="knowledge-chat-composer-surface">
+          {references.length ? (
+            <div className="knowledge-chat-reference-chips" aria-label="已引用内容">
+              {references.map((reference) => (
+                <button key={`${reference.kind}-${reference.id}`} type="button" className="knowledge-chat-reference-chip" onClick={() => onReferenceRemove(reference.id)} title="移除引用">
+                  @{reference.label}<span aria-hidden="true">×</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <textarea
             className="textarea-field knowledge-chat-textarea"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="有问题，尽管问"
+            placeholder="问视频内容、学习主题，或粘贴链接开始总结"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -405,6 +503,16 @@ export function AskPanel({
               }
             }}
           />
+          {referenceOpen ? (
+            <div className="knowledge-reference-popover" role="listbox" aria-label="引用视频或收藏夹">
+              <input className="knowledge-reference-search" value={referenceQuery} onChange={(event) => onReferenceQuery(event.target.value)} placeholder="搜索视频或收藏夹" autoFocus />
+              {referenceOptions.map((item) => (
+                <button key={`${item.kind}-${item.id}`} type="button" role="option" onClick={() => onReferenceSelect(item)}>
+                  <strong>@{item.label}</strong><span>{item.kind === "folder" ? "收藏夹" : "视频"} · {item.subtitle}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="knowledge-chat-composer-footer">
             <div className="knowledge-chat-composer-hint">
               Enter 发送，Shift + Enter 换行
@@ -414,10 +522,11 @@ export function AskPanel({
                 className="secondary-button knowledge-chat-new-session"
                 type="button"
                 onClick={onNewConversation}
-                disabled={loading || !hasContext}
-                title="清空当前会话上下文"
+                disabled={!hasContext}
+                aria-label="新建会话"
+                title="新建会话"
               >
-                新会话
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 3.5h7l3 3v10H5z" /><path d="M12 3.5v3h3M8 11h4M10 9v4" /></svg>
               </button>
               {loading ? (
                 <button className="secondary-button" type="button" onClick={onStop}>

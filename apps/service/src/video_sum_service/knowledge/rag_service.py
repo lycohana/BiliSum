@@ -8,10 +8,16 @@ from fastapi import HTTPException
 
 from video_sum_infra.config import ServiceSettings
 from video_sum_service.knowledge.index_service import KnowledgeIndexService, format_anchor_seconds
-from video_sum_service.knowledge.local_llm import chat_knowledge_llm, stream_knowledge_llm
+from video_sum_service.knowledge.local_llm import (
+    KNOWLEDGE_LLM_MAX_REASONING_PREVIEW_CHARS,
+    chat_knowledge_llm,
+    knowledge_llm_available,
+    merge_llm_continuation,
+    stream_knowledge_llm,
+)
 from video_sum_service.knowledge.tag_service import TagService
 from video_sum_service.repository import SqliteTaskRepository
-from video_sum_service.schemas import KnowledgeAskResponse, KnowledgeChatHistoryItem, KnowledgeSourceRef
+from video_sum_service.schemas import KnowledgeAskResponse, KnowledgeChatHistoryItem, KnowledgeReference, KnowledgeSourceRef
 
 
 KNOWLEDGE_QA_SYSTEM_PROMPT = (
@@ -30,6 +36,17 @@ KNOWLEDGE_QA_SYSTEM_PROMPT = (
 )
 
 EMPTY_KNOWLEDGE_ANSWER = "这次没有检索到足够相关的知识片段。可以换一个关键词，或先到工作台用标签缩小范围。"
+KNOWLEDGE_QA_MAX_TOKENS = 3000
+SYSTEM_QUESTION_MARKERS = ("最近在学", "学什么", "学习主题", "最近总结", "总结过哪些视频", "多少个", "数量", "收藏", "收藏夹", "任务历史", "任务情况", "设置", "配置", "模型")
+TASK_MARKERS = ("总结", "汇总", "整理成文档", "整理为文档", "做成文档", "生成文档")
+RECENT_SUMMARY_LIST_MARKERS = (
+    "最近总结了什么视频",
+    "最近总结过什么视频",
+    "最近总结了哪些视频",
+    "最近总结过哪些视频",
+    "最近总结的视频",
+    "最近的视频总结",
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +56,9 @@ class KnowledgeAgentPlan:
     context_limit: int
     history: list[KnowledgeChatHistoryItem]
     steps: list[str]
+    intent: str = "content"
+    references: list[KnowledgeReference] = field(default_factory=list)
+    video_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -118,6 +138,21 @@ def _build_knowledge_user_prompt(
     )
 
 
+def _detect_intent(query: str, references: list[KnowledgeReference]) -> str:
+    lowered = query.lower()
+    has_url = "http://" in lowered or "https://" in lowered
+    if (has_url or references) and any(marker in query for marker in TASK_MARKERS):
+        return "task"
+    if any(marker in query for marker in SYSTEM_QUESTION_MARKERS):
+        return "system"
+    return "content"
+
+
+def _is_recent_summary_list_question(query: str) -> bool:
+    compact_query = "".join(str(query or "").split())
+    return any(marker in compact_query for marker in RECENT_SUMMARY_LIST_MARKERS)
+
+
 class KnowledgeAgent:
     def __init__(
         self,
@@ -132,6 +167,8 @@ class KnowledgeAgent:
             "conversation_context": self._prepare_context,
             "semantic_search": self._run_semantic_search,
             "context_builder": self._build_answer_context,
+            "system_context": self._run_system_context,
+            "task_router": self._run_task_router,
         }
 
     def make_plan(
@@ -139,19 +176,39 @@ class KnowledgeAgent:
         query: str,
         context_limit: int = 5,
         history: list[KnowledgeChatHistoryItem] | None = None,
+        references: list[KnowledgeReference] | None = None,
     ) -> KnowledgeAgentPlan:
         cleaned_query = str(query or "").strip()
         if not cleaned_query:
             raise HTTPException(status_code=400, detail="问题不能为空。")
 
         normalized_history = _normalize_history(history)
-        steps = ["conversation_context", "semantic_search", "context_builder", "knowledge_llm"]
+        normalized_references = references or []
+        intent = _detect_intent(cleaned_query, normalized_references)
+        video_ids: set[str] = set()
+        for reference in normalized_references:
+            if reference.kind == "video":
+                if self._repository.get_video_asset(reference.id) is not None:
+                    video_ids.add(reference.id)
+            elif reference.kind == "folder":
+                video_ids.update(self._repository.list_video_ids_in_folder(reference.id))
+        steps = ["conversation_context"]
+        if intent == "content":
+            steps.extend(["semantic_search", "context_builder"])
+        elif intent == "system":
+            steps.append("system_context")
+        else:
+            steps.append("task_router")
+        steps.append("knowledge_llm")
         return KnowledgeAgentPlan(
             query=cleaned_query,
             search_query=_build_contextual_search_query(cleaned_query, normalized_history),
             context_limit=max(1, context_limit),
             history=normalized_history,
             steps=steps,
+            intent=intent,
+            references=normalized_references,
+            video_ids=video_ids,
         )
 
     def execute(
@@ -159,8 +216,9 @@ class KnowledgeAgent:
         query: str,
         context_limit: int = 5,
         history: list[KnowledgeChatHistoryItem] | None = None,
+        references: list[KnowledgeReference] | None = None,
     ) -> KnowledgeAgentRun:
-        run = KnowledgeAgentRun(plan=self.make_plan(query, context_limit, history))
+        run = KnowledgeAgentRun(plan=self.make_plan(query, context_limit, history, references))
         for step in run.plan.steps:
             if step == "knowledge_llm":
                 run.answer = self._answer(run)
@@ -173,9 +231,10 @@ class KnowledgeAgent:
         query: str,
         context_limit: int = 5,
         history: list[KnowledgeChatHistoryItem] | None = None,
+        references: list[KnowledgeReference] | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> Iterator[tuple[str, dict[str, object]]]:
-        run = KnowledgeAgentRun(plan=self.make_plan(query, context_limit, history))
+        run = KnowledgeAgentRun(plan=self.make_plan(query, context_limit, history, references))
         should_stop = should_cancel or (lambda: False)
         yield _tool_event(
             "agent_plan",
@@ -208,8 +267,105 @@ class KnowledgeAgent:
     def _prepare_context(self, run: KnowledgeAgentRun) -> None:
         return None
 
+    def _get_library_stats(self) -> dict[str, int]:
+        videos = self._repository.list_video_assets()
+        return {
+            "video_count": len(videos),
+            "completed_summary_count": sum(1 for video in videos if video.latest_result is not None),
+            "favorite_count": sum(1 for video in videos if video.is_favorite),
+            "folder_count": len(self._repository.list_video_folders()),
+        }
+
+    def _list_recent_summaries(self) -> list[str]:
+        videos = self._recent_summary_videos()
+        return [
+            f"- {video.title}（总结时间：{video.last_summary_at.isoformat()}）：{(video.latest_result.overview if video.latest_result else '')[:220]}"
+            for video in videos
+        ]
+
+    def _recent_summary_videos(self):
+        return sorted(
+            [video for video in self._repository.list_video_assets() if video.latest_result is not None and video.last_summary_at is not None],
+            key=lambda video: video.last_summary_at or video.updated_at,
+            reverse=True,
+        )[:8]
+
+    def _recent_summary_list_answer(self, query: str) -> str | None:
+        if not _is_recent_summary_list_question(query):
+            return None
+        videos = self._recent_summary_videos()
+        if not videos:
+            return "你最近还没有完成的视频总结。"
+        lines = [f"你最近总结了 {len(videos)} 个视频（按总结时间从新到旧）：", ""]
+        for index, video in enumerate(videos, start=1):
+            title = str(video.title or "未命名视频").strip()
+            summary_date = video.last_summary_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            lines.append(f"{index}. **{title}** · {summary_date}")
+        return "\n".join(lines)
+
+    def _list_favorites(self) -> list[str]:
+        return [f"- {video.title}" for video in self._repository.list_video_assets() if video.is_favorite][:20]
+
+    def _list_folder_contents(self) -> list[str]:
+        return [
+            f"- {folder.name}：{len(self._repository.list_video_ids_in_folder(folder.folder_id))} 个视频"
+            for folder in self._repository.list_video_folders()[:20]
+        ]
+
+    def _list_task_history(self) -> list[str]:
+        return [
+            f"- {task.task_input.title or task.task_input.source}：{task.status.value}"
+            for task in self._repository.list_tasks()[:12]
+        ]
+
+    def _get_safe_settings(self) -> dict[str, object]:
+        return {
+            "knowledge_enabled": bool(getattr(self._settings, "knowledge_enabled", False)),
+            "knowledge_llm_available": knowledge_llm_available(self._settings),
+            "knowledge_llm_model": str(getattr(self._settings, "knowledge_llm_model", "") or "")[:120],
+            "knowledge_llm_provider": str(getattr(self._settings, "knowledge_llm_provider", "") or "")[:80],
+            "transcription_mode": str(getattr(self._settings, "asr_mode", "") or "")[:80],
+        }
+
+    def _run_system_context(self, run: KnowledgeAgentRun) -> None:
+        if _is_recent_summary_list_question(run.plan.query):
+            recent_summaries = self._list_recent_summaries()
+            run.context_blocks = ["\n".join(["最近总结：", *(recent_summaries or ["- 暂无已完成总结。"])])]
+            return
+        tools = {
+            "get_library_stats": self._get_library_stats(),
+            "list_recent_summaries": self._list_recent_summaries(),
+            "list_favorites": self._list_favorites(),
+            "list_folder_contents": self._list_folder_contents(),
+            "list_task_history": self._list_task_history(),
+            "get_safe_settings": self._get_safe_settings(),
+        }
+        run.context_blocks = [
+            "\n".join(
+                [
+                    f"库统计：{tools['get_library_stats']}",
+                    "最近总结：",
+                    *(tools["list_recent_summaries"] or ["- 暂无已完成总结。"]),
+                    "收藏视频：",
+                    *(tools["list_favorites"] or ["- 暂无收藏视频。"]),
+                    "收藏夹：",
+                    *(tools["list_folder_contents"] or ["- 暂无收藏夹。"]),
+                    "最近任务：",
+                    *(tools["list_task_history"] or ["- 暂无任务记录。"]),
+                    f"安全设置摘要：{tools['get_safe_settings']}",
+                ]
+            )
+        ]
+
+    def _run_task_router(self, run: KnowledgeAgentRun) -> None:
+        run.context_blocks = ["这是一个视频总结任务请求，已交由会话任务编排器处理。"]
+
     def _run_semantic_search(self, run: KnowledgeAgentRun) -> None:
-        run.chunks = self._index_service.search_chunks(run.plan.search_query, limit=run.plan.context_limit)
+        run.chunks = self._index_service.search_chunks(
+            run.plan.search_query,
+            limit=run.plan.context_limit,
+            video_ids=run.plan.video_ids if run.plan.references else None,
+        )
 
     def _build_answer_context(self, run: KnowledgeAgentRun) -> None:
         if not run.chunks:
@@ -266,13 +422,31 @@ class KnowledgeAgent:
         run.sources = sources
 
     def _answer(self, run: KnowledgeAgentRun) -> str:
-        if not run.chunks:
+        if run.plan.intent == "task":
+            return "已识别为视频任务请求。请等待任务状态卡片完成后，我会继续整理聚合文档。"
+        direct_system_answer = self._recent_summary_list_answer(run.plan.query)
+        if direct_system_answer is not None:
+            return direct_system_answer
+        if not run.context_blocks:
             return EMPTY_KNOWLEDGE_ANSWER
+        if (
+            run.plan.intent == "system"
+            and not knowledge_llm_available(self._settings)
+            and not bool(getattr(self._settings, "knowledge_llm_enabled", False) or getattr(self._settings, "llm_enabled", False))
+        ):
+            if any(marker in run.plan.query for marker in ("最近在学", "学什么", "学习主题")):
+                videos = [video for video in self._repository.list_video_assets() if video.last_summary_at is not None]
+                videos = sorted(videos, key=lambda video: video.last_summary_at or video.updated_at, reverse=True)[:5]
+                if not videos:
+                    return "目前还没有可用于判断学习主题的已完成总结。"
+                titles = "、".join(video.title for video in videos)
+                return f"从最近完成的总结看，你近期主要在关注：{titles}。我也可以继续把这些内容合并成复习提纲。"
+            return f"我读取到的知识库系统信息如下：\n\n{run.context_blocks[0]}"
         answer, _body = chat_knowledge_llm(
             self._settings,
             system_prompt=KNOWLEDGE_QA_SYSTEM_PROMPT,
             user_prompt=_build_knowledge_user_prompt(run.plan.query, run.context_blocks, run.plan.history),
-            max_tokens=1100,
+            max_tokens=KNOWLEDGE_QA_MAX_TOKENS,
             temperature=0.28,
         )
         return answer.strip()
@@ -283,7 +457,14 @@ class KnowledgeAgent:
         should_cancel: Callable[[], bool] | None = None,
     ) -> Iterator[tuple[str, dict[str, object]]]:
         should_stop = should_cancel or (lambda: False)
-        if not run.chunks:
+        direct_system_answer = self._recent_summary_list_answer(run.plan.query)
+        if direct_system_answer is not None:
+            run.answer = direct_system_answer
+            yield ("text_delta", {"delta": direct_system_answer})
+            yield ("sources", {"sources": []})
+            yield ("done", {"query": run.plan.query, "answer": direct_system_answer, "sources": []})
+            return
+        if not run.context_blocks:
             yield ("text_delta", {"delta": EMPTY_KNOWLEDGE_ANSWER})
             yield ("sources", {"sources": []})
             yield ("done", {"query": run.plan.query, "answer": EMPTY_KNOWLEDGE_ANSWER, "sources": []})
@@ -292,13 +473,14 @@ class KnowledgeAgent:
         yield _tool_event("knowledge_llm", "知识库 LLM", "running", "正在根据证据片段与会话上下文生成回答。")
         answer_parts: list[str] = []
         reasoning_character_count = 0
+        finish_reason = ""
         last_reasoning_notice_at = 0.0
         try:
             for event in stream_knowledge_llm(
                 self._settings,
                 system_prompt=KNOWLEDGE_QA_SYSTEM_PROMPT,
                 user_prompt=_build_knowledge_user_prompt(run.plan.query, run.context_blocks, run.plan.history),
-                max_tokens=1100,
+                max_tokens=KNOWLEDGE_QA_MAX_TOKENS,
                 temperature=0.28,
                 should_cancel=should_stop,
             ):
@@ -310,9 +492,15 @@ class KnowledgeAgent:
                 else:
                     delta = event.delta
                     kind = event.kind
+                if kind == "finish":
+                    finish_reason = delta
+                    continue
                 if kind == "reasoning":
-                    reasoning_character_count += len(delta)
-                    yield ("reasoning_delta", {"delta": delta})
+                    remaining = max(0, KNOWLEDGE_LLM_MAX_REASONING_PREVIEW_CHARS - reasoning_character_count)
+                    preview = delta[:remaining]
+                    reasoning_character_count += len(preview)
+                    if preview:
+                        yield ("reasoning_delta", {"delta": preview})
                     now = time.monotonic()
                     if reasoning_character_count and (last_reasoning_notice_at == 0.0 or now - last_reasoning_notice_at > 2.0):
                         last_reasoning_notice_at = now
@@ -360,6 +548,48 @@ class KnowledgeAgent:
                 return
             yield ("text_delta", {"delta": run.answer})
 
+        if finish_reason == "length" and answer_parts and not run.answer:
+            partial_answer = "".join(answer_parts).strip()
+            yield _tool_event(
+                "knowledge_llm",
+                "知识库 LLM",
+                "running",
+                "模型达到输出长度上限，正在从断点继续完成回答。",
+                {"fallback": "continue_after_length", "partial_character_count": len(partial_answer)},
+            )
+            try:
+                continuation, continuation_body = chat_knowledge_llm(
+                    self._settings,
+                    system_prompt=(
+                        f"{KNOWLEDGE_QA_SYSTEM_PROMPT}\n\n"
+                        "上一轮正文因长度限制被截断。请从截断处继续，只输出缺失的后续正文；"
+                        "不要重复已有内容，不要输出思考过程。"
+                    ),
+                    user_prompt=(
+                        f"{_build_knowledge_user_prompt(run.plan.query, run.context_blocks, run.plan.history)}"
+                        f"\n\n已经输出的正文：\n---\n{partial_answer}\n---\n请继续完成答案。"
+                    ),
+                    max_tokens=KNOWLEDGE_QA_MAX_TOKENS,
+                    temperature=0.28,
+                    _allow_empty_retry=False,
+                )
+            except HTTPException as exc:
+                message = f"回答达到长度上限，自动续写失败：{exc.detail}"
+                yield _tool_event("knowledge_llm", "知识库 LLM", "error", message, {"status_code": exc.status_code})
+                yield ("error", {"message": message, "status_code": exc.status_code})
+                return
+            merged_answer = merge_llm_continuation(partial_answer, continuation)
+            continuation_delta = merged_answer[len(partial_answer) :]
+            if continuation_delta:
+                answer_parts.append(continuation_delta)
+                yield ("text_delta", {"delta": continuation_delta})
+            continuation_finish_reason = ""
+            if isinstance(continuation_body, dict):
+                choices = continuation_body.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    continuation_finish_reason = str(choices[0].get("finish_reason") or "")
+            finish_reason = f"length_continued:{continuation_finish_reason or 'unknown'}"
+
         if not answer_parts and not run.answer:
             yield _tool_event(
                 "knowledge_llm",
@@ -390,7 +620,7 @@ class KnowledgeAgent:
             "知识库 LLM",
             "completed",
             "回答生成完成。",
-            {"character_count": len(run.answer)},
+            {"character_count": len(run.answer), "finish_reason": finish_reason},
         )
         yield ("sources", {"sources": [source.model_dump(mode="json") for source in run.sources]})
         yield (
@@ -407,11 +637,15 @@ class KnowledgeAgent:
             "conversation_context": f"正在整理最近 {len(run.plan.history)} 条会话上下文。",
             "semantic_search": "正在检索与你问题最相关的知识片段。",
             "context_builder": "正在整理片段、时间点和来源引用。",
+            "system_context": "正在读取视频、收藏夹、任务和安全设置等白名单信息。",
+            "task_router": "正在识别视频任务范围并准备任务编排。",
         }
         labels = {
             "conversation_context": "上下文整理",
             "semantic_search": "语义检索",
             "context_builder": "上下文拼装",
+            "system_context": "系统数据",
+            "task_router": "任务路由",
         }
         return _tool_event(tool_name, labels[tool_name], "running", details[tool_name])
 
@@ -438,6 +672,17 @@ class KnowledgeAgent:
                 detail,
                 {"chunk_count": len(run.chunks), "video_count": matched_videos},
             )
+
+        if tool_name == "system_context":
+            return _tool_event(
+                tool_name,
+                "系统数据",
+                "completed",
+                "已读取非敏感的知识库统计、最近总结、收藏和任务信息。",
+                {"tools": ["get_library_stats", "list_recent_summaries", "list_favorites", "list_folder_contents", "list_task_history", "get_safe_settings"]},
+            )
+        if tool_name == "task_router":
+            return _tool_event(tool_name, "任务路由", "completed", "已跳过向量检索，等待会话任务编排器创建视频总结任务。")
 
         return _tool_event(
             tool_name,
@@ -473,8 +718,9 @@ class RagService:
         query: str,
         context_limit: int = 5,
         history: list[KnowledgeChatHistoryItem] | None = None,
+        references: list[KnowledgeReference] | None = None,
     ) -> KnowledgeAskResponse:
-        run = self._agent.execute(query, context_limit=context_limit, history=history)
+        run = self._agent.execute(query, context_limit=context_limit, history=history, references=references)
         return KnowledgeAskResponse(query=run.plan.query, answer=run.answer, sources=run.sources)
 
     def ask_stream(
@@ -482,11 +728,13 @@ class RagService:
         query: str,
         context_limit: int = 5,
         history: list[KnowledgeChatHistoryItem] | None = None,
+        references: list[KnowledgeReference] | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> Iterator[tuple[str, dict[str, object]]]:
         yield from self._agent.stream(
             query,
             context_limit=context_limit,
             history=history,
+            references=references,
             should_cancel=should_cancel,
         )
