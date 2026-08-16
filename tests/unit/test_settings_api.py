@@ -3394,3 +3394,71 @@ def test_detect_environment_reads_probe_script(monkeypatch, tmp_path: Path) -> N
     # The command should include the probe script content, not a FileNotFoundError
     assert environment.get("pythonVersion"), "probe returned no pythonVersion"
     assert environment.get("torchInstalled") is not None, "probe returned no torchInstalled"
+
+
+def test_ensure_runtime_channel_repairs_broken_stdlib(monkeypatch, tmp_path: Path) -> None:
+    """A target runtime whose DLLs went missing (python.exe + matching metadata
+    still present) must be treated as not-ready and rebuilt from base instead of
+    being accepted as healthy — this is what previously produced the endless
+    ``No module named '_socket'`` probe failures."""
+    import video_sum_service.runtime_support as rs
+
+    runtime_root = tmp_path / "runtime"
+    base_dir = runtime_root / "base"
+    gpu_dir = runtime_root / "gpu-cu128"
+    (base_dir / "DLLs").mkdir(parents=True)
+    (base_dir / "DLLs" / "_socket.pyd").write_text("base-socket", encoding="utf-8")
+    (base_dir / "Lib" / "site-packages").mkdir(parents=True)
+    (gpu_dir / "DLLs").mkdir(parents=True)  # broken: empty DLLs
+    (gpu_dir / "Lib" / "site-packages").mkdir(parents=True)
+    (base_dir / "python.exe").write_text("base-python", encoding="utf-8")
+    (gpu_dir / "python.exe").write_text("gpu-python", encoding="utf-8")
+    base_metadata = (
+        '{"runtimeChannel":"base","runtimeLayout":"portable-cpython",'
+        '"appVersion":"1.20.0","pythonVersion":"3.12.10"}'
+    )
+    (base_dir / "video_sum_runtime.json").write_text(base_metadata, encoding="utf-8")
+    (gpu_dir / "video_sum_runtime.json").write_text(
+        '{"runtimeChannel":"gpu-cu128","runtimeLayout":"portable-cpython","appVersion":"1.20.0","pythonVersion":"3.12.10"}',
+        encoding="utf-8",
+    )
+    (gpu_dir / "python312._pth").write_text(
+        "DLLs\nstdlib\nLib\\site-packages\nimport site\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(rs, "managed_runtime_dir", lambda channel: runtime_root / channel)
+    monkeypatch.setattr(
+        rs,
+        "runtime_python_executable",
+        lambda channel: (runtime_root / channel / "python.exe")
+        if (runtime_root / channel / "python.exe").exists()
+        else None,
+    )
+    # Simulate the broken stdlib: python.exe + matching metadata exist, but the
+    # portable runtime's DLLs are empty, so the health check reports not-ready.
+    monkeypatch.setattr(
+        rs,
+        "runtime_python_stdlib_healthy",
+        lambda channel: channel != "gpu-cu128",
+    )
+    monkeypatch.setattr(rs, "_ensure_runtime_sitecustomize", lambda channel: None)
+
+    replace_calls: list[str] = []
+    monkeypatch.setattr(
+        rs,
+        "replace_runtime_with_base_copy",
+        lambda target_dir, base_dir_arg, runtime_channel, backup_dir: (
+            replace_calls.append(runtime_channel)
+        ),
+    )
+    monkeypatch.setattr(
+        rs,
+        "run_runtime_refresh_with_backup",
+        lambda target_dir, backup_dir, refresh: refresh(),
+    )
+
+    result = rs.ensure_runtime_channel("gpu-cu128")
+
+    assert replace_calls == ["gpu-cu128"], "broken runtime should be rebuilt from base"
+    assert result == gpu_dir

@@ -441,6 +441,45 @@ def runtime_python_executable(runtime_channel: str) -> Path | None:
     return None
 
 
+def runtime_python_stdlib_healthy(runtime_channel: str) -> bool:
+    """Cheap health check for a managed runtime interpreter.
+
+    The portable-CPython layout keeps the stdlib C extensions (``_socket.pyd``
+    etc.) in the ``DLLs`` directory listed by ``python312._pth``.  A runtime
+    whose ``DLLs`` content went missing (interrupted refresh, partial copy)
+    still has ``python.exe`` and matching metadata, so the usual readiness
+    checks accept it — and then every subprocess dies with
+    ``ModuleNotFoundError: No module named '_socket'``.
+
+    Returns False only when the layout provably requires a ``DLLs`` directory
+    and the ``_socket`` extension is missing from it.  Non-portable layouts
+    (plain venvs, dev-mode host interpreter) keep their extension modules
+    elsewhere and are always considered healthy here.
+    """
+    runtime_dir = managed_runtime_dir(runtime_channel)
+    if runtime_python_executable(runtime_channel) is None:
+        return False
+
+    expects_dlls = False
+    pth_file = runtime_dir / "python312._pth"
+    if pth_file.exists():
+        try:
+            pth_lines = {
+                line.strip()
+                for line in pth_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+            }
+            expects_dlls = "DLLs" in pth_lines
+        except OSError:
+            expects_dlls = False
+    if not expects_dlls:
+        return True
+
+    dlls_dir = runtime_dir / "DLLs"
+    if not dlls_dir.is_dir():
+        return False
+    return any(dlls_dir.glob("_socket*.pyd"))
+
+
 def ffmpeg_location() -> Path | None:
     """返回 ffmpeg 可执行文件的路径（不是目录）。"""
     ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
@@ -621,7 +660,10 @@ def bootstrap_managed_runtime(runtime_channel: str = "base") -> Path | None:
 
     seed_metadata = bundled_runtime_seed_metadata()
     runtime_metadata = read_runtime_metadata(runtime_dir)
-    runtime_ready = runtime_python_executable(runtime_channel) is not None
+    runtime_ready = (
+        runtime_python_executable(runtime_channel) is not None
+        and runtime_python_stdlib_healthy(runtime_channel)
+    )
     seed_version = str(seed_metadata.get("appVersion") or "")
     runtime_version = str(runtime_metadata.get("appVersion") or "")
     can_preserve_extensions = (

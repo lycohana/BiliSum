@@ -330,3 +330,100 @@ def test_activate_runtime_dll_directories_replaces_managed_handles(monkeypatch, 
     finally:
         runtime_module._DLL_DIRECTORY_HANDLES.clear()
         runtime_module._DLL_DIRECTORY_HANDLES.update(original_handles)
+
+
+def _portable_layout_dir(root: Path, *, with_socket: bool) -> Path:
+    runtime_dir = root / "runtime" / "base"
+    (runtime_dir / "DLLs").mkdir(parents=True)
+    (runtime_dir / "Lib" / "site-packages").mkdir(parents=True)
+    if with_socket:
+        (runtime_dir / "DLLs" / "_socket.pyd").write_text("x", encoding="utf-8")
+    (runtime_dir / "python312._pth").write_text(
+        "DLLs\nstdlib\nLib\\site-packages\nimport site\n",
+        encoding="utf-8",
+    )
+    return runtime_dir
+
+
+def _patch_python_executable(monkeypatch, runtime_dir: Path) -> None:
+    monkeypatch.setattr(
+        runtime_module,
+        "runtime_python_executable",
+        lambda channel: runtime_dir / "python.exe",
+    )
+
+
+def test_runtime_python_stdlib_healthy_detects_missing_dlls(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = _portable_layout_dir(tmp_path, with_socket=False)
+    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
+    _patch_python_executable(monkeypatch, runtime_dir)
+
+    assert runtime_module.runtime_python_stdlib_healthy("base") is False
+
+
+def test_runtime_python_stdlib_healthy_accepts_populated_dlls(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = _portable_layout_dir(tmp_path, with_socket=True)
+    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
+    _patch_python_executable(monkeypatch, runtime_dir)
+
+    assert runtime_module.runtime_python_stdlib_healthy("base") is True
+
+
+def test_runtime_stdlib_healthy_non_portable_layout(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime" / "base"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
+    _patch_python_executable(monkeypatch, runtime_dir)
+
+    assert runtime_module.runtime_python_stdlib_healthy("base") is True
+
+
+def test_runtime_python_stdlib_healthy_false_without_python(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime" / "base"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
+    monkeypatch.setattr(runtime_module, "runtime_python_executable", lambda channel: None)
+
+    assert runtime_module.runtime_python_stdlib_healthy("base") is False
+
+
+def test_bootstrap_base_runtime_refreshes_broken_stdlib(monkeypatch, tmp_path: Path) -> None:
+    """A runtime whose DLLs went missing (python.exe + metadata still present)
+    must be treated as not-ready and refreshed from the healthy seed."""
+    seed_dir = tmp_path / "app" / "runtime" / "base"
+    runtime_dir = tmp_path / "data" / "runtime" / "base"
+    (seed_dir / "DLLs").mkdir(parents=True)
+    (seed_dir / "DLLs" / "_socket.pyd").write_text("seed-socket", encoding="utf-8")
+    (seed_dir / "Lib" / "site-packages").mkdir(parents=True)
+    (runtime_dir / "DLLs").mkdir(parents=True)  # broken: empty DLLs
+    (runtime_dir / "Lib" / "site-packages").mkdir(parents=True)
+    (seed_dir / "python.exe").write_text("seed-python", encoding="utf-8")
+    (runtime_dir / "python.exe").write_text("old-python", encoding="utf-8")
+    metadata = (
+        '{"appVersion":"1.20.0","runtimeLayout":"portable-cpython",'
+        '"pythonVersion":"3.12.10"}'
+    )
+    (seed_dir / "video_sum_runtime.json").write_text(metadata, encoding="utf-8")
+    (runtime_dir / "video_sum_runtime.json").write_text(metadata, encoding="utf-8")
+    (runtime_dir / "python312._pth").write_text(
+        "DLLs\nstdlib\nLib\\site-packages\nimport site\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(runtime_module, "is_frozen", lambda: True)
+    monkeypatch.setattr(runtime_module, "bundled_runtime_seed_dir", lambda: seed_dir)
+    monkeypatch.setattr(runtime_module, "runtime_seed_available", lambda: True)
+    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda runtime_channel: runtime_dir)
+    monkeypatch.setattr(
+        runtime_module,
+        "runtime_python_executable",
+        lambda runtime_channel: runtime_dir / "python.exe"
+        if (runtime_dir / "python.exe").exists()
+        else None,
+    )
+
+    assert bootstrap_managed_runtime("base") == runtime_dir
+
+    # Broken stdlib must have triggered a refresh from the healthy seed.
+    assert (runtime_dir / "python.exe").read_text(encoding="utf-8") == "seed-python"
+    assert (runtime_dir / "DLLs" / "_socket.pyd").read_text(encoding="utf-8") == "seed-socket"
