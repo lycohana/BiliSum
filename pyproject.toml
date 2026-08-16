@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilisum-workspace"
-version = "1.20.0-alpha.3"
+version = "1.20.0-alpha.4"
 description = "BiliSum local-first video summarizer workspace."
 requires-python = ">=3.12"
 dependencies = []
