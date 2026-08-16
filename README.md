@@ -2,8 +2,6 @@
 
 ![BiliSum Banner](docs/pic/banner.svg)
 
-# BiliSum
-
 **AI 视频总结与知识库工具**
 
 把 B 站、YouTube 和本地视频，沉淀成可检索、可追问、可导出的知识笔记。
