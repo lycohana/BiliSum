@@ -42,6 +42,10 @@ class SqliteTaskRepository:
                     latest_task_id TEXT,
                     latest_status TEXT,
                     latest_stage TEXT,
+                    latest_task_created_at TEXT,
+                    latest_task_completed_at TEXT,
+                    latest_task_duration_seconds REAL,
+                    last_summary_at TEXT,
                     latest_error_message TEXT,
                     is_favorite INTEGER NOT NULL DEFAULT 0,
                     favorite_updated_at TEXT,
@@ -63,6 +67,10 @@ class SqliteTaskRepository:
             self._ensure_column(cursor, "video_assets", "folder_order", "REAL NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "video_assets", "global_pinned", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "video_assets", "folder_pinned", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_assets", "latest_task_created_at", "TEXT")
+            self._ensure_column(cursor, "video_assets", "latest_task_completed_at", "TEXT")
+            self._ensure_column(cursor, "video_assets", "latest_task_duration_seconds", "REAL")
+            self._ensure_column(cursor, "video_assets", "last_summary_at", "TEXT")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS video_folders (
@@ -191,6 +199,108 @@ class SqliteTaskRepository:
             self._ensure_column(cursor, "knowledge_index", "anchor_seconds", "REAL")
             self._ensure_column(cursor, "knowledge_index", "created_at", "TEXT")
             self._ensure_column(cursor, "knowledge_index", "updated_at", "TEXT")
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_conversations (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_message_at TEXT
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_messages (
+                    message_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    reasoning TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    sources_json TEXT NOT NULL DEFAULT '[]',
+                    tools_json TEXT NOT NULL DEFAULT '[]',
+                    references_json TEXT NOT NULL DEFAULT '[]',
+                    job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(conversation_id) REFERENCES knowledge_conversations(conversation_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_messages_sequence
+                ON knowledge_messages(conversation_id, sequence)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    assistant_message_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    agent_round INTEGER NOT NULL DEFAULT 1,
+                    agent_state_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(conversation_id) REFERENCES knowledge_conversations(conversation_id),
+                    FOREIGN KEY(assistant_message_id) REFERENCES knowledge_messages(message_id)
+                )
+                """
+            )
+            self._ensure_column(cursor, "knowledge_jobs", "agent_round", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(cursor, "knowledge_jobs", "agent_state_json", "TEXT NOT NULL DEFAULT '{}'")
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_job_items (
+                    job_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    video_id TEXT,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    PRIMARY KEY(job_id, task_id),
+                    FOREIGN KEY(job_id) REFERENCES knowledge_jobs(job_id),
+                    FOREIGN KEY(task_id) REFERENCES tasks(task_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                UPDATE video_assets
+                SET
+                    latest_task_created_at = (
+                        SELECT created_at FROM tasks WHERE tasks.task_id = video_assets.latest_task_id
+                    ),
+                    latest_task_completed_at = CASE
+                        WHEN latest_status = 'completed' THEN (
+                            SELECT updated_at FROM tasks WHERE tasks.task_id = video_assets.latest_task_id
+                        )
+                        ELSE latest_task_completed_at
+                    END,
+                    latest_task_duration_seconds = CASE
+                        WHEN latest_task_id IS NOT NULL THEN (
+                            SELECT MAX(0, (julianday(updated_at) - julianday(created_at)) * 86400.0)
+                            FROM tasks WHERE tasks.task_id = video_assets.latest_task_id
+                        )
+                        ELSE latest_task_duration_seconds
+                    END,
+                    last_summary_at = CASE
+                        WHEN latest_status = 'completed' THEN (
+                            SELECT updated_at FROM tasks WHERE tasks.task_id = video_assets.latest_task_id
+                        )
+                        ELSE last_summary_at
+                    END
+                WHERE latest_task_id IS NOT NULL
+                """
+            )
 
     def _ensure_column(self, cursor: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
         rows = cursor.execute(f"PRAGMA table_info({table})").fetchall()
@@ -206,7 +316,10 @@ class SqliteTaskRepository:
         return f"""
                     {prefix}.video_id, {prefix}.canonical_id, {prefix}.platform, {prefix}.title, {prefix}.source_url, {prefix}.cover_url, {prefix}.duration,
                     {prefix}.page_catalog_json,
-                    {prefix}.latest_task_id, {prefix}.latest_status, {prefix}.latest_stage, {prefix}.latest_error_message,
+                    {prefix}.latest_task_id, {prefix}.latest_status, {prefix}.latest_stage,
+                    {prefix}.latest_task_created_at, {prefix}.latest_task_completed_at,
+                    {prefix}.latest_task_duration_seconds, {prefix}.last_summary_at,
+                    {prefix}.latest_error_message,
                     {prefix}.is_favorite, {prefix}.favorite_updated_at,
                     {prefix}.folder_id, {prefix}.global_order, {prefix}.folder_order, {prefix}.global_pinned, {prefix}.folder_pinned,
                     {prefix}.created_at, {prefix}.updated_at, r.result_json AS latest_result_json
@@ -317,10 +430,11 @@ class SqliteTaskRepository:
                 """
                 INSERT INTO video_assets (
                     video_id, canonical_id, platform, title, source_url, cover_url, duration, page_catalog_json,
-                    latest_task_id, latest_status, latest_stage, latest_error_message, is_favorite, favorite_updated_at,
+                    latest_task_id, latest_status, latest_stage, latest_task_created_at, latest_task_completed_at,
+                    latest_task_duration_seconds, last_summary_at, latest_error_message, is_favorite, favorite_updated_at,
                     folder_id, global_order, folder_order, global_pinned, folder_pinned,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(canonical_id) DO UPDATE SET
                     title = excluded.title,
                     source_url = excluded.source_url,
@@ -341,6 +455,10 @@ class SqliteTaskRepository:
                     asset.latest_task_id,
                     asset.latest_status.value if asset.latest_status else None,
                     asset.latest_stage,
+                    asset.latest_task_created_at.isoformat() if asset.latest_task_created_at else None,
+                    asset.latest_task_completed_at.isoformat() if asset.latest_task_completed_at else None,
+                    asset.latest_task_duration_seconds,
+                    asset.last_summary_at.isoformat() if asset.last_summary_at else None,
                     asset.latest_error_message,
                     1 if asset.is_favorite else 0,
                     asset.favorite_updated_at.isoformat() if asset.favorite_updated_at else None,
@@ -459,10 +577,12 @@ class SqliteTaskRepository:
                 cursor.execute(
                     """
                     UPDATE video_assets
-                    SET latest_task_id = ?, latest_status = ?, latest_stage = ?, latest_error_message = NULL, updated_at = ?
+                    SET latest_task_id = ?, latest_status = ?, latest_stage = ?,
+                        latest_task_created_at = ?, latest_task_completed_at = NULL,
+                        latest_task_duration_seconds = NULL, latest_error_message = NULL, updated_at = ?
                     WHERE video_id = ?
                     """,
-                    (record.task_id, record.status.value, "queued", payload["updated_at"], video_id),
+                    (record.task_id, record.status.value, "queued", payload["created_at"], payload["updated_at"], video_id),
                 )
         return record
 
@@ -480,6 +600,369 @@ class SqliteTaskRepository:
                 """
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
+
+    def list_knowledge_jobs(self, statuses: list[str] | None = None, limit: int = 100) -> list[dict[str, object]]:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            normalized_statuses = [status for status in (statuses or []) if status in {"queued", "running", "aggregating"}]
+            bounded_limit = max(1, min(int(limit), 500))
+            if normalized_statuses:
+                status_values = (normalized_statuses + ["__no_match__"] * 3)[:3]
+                rows = cursor.execute(
+                    "SELECT job_id FROM knowledge_jobs WHERE status IN (?, ?, ?) ORDER BY updated_at ASC LIMIT ?",
+                    (*status_values, bounded_limit),
+                ).fetchall()
+            else:
+                rows = cursor.execute(
+                    "SELECT job_id FROM knowledge_jobs ORDER BY updated_at ASC LIMIT ?",
+                    (bounded_limit,),
+                ).fetchall()
+        jobs: list[dict[str, object]] = []
+        for row in rows:
+            job = self.get_knowledge_job(str(row["job_id"]))
+            if job is not None:
+                jobs.append(job)
+        return jobs
+
+    def create_knowledge_conversation(self, title: str | None = None) -> dict[str, object]:
+        now = datetime.now(timezone.utc).isoformat()
+        conversation_id = uuid4().hex
+        clean_title = str(title or "新会话").strip()[:120] or "新会话"
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO knowledge_conversations (conversation_id, title, created_at, updated_at, last_message_at)
+                VALUES (?, ?, ?, ?, NULL)
+                """,
+                (conversation_id, clean_title, now, now),
+            )
+        return self.get_knowledge_conversation(conversation_id) or {}
+
+    def list_knowledge_conversations(self, limit: int = 50) -> list[dict[str, object]]:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            rows = cursor.execute(
+                """
+                SELECT c.conversation_id, c.title, c.created_at, c.updated_at, c.last_message_at,
+                       COUNT(m.message_id) AS message_count,
+                       COALESCE((
+                           SELECT content FROM knowledge_messages pm
+                           WHERE pm.conversation_id = c.conversation_id
+                           ORDER BY pm.sequence DESC LIMIT 1
+                       ), '') AS preview
+                FROM knowledge_conversations c
+                LEFT JOIN knowledge_messages m ON m.conversation_id = c.conversation_id
+                GROUP BY c.conversation_id
+                ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 200)),),
+            ).fetchall()
+        return [self._row_to_knowledge_conversation(row) for row in rows]
+
+    def get_knowledge_conversation(self, conversation_id: str) -> dict[str, object] | None:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute(
+                """
+                SELECT c.conversation_id, c.title, c.created_at, c.updated_at, c.last_message_at,
+                       COUNT(m.message_id) AS message_count,
+                       COALESCE((
+                           SELECT content FROM knowledge_messages pm
+                           WHERE pm.conversation_id = c.conversation_id
+                           ORDER BY pm.sequence DESC LIMIT 1
+                       ), '') AS preview
+                FROM knowledge_conversations c
+                LEFT JOIN knowledge_messages m ON m.conversation_id = c.conversation_id
+                WHERE c.conversation_id = ?
+                GROUP BY c.conversation_id
+                """,
+                (conversation_id,),
+            ).fetchone()
+        return self._row_to_knowledge_conversation(row) if row is not None else None
+
+    def update_knowledge_conversation_title(self, conversation_id: str, title: str) -> dict[str, object] | None:
+        clean_title = str(title or "").strip()[:120]
+        if not clean_title:
+            return None
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                "UPDATE knowledge_conversations SET title = ?, updated_at = ? WHERE conversation_id = ?",
+                (clean_title, updated_at, conversation_id),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_knowledge_conversation(conversation_id)
+
+    def delete_knowledge_conversation(self, conversation_id: str) -> bool:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            exists = cursor.execute(
+                "SELECT conversation_id FROM knowledge_conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if exists is None:
+                return False
+            job_rows = cursor.execute(
+                "SELECT job_id FROM knowledge_jobs WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchall()
+            for row in job_rows:
+                cursor.execute("DELETE FROM knowledge_job_items WHERE job_id = ?", (row["job_id"],))
+            cursor.execute("DELETE FROM knowledge_jobs WHERE conversation_id = ?", (conversation_id,))
+            cursor.execute("DELETE FROM knowledge_messages WHERE conversation_id = ?", (conversation_id,))
+            cursor.execute("DELETE FROM knowledge_conversations WHERE conversation_id = ?", (conversation_id,))
+        return True
+
+    def create_knowledge_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str = "",
+        *,
+        status: str = "completed",
+        reasoning: str = "",
+        sources: list[dict[str, object]] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        references: list[dict[str, object]] | None = None,
+        job_id: str | None = None,
+    ) -> dict[str, object] | None:
+        now = datetime.now(timezone.utc).isoformat()
+        message_id = uuid4().hex
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            conversation = cursor.execute(
+                "SELECT conversation_id FROM knowledge_conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                return None
+            sequence_row = cursor.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM knowledge_messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            sequence = int(sequence_row["next_sequence"])
+            cursor.execute(
+                """
+                INSERT INTO knowledge_messages (
+                    message_id, conversation_id, sequence, role, content, reasoning, status,
+                    sources_json, tools_json, references_json, job_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_id,
+                    conversation_id,
+                    sequence,
+                    role,
+                    content,
+                    reasoning,
+                    status,
+                    json.dumps(sources or [], ensure_ascii=False),
+                    json.dumps(tools or [], ensure_ascii=False),
+                    json.dumps(references or [], ensure_ascii=False),
+                    job_id,
+                    now,
+                    now,
+                ),
+            )
+            cursor.execute(
+                "UPDATE knowledge_conversations SET updated_at = ?, last_message_at = ? WHERE conversation_id = ?",
+                (now, now, conversation_id),
+            )
+        return self.get_knowledge_message(message_id)
+
+    def get_knowledge_message(self, message_id: str) -> dict[str, object] | None:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute(
+                "SELECT * FROM knowledge_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+        return self._row_to_knowledge_message(row) if row is not None else None
+
+    def list_knowledge_messages(self, conversation_id: str) -> list[dict[str, object]]:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            rows = cursor.execute(
+                "SELECT * FROM knowledge_messages WHERE conversation_id = ? ORDER BY sequence ASC",
+                (conversation_id,),
+            ).fetchall()
+        return [self._row_to_knowledge_message(row) for row in rows]
+
+    def update_knowledge_message(
+        self,
+        message_id: str,
+        *,
+        content: str | None = None,
+        status: str | None = None,
+        reasoning: str | None = None,
+        sources: list[dict[str, object]] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        job_id: str | None | object = _UNSET,
+    ) -> dict[str, object] | None:
+        has_update = any(value is not None for value in (content, status, reasoning, sources, tools)) or job_id is not _UNSET
+        if not has_update:
+            return self.get_knowledge_message(message_id)
+        now = datetime.now(timezone.utc).isoformat()
+        values = (
+            1 if content is not None else 0,
+            content,
+            1 if status is not None else 0,
+            status,
+            1 if reasoning is not None else 0,
+            reasoning,
+            1 if sources is not None else 0,
+            json.dumps(sources, ensure_ascii=False) if sources is not None else None,
+            1 if tools is not None else 0,
+            json.dumps(tools, ensure_ascii=False) if tools is not None else None,
+            1 if job_id is not _UNSET else 0,
+            None if job_id is _UNSET else job_id,
+            now,
+            message_id,
+        )
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                """
+                UPDATE knowledge_messages
+                SET content = CASE WHEN ? = 1 THEN ? ELSE content END,
+                    status = CASE WHEN ? = 1 THEN ? ELSE status END,
+                    reasoning = CASE WHEN ? = 1 THEN ? ELSE reasoning END,
+                    sources_json = CASE WHEN ? = 1 THEN ? ELSE sources_json END,
+                    tools_json = CASE WHEN ? = 1 THEN ? ELSE tools_json END,
+                    job_id = CASE WHEN ? = 1 THEN ? ELSE job_id END,
+                    updated_at = ?
+                WHERE message_id = ?
+                """,
+                values,
+            )
+            row = cursor.execute(
+                "SELECT conversation_id FROM knowledge_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            if row is not None:
+                cursor.execute(
+                    "UPDATE knowledge_conversations SET updated_at = ?, last_message_at = ? WHERE conversation_id = ?",
+                    (now, now, row["conversation_id"]),
+                )
+        return self.get_knowledge_message(message_id)
+
+    def create_knowledge_job(
+        self,
+        conversation_id: str,
+        assistant_message_id: str,
+        kind: str,
+        status: str,
+        query: str,
+        agent_round: int = 1,
+        agent_state: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        now = datetime.now(timezone.utc).isoformat()
+        job_id = uuid4().hex
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO knowledge_jobs (
+                    job_id, conversation_id, assistant_message_id, kind, status, query,
+                    error_message, created_at, updated_at, completed_at, agent_round, agent_state_json
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?)
+                """,
+                (
+                    job_id,
+                    conversation_id,
+                    assistant_message_id,
+                    kind,
+                    status,
+                    query,
+                    now,
+                    now,
+                    int(agent_round),
+                    json.dumps(agent_state or {}, ensure_ascii=False),
+                ),
+            )
+        return self.get_knowledge_job(job_id)
+
+    def add_knowledge_job_items(self, job_id: str, items: list[tuple[str, str | None, int]]) -> None:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO knowledge_job_items (job_id, task_id, video_id, position) VALUES (?, ?, ?, ?)",
+                [(job_id, task_id, video_id, position) for task_id, video_id, position in items],
+            )
+
+    def get_knowledge_job(self, job_id: str) -> dict[str, object] | None:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            job = cursor.execute("SELECT * FROM knowledge_jobs WHERE job_id = ?", (job_id,)).fetchone()
+            if job is None:
+                return None
+            items = cursor.execute(
+                """
+                SELECT i.task_id, i.video_id, i.position, i.error_message,
+                       t.status, t.task_input_json, t.error_message AS task_error_message,
+                       COALESCE((SELECT progress FROM task_events e WHERE e.task_id = t.task_id ORDER BY e.created_at DESC LIMIT 1), 0) AS progress,
+                       COALESCE((SELECT message FROM task_events e WHERE e.task_id = t.task_id ORDER BY e.created_at DESC LIMIT 1), '') AS task_message
+                FROM knowledge_job_items i
+                LEFT JOIN tasks t ON t.task_id = i.task_id
+                WHERE i.job_id = ?
+                ORDER BY i.position ASC
+                """,
+                (job_id,),
+            ).fetchall()
+        payload = dict(job)
+        payload["items"] = [dict(item) for item in items]
+        return payload
+
+    def update_knowledge_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        error_message: str | None = None,
+        completed_at: str | None = None,
+        agent_round: int | None = None,
+        agent_state: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                """
+                UPDATE knowledge_jobs
+                SET status = ?, error_message = ?, updated_at = ?, completed_at = ?,
+                    agent_round = COALESCE(?, agent_round),
+                    agent_state_json = COALESCE(?, agent_state_json)
+                WHERE job_id = ?
+                """,
+                (
+                    status,
+                    error_message,
+                    now,
+                    completed_at,
+                    int(agent_round) if agent_round is not None else None,
+                    json.dumps(agent_state, ensure_ascii=False) if agent_state is not None else None,
+                    job_id,
+                ),
+            )
+        return self.get_knowledge_job(job_id)
+
+    def _row_to_knowledge_conversation(self, row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "conversation_id": row["conversation_id"],
+            "title": row["title"],
+            "created_at": datetime.fromisoformat(row["created_at"]),
+            "updated_at": datetime.fromisoformat(row["updated_at"]),
+            "last_message_at": datetime.fromisoformat(row["last_message_at"]) if row["last_message_at"] else None,
+            "message_count": int(row["message_count"] or 0),
+            "preview": str(row["preview"] or "")[:240],
+        }
+
+    def _row_to_knowledge_message(self, row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "message_id": row["message_id"],
+            "conversation_id": row["conversation_id"],
+            "sequence": int(row["sequence"]),
+            "role": row["role"],
+            "content": row["content"] or "",
+            "reasoning": row["reasoning"] or "",
+            "status": row["status"],
+            "sources": json.loads(row["sources_json"] or "[]"),
+            "tools": json.loads(row["tools_json"] or "[]"),
+            "references": json.loads(row["references_json"] or "[]"),
+            "job_id": row["job_id"],
+            "created_at": datetime.fromisoformat(row["created_at"]),
+            "updated_at": datetime.fromisoformat(row["updated_at"]),
+        }
 
     def list_recoverable_tasks(self) -> list[TaskRecord]:
         with self._lock, sqlite_cursor(self._connection) as cursor:
@@ -684,6 +1167,14 @@ class SqliteTaskRepository:
                 (folder_id,),
             ).fetchone()
         return self._row_to_video_folder(row) if row is not None else None
+
+    def list_video_ids_in_folder(self, folder_id: str) -> list[str]:
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            rows = cursor.execute(
+                "SELECT video_id FROM video_folder_memberships WHERE folder_id = ? ORDER BY folder_order ASC, video_id ASC",
+                (folder_id,),
+            ).fetchall()
+        return [str(row["video_id"]) for row in rows]
 
     def update_video_folder(
         self,
@@ -1129,15 +1620,36 @@ class SqliteTaskRepository:
                 "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
                 (status.value, updated_at, task_id),
             )
-            row = cursor.execute("SELECT video_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            row = cursor.execute("SELECT video_id, created_at FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
             if row is not None and row["video_id"]:
+                duration = None
+                if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+                    try:
+                        duration = max(
+                            0.0,
+                            (datetime.fromisoformat(updated_at) - datetime.fromisoformat(row["created_at"])).total_seconds(),
+                        )
+                    except (TypeError, ValueError):
+                        duration = None
                 cursor.execute(
                     """
                     UPDATE video_assets
-                    SET latest_task_id = ?, latest_status = ?, updated_at = ?
+                    SET latest_task_id = ?, latest_status = ?, latest_task_completed_at = ?,
+                        latest_task_duration_seconds = ?,
+                        last_summary_at = CASE WHEN ? = 'completed' THEN ? ELSE last_summary_at END,
+                        updated_at = ?
                     WHERE video_id = ?
                     """,
-                    (task_id, status.value, updated_at, row["video_id"]),
+                    (
+                        task_id,
+                        status.value,
+                        updated_at if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED} else None,
+                        duration,
+                        status.value,
+                        updated_at,
+                        updated_at,
+                        row["video_id"],
+                    ),
                 )
         return self.get_task(task_id)
 
@@ -1345,6 +1857,10 @@ class SqliteTaskRepository:
             latest_task_id=row["latest_task_id"],
             latest_status=TaskStatus(row["latest_status"]) if row["latest_status"] else None,
             latest_stage=row["latest_stage"],
+            latest_task_created_at=datetime.fromisoformat(row["latest_task_created_at"]) if row["latest_task_created_at"] else None,
+            latest_task_completed_at=datetime.fromisoformat(row["latest_task_completed_at"]) if row["latest_task_completed_at"] else None,
+            latest_task_duration_seconds=float(row["latest_task_duration_seconds"]) if row["latest_task_duration_seconds"] is not None else None,
+            last_summary_at=datetime.fromisoformat(row["last_summary_at"]) if row["last_summary_at"] else None,
             latest_result=latest_result,
             latest_error_message=row["latest_error_message"],
             is_favorite=bool(row["is_favorite"]),

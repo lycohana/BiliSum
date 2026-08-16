@@ -17,6 +17,7 @@ from video_sum_infra.llm import (
     is_anthropic_llm,
     normalize_openai_compatible_model_name,
     openai_chat_completions_url,
+    extract_llm_finish_reason,
 )
 from video_sum_service.integrations import extract_http_error_detail, extract_llm_message_content
 
@@ -25,12 +26,33 @@ logger = logging.getLogger(__name__)
 KNOWLEDGE_LLM_TIMEOUT = httpx.Timeout(connect=15.0, read=45.0, write=30.0, pool=30.0)
 KNOWLEDGE_LLM_STREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=12.0, write=30.0, pool=30.0)
 KNOWLEDGE_LLM_FIRST_CONTENT_TIMEOUT_SECONDS = 18.0
+KNOWLEDGE_LLM_MAX_REASONING_PREVIEW_CHARS = 4000
 
 
 @dataclass(frozen=True)
 class KnowledgeLlmStreamEvent:
     kind: str
     delta: str
+
+
+def _should_disable_deepseek_thinking(base_url: str, model: str) -> bool:
+    normalized_url = str(base_url or "").lower().rstrip("/")
+    normalized_model = str(model or "").lower()
+    return "api.deepseek.com" in normalized_url and normalized_model.startswith("deepseek-v4-")
+
+
+def merge_llm_continuation(existing: str, continuation: str, *, max_overlap: int = 400) -> str:
+    left = str(existing or "")
+    right = str(continuation or "")
+    if not left:
+        return right
+    if not right:
+        return left
+    overlap_limit = min(len(left), len(right), max_overlap)
+    for size in range(overlap_limit, 0, -1):
+        if left[-size:] == right[:size]:
+            return left + right[size:]
+    return left + right
 
 
 def resolve_knowledge_llm_settings(settings: ServiceSettings) -> tuple[bool, str, str, str, str]:
@@ -73,6 +95,7 @@ def chat_knowledge_llm(
     max_tokens: int = 800,
     temperature: float = 0.2,
     require_json: bool = False,
+    _allow_empty_retry: bool = True,
 ) -> tuple[str, dict[str, object] | None]:
     base_url, model, api_key, provider = ensure_knowledge_llm_settings(settings)
     use_anthropic = is_anthropic_llm(provider, base_url)
@@ -96,6 +119,8 @@ def chat_knowledge_llm(
     }
     if require_json:
         payload["response_format"] = {"type": "json_object"}
+    if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
+        payload["thinking"] = {"type": "disabled"}
     request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)
     request_payload = build_anthropic_messages_payload(payload) if use_anthropic else payload
 
@@ -134,12 +159,55 @@ def chat_knowledge_llm(
         body = None
 
     content = extract_llm_message_content(body)
+    if not content and _allow_empty_retry and not require_json:
+        return chat_knowledge_llm(
+            settings,
+            system_prompt=(
+                f"{system_prompt}\n\n"
+                "这是一次恢复请求。请忽略任何思考过程，只输出可以直接展示给用户的最终答案正文。"
+            ),
+            user_prompt=user_prompt,
+            max_tokens=max(max_tokens + 600, 1600),
+            temperature=temperature,
+            require_json=require_json,
+            _allow_empty_retry=False,
+        )
     if not content:
-        raise HTTPException(status_code=502, detail="知识库 LLM 没有返回可读取内容。")
+        finish_reason = extract_llm_finish_reason(body)
+        reason_suffix = f"（finish_reason={finish_reason}）" if finish_reason else ""
+        raise HTTPException(
+            status_code=502,
+            detail=f"知识库 LLM 返回了空正文{reason_suffix}，可能是推理预算耗尽或响应格式不兼容；请重试或更换模型。",
+        )
+    finish_reason = extract_llm_finish_reason(body)
+    if finish_reason == "length" and _allow_empty_retry and not require_json:
+        continuation, continuation_body = chat_knowledge_llm(
+            settings,
+            system_prompt=(
+                f"{system_prompt}\n\n"
+                "上一轮答案因长度上限被截断。请从截断处继续，只输出缺失的后续正文；"
+                "不要重复已经完成的段落，不要输出思考过程。"
+            ),
+            user_prompt=f"{user_prompt}\n\n已经输出的正文：\n---\n{content}\n---\n请继续完成答案。",
+            max_tokens=max(max_tokens, 3000),
+            temperature=temperature,
+            require_json=False,
+            _allow_empty_retry=False,
+        )
+        return merge_llm_continuation(content, continuation), continuation_body
     return content, body if isinstance(body, dict) else None
 
 
 def _extract_stream_reasoning_delta(payload: dict[str, object]) -> str:
+    payload_type = str(payload.get("type") or "")
+    if "reasoning" in payload_type or "thinking" in payload_type:
+        value = payload.get("delta") or payload.get("text") or payload.get("thinking")
+        if isinstance(value, str):
+            return value
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
     message = payload.get("message")
     if isinstance(message, dict):
         reasoning = message.get("reasoning_content")
@@ -170,15 +238,42 @@ def _extract_stream_delta(payload: dict[str, object]) -> str:
     if delta_type == "content_block_delta":
         delta = payload.get("delta")
         if isinstance(delta, dict):
+            if delta.get("type") in {"thinking_delta", "reasoning_delta"}:
+                thinking = delta.get("thinking") or delta.get("text")
+                return thinking if isinstance(thinking, str) else ""
             text = delta.get("text")
             if isinstance(text, str):
                 return text
     if delta_type == "content_block_start":
         content_block = payload.get("content_block")
         if isinstance(content_block, dict):
+            if content_block.get("type") in {"thinking", "reasoning"}:
+                thinking = content_block.get("thinking") or content_block.get("text")
+                return thinking if isinstance(thinking, str) else ""
             text = content_block.get("text")
             if isinstance(text, str):
                 return text
+
+    if delta_type in {"response.output_text.delta", "output_text.delta"}:
+        delta = payload.get("delta")
+        return delta if isinstance(delta, str) else ""
+
+    output = payload.get("output")
+    if isinstance(output, list):
+        text_parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in {"output_text", "text"}:
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        text_parts.append(text)
+        if text_parts:
+            return "".join(text_parts)
 
     message = payload.get("message")
     if isinstance(message, dict):
@@ -215,6 +310,16 @@ def _extract_stream_delta(payload: dict[str, object]) -> str:
     return ""
 
 
+def _extract_stream_finish_reason(payload: dict[str, object]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        value = choices[0].get("finish_reason")
+        if isinstance(value, str):
+            return value
+    value = payload.get("finish_reason")
+    return value if isinstance(value, str) else ""
+
+
 def stream_knowledge_llm(
     settings: ServiceSettings,
     *,
@@ -245,6 +350,8 @@ def stream_knowledge_llm(
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
+        payload["thinking"] = {"type": "disabled"}
     request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)
     request_payload = build_anthropic_messages_payload(payload) if use_anthropic else payload
     should_stop = should_cancel or (lambda: False)
@@ -255,6 +362,7 @@ def stream_knowledge_llm(
     first_activity_logged = False
     delta_count = 0
     reasoning_delta_count = 0
+    stream_finish_reason = ""
     logger.info("knowledge llm request start mode=stream base_url=%s model=%s max_tokens=%s", base_url, model, max_tokens)
     try:
         with httpx.Client(timeout=KNOWLEDGE_LLM_STREAM_TIMEOUT, follow_redirects=True) as client:
@@ -319,6 +427,10 @@ def stream_knowledge_llm(
                             elapsed_ms = int((time.monotonic() - started_at) * 1000)
                             logger.info("knowledge llm first stream delta model=%s elapsed_ms=%s", model, elapsed_ms)
                         yield KnowledgeLlmStreamEvent(kind="content", delta=delta)
+                    finish_reason = _extract_stream_finish_reason(body)
+                    if finish_reason:
+                        stream_finish_reason = finish_reason
+                        yield KnowledgeLlmStreamEvent(kind="finish", delta=finish_reason)
     except httpx.ReadTimeout as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.warning(
@@ -339,11 +451,12 @@ def stream_knowledge_llm(
     finally:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
-            "knowledge llm stream finished model=%s elapsed_ms=%s delta_count=%s reasoning_delta_count=%s",
+            "knowledge llm stream finished model=%s elapsed_ms=%s delta_count=%s reasoning_delta_count=%s finish_reason=%s",
             model,
             elapsed_ms,
             delta_count,
             reasoning_delta_count,
+            stream_finish_reason or "unknown",
         )
 
 

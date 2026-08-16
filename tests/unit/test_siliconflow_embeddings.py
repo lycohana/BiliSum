@@ -1,5 +1,6 @@
 """Tests for SiliconFlow embeddings integration."""
 from unittest.mock import Mock, patch
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -73,14 +74,19 @@ def test_siliconflow_http_error(mock_settings, mock_repository):
     service = KnowledgeIndexService(mock_repository, mock_settings)
 
     with patch("httpx.Client") as mock_client:
-        mock_response = Mock()
-        mock_response.status_code = 401
-        mock_client.return_value.__enter__.return_value.post.side_effect = Exception("HTTP error")
+        request = httpx.Request("POST", "https://api.siliconflow.cn/v1/embeddings")
+        mock_response = httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "Input length 681 exceeds 512 tokens"}},
+        )
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
         with pytest.raises(HTTPException) as exc_info:
             service._embed_texts_siliconflow(["test"])
 
-        assert exc_info.value.status_code == 500
+        assert exc_info.value.status_code == 502
+        assert "Input length 681 exceeds 512 tokens" in exc_info.value.detail
 
 
 def test_siliconflow_empty_response(mock_settings, mock_repository):
@@ -96,5 +102,32 @@ def test_siliconflow_empty_response(mock_settings, mock_repository):
         with pytest.raises(HTTPException) as exc_info:
             service._embed_texts_siliconflow(["test"])
 
-        assert exc_info.value.status_code == 500
-        assert "返回数据为空" in exc_info.value.detail
+        assert exc_info.value.status_code == 502
+        assert "返回向量数量不匹配" in exc_info.value.detail
+
+
+def test_siliconflow_shortens_bge_inputs_and_batches(mock_settings, mock_repository):
+    service = KnowledgeIndexService(mock_repository, mock_settings)
+    posted_batches: list[list[str]] = []
+
+    def fake_post(*_args, **kwargs):
+        batch = kwargs["json"]["input"]
+        posted_batches.append(batch)
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": [
+                {"index": index, "embedding": [float(index), 1.0]}
+                for index, _text in enumerate(batch)
+            ]
+        }
+        return response
+
+    with patch("httpx.Client") as mock_client:
+        mock_client.return_value.__enter__.return_value.post.side_effect = fake_post
+        embeddings = service._embed_texts_siliconflow(["中" * 900, *[f"text-{index}" for index in range(16)]])
+
+    assert len(posted_batches) == 2
+    assert len(posted_batches[0]) == 16
+    assert len(posted_batches[0][0]) == 400
+    assert len(embeddings) == 17
