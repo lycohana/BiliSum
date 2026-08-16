@@ -2461,9 +2461,11 @@ export function SettingsPage({
                     <span className="overview-info-value">{environment?.ytDlpVersion || "-"}</span>
                   </div>
                   <div className="overview-info-item">
-                    <span className="overview-info-label">{form.transcription_provider === "funasr" ? "FunASR" : "Whisper"}</span>
-                    <span className={`overview-info-value ${environment?.localAsrInstalled ? "text-success" : ""}`}>
-                      {environment?.localAsrInstalled ? environment?.localAsrVersion || "已安装" : "未安装"}
+                    <span className="overview-info-label">{usesFunAsr ? "FunASR" : "Whisper"}</span>
+                    <span className={`overview-info-value ${usesFunAsr ? (environment?.funasrInstalled ? "text-success" : "") : (environment?.localAsrInstalled ? "text-success" : "")}`}>
+                      {usesFunAsr
+                        ? (environment?.funasrInstalled ? environment?.funasrVersion || "已安装" : "未安装")
+                        : (environment?.localAsrInstalled ? environment?.localAsrVersion || "已安装" : "未安装")}
                     </span>
                   </div>
                   <div className="overview-info-item">
