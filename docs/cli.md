@@ -60,7 +60,8 @@ bilisum summarize --help
 | `bilisum status <task-id> [--json]` | 查询任务状态 / 进度 |
 | `bilisum tasks [--limit N] [--json]` | 列出任务 |
 | `bilisum env` | 环境状态 |
-| `bilisum env use desktop\|cli\|custom` | 切换环境（写入 `~/.bilisum/config.json`） |
+| `bilisum env use desktop\|cli\|custom\|auto` | 切换环境（写入 `~/.bilisum/config.json`） |
+| `bilisum desktop\|cli\|custom\|auto` | 上述环境切换的快捷写法 |
 | `bilisum env setup` | 初始化 CLI 独立环境（建 venv + 装依赖） |
 | `bilisum --setting` | 打开当前环境的网页设置页 |
 | `bilisum start [--no-open]` | 前台启动服务 |
@@ -80,12 +81,13 @@ CLI 支持四种环境，决定**连接哪个服务、用哪套数据与配置**
 | `custom` | 任意 host / port / token（Docker、远程等） | 自定 | CLI_HOME |
 | `auto` | **默认**：探测桌面端服务，有则用 desktop，否则用 cli | 自动 | 随环境 |
 
-选择优先级：`--host/--port` 显式指定（视为 custom）> `--environment <name>` 单次覆盖 > `config.json` 持久化选择（`bilisum env use`）> auto。
+选择优先级：`--host/--port` 显式指定（视为 custom）> `--environment <name>` 单次覆盖 > `config.json` 持久化选择（`bilisum env use`）> auto。显式传入 `--environment auto` 会忽略持久化选择并重新探测；也可执行 `bilisum env use auto`（或 `bilisum auto`）持久恢复自动模式。
 
 ```bash
 bilisum env                          # 查看当前环境与各环境状态
 bilisum env use cli                  # 固定使用独立环境
 bilisum env use desktop              # 固定使用桌面端
+bilisum auto                         # 恢复自动选择（快捷写法）
 bilisum summarize <url> --environment cli   # 单次使用 cli 环境
 bilisum summarize <url> --host 127.0.0.1 --port 3838 --token xxx  # 自定义连接
 ```
@@ -150,6 +152,7 @@ bilisum --setting          # 打开当前环境的设置页
 `summarize / brief / transcribe / status / tasks / --setting` 会先探活当前环境：
 - **desktop**：`127.0.0.1:3838` 无服务时，用桌面端数据目录自动后台拉起（优先桌面端托管 Python 运行时，其次系统 Python 3.12）。
 - **cli**：用 CLI 自己的 venv（未初始化时提示 `bilisum env setup`）在 `127.0.0.1:3839` 拉起。
+- **custom**：只连接指定服务；不可达时直接报告连接配置，不会在本机误拉起替代服务。
 
 CLI 拉起的服务进程记录在 `{数据根}\cli-runtime-<port>.json`，日志在 `{数据根}\cli-service-<port>.log`。
 

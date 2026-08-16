@@ -73,6 +73,8 @@ test("parseTaskCommandArgs: --idle-timeout", () => {
 test("parseTaskCommandArgs: --environment", () => {
   const { options } = parseTaskCommandArgs(["url", "--environment", "cli"]);
   assert.equal(options.environment, "cli");
+  const { options: normalized } = parseTaskCommandArgs(["url", "--environment", "AUTO"]);
+  assert.equal(normalized.environment, "auto");
   assert.throws(() => parseTaskCommandArgs(["url", "--environment", "nope"]), UsageError);
   const { options: none } = parseTaskCommandArgs(["url"]);
   assert.equal(none.environment, "");

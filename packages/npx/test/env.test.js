@@ -113,6 +113,25 @@ test("resolveEnvironment: auto probes desktop first", async () => {
   });
 });
 
+test("resolveEnvironment: explicit auto overrides persisted environment", async () => {
+  await withCliHome(async () => {
+    writeConfig({ env: "cli" });
+    const target = await resolveEnvironment({
+      environment: "auto",
+      _desktopProbe: async () => true,
+    });
+    assert.equal(target.env, "desktop");
+    assert.equal(target.port, "3838");
+  });
+});
+
+test("resolveEnvironment: invalid explicit environment is rejected", async () => {
+  await withCliHome(async () => {
+    writeConfig({ env: "cli" });
+    await assert.rejects(resolveEnvironment({ environment: "invalid" }), /未知环境/);
+  });
+});
+
 test("resolveEnvironment: custom reads config.custom", async () => {
   await withCliHome(async () => {
     writeConfig({ env: "custom", custom: { host: "10.1.2.3", port: "9000", token: "tok" } });

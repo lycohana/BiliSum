@@ -13,8 +13,8 @@
  * - auto (default): probe 127.0.0.1:3838 — reachable => desktop, else cli.
  *
  * Selection precedence:
- * 1. --environment desktop|cli|custom (one-shot override)
- * 2. explicit --host/--port (treated as a custom target)
+ * 1. explicit --host/--port (treated as a custom target)
+ * 2. --environment desktop|cli|custom|auto (one-shot override)
  * 3. config.env persisted by `bilisum env use <name>`
  * 4. auto
  */
@@ -74,20 +74,29 @@ async function resolveEnvironment(options = {}) {
   const config = readConfig();
   const explicitHost = Boolean(options._hostSet);
   const explicitPort = Boolean(options._portSet);
-  const flag = normalizeEnvName(options.environment);
+  const rawFlag = String(options.environment || "").trim();
+  const flag = normalizeEnvName(rawFlag);
 
-  let env;
+  if (rawFlag && !flag) {
+    throw new Error(`未知环境：${rawFlag}。可选值：${ENV_NAMES.join(" / ")}`);
+  }
+
+  let requestedEnv;
   if (explicitHost || explicitPort) {
     // Explicit connection target always wins (custom).
-    env = "custom";
-  } else if (flag && flag !== "auto") {
-    env = flag;
+    requestedEnv = "custom";
+  } else if (flag) {
+    // An explicit `auto` is a real one-shot override. It must not fall back to
+    // a persisted desktop/cli/custom selection.
+    requestedEnv = flag;
   } else {
-    env = currentEnvName(config);
-    if (env === "auto") {
-      const probe = options._desktopProbe || isDesktopReachable;
-      env = (await probe()) ? "desktop" : "cli";
-    }
+    requestedEnv = currentEnvName(config);
+  }
+
+  let env = requestedEnv;
+  if (env === "auto") {
+    const probe = options._desktopProbe || isDesktopReachable;
+    env = (await probe()) ? "desktop" : "cli";
   }
 
   let host;

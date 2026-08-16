@@ -143,12 +143,14 @@ CLI（`bilisum`）不读 `.env`，使用 `BILISUM_*` 环境变量，详见 [CLI 
 
 ### CLI 环境与 config.json
 
-CLI 支持四种环境（`bilisum env` 查看 / `bilisum env use <name>` 切换）：
+CLI 支持四种环境（`bilisum env` 查看 / `bilisum env use <name>` 切换，也可直接执行 `bilisum <name>`）：
 
 - `desktop`：连接桌面端服务（127.0.0.1:3838，桌面端数据根与 token）
 - `cli`：独立环境（默认 127.0.0.1:3839，数据根 = `BILISUM_CLI_HOME`，自带 venv 与设置页，无需桌面端）
 - `custom`：任意 host/port/token（Docker、远程）
 - `auto`（默认）：桌面端可达则 desktop，否则 cli
+
+`bilisum env use auto`（或 `bilisum auto`）可清除固定环境的效果、恢复自动选择；单次使用 `--environment auto` 时也会忽略持久化选择并重新探测。
 
 选择持久化在 `CLI_HOME/config.json`：
 

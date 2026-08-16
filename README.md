@@ -245,7 +245,7 @@ bilisum --setting          # 打开网页设置，填入 LLM / ASR Key
 bilisum summarize "https://www.bilibili.com/video/BV1xxxx"
 ```
 
-服务未运行时命令会自动拉起，空闲 10 分钟（可配 `--idle-timeout`）自动关闭。完整用法见 [CLI 使用指南](docs/cli.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
+desktop / cli 本地环境的服务未运行时命令会自动拉起，空闲 10 分钟（可配 `--idle-timeout`）自动关闭；custom 环境只连接指定服务。可用 `bilisum desktop|cli|custom|auto` 快捷切换环境。完整用法见 [CLI 使用指南](docs/cli.md)。桌面版安装包内也内置了 CLI（`resources/cli`）。
 
 ### 从旧版迁移
 
