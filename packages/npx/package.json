@@ -9,6 +9,7 @@
     "bin",
     "lib",
     "runtime",
+    "skill",
     "README.md"
   ],
   "scripts": {

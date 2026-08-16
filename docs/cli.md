@@ -15,6 +15,26 @@ npm 包内**内置 Python 运行时源码**（首次使用时本地构建独立 
 
 > 桌面版 BiliSum 安装包内也内置了 CLI（`resources/cli`）：`node "<安装目录>\resources\cli\bin\bilisum.js" ...`
 
+## Agent 视频理解 Skill
+
+BiliSum npm 包包含一个可供 Codex、Claude、Cursor 等 Agent 使用的 `bilisum-video-understanding` skill。推荐使用通用 skills CLI 安装：
+
+```bash
+npx skills add https://github.com/lycohana/BiliSum --skill bilisum-video-understanding
+```
+
+也可以使用 BiliSum CLI 自带的安装器：
+
+```bash
+bilisum skill install                         # TTY 中选择安装位置
+bilisum skill install --project               # 当前项目 .agents/skills/
+bilisum skill install --global                # $CODEX_HOME/skills/ 或 ~/.codex/skills/
+bilisum skill install --path ./agent-skills/bilisum-video-understanding
+bilisum skill path                            # 查看 bundled skill 路径
+```
+
+TTY 外执行不带目标参数的 `bilisum skill install` 只预览路径，不写入文件；已有目录需要更新时加 `--force`。Skill 会根据请求选择完整摘要、快速摘要、转写或任务状态查询，并使用 `--format json --quiet` 读取结构化结果。
+
 ## 纯 CLI 首次使用（未安装桌面端）
 
 ```bash
@@ -67,6 +87,7 @@ bilisum summarize --help
 | `bilisum start [--no-open]` | 前台启动服务 |
 | `bilisum stop` | 停止 CLI 后台拉起的服务 |
 | `bilisum doctor` | 检查环境 / 服务 / Python / 令牌状态 |
+| `bilisum skill [path\|install]` | 查看、导出或安装 Agent 视频理解 skill |
 | `bilisum --version` | 打印版本 |
 | `bilisum release` | 打开最新 GitHub Release |
 
