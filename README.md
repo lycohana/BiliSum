@@ -2,10 +2,6 @@
 
 ![BiliSum Banner](docs/pic/banner.svg)
 
-**AI 视频总结与知识库工具**
-
-把 B 站、YouTube 和本地视频，沉淀成可检索、可追问、可导出的知识笔记。
-
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)](#)
