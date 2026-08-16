@@ -88,6 +88,25 @@ npm install -g bilisum          # 或 npx bilisum ...
 
 包内包含构建独立环境所需的 Python 源码；首次执行 `bilisum env setup` 仍要求系统已有 Python 3.12。
 
+## Agent 视频理解 Skill
+
+安装 CLI 后，可以把随包提供的 `bilisum-video-understanding` skill 安装给 Agent：
+
+```bash
+# 从 GitHub 安装到当前项目或指定 Agent
+npx skills add https://github.com/lycohana/BiliSum --skill bilisum-video-understanding
+
+# 使用 BiliSum CLI 自带的交互式安装器
+bilisum skill install
+
+# 非交互环境下显式指定目标
+bilisum skill install --project
+bilisum skill install --global
+bilisum skill install --path ./agent-skills/bilisum-video-understanding
+```
+
+`bilisum skill install` 在终端中会让你选择当前项目、Codex 全局目录或自定义目录；被 Agent/CI 调用且未指定目标时只打印路径，不会写入文件。已有 skill 需要更新时加 `--force`。安装后，Agent 可以根据用户请求调用 `summarize`、`brief`、`transcribe` 和 `status` 理解视频。
+
 ## 常用选项
 
 | 选项 | 说明 |

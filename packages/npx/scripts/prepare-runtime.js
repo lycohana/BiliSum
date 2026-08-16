@@ -4,6 +4,7 @@ const { basename, join, resolve } = require("node:path");
 const packageRoot = resolve(__dirname, "..");
 const repoRoot = resolve(packageRoot, "..", "..");
 const runtimeRoot = join(packageRoot, "runtime");
+const skillRoot = join(packageRoot, "skill");
 
 function copyDir(from, to) {
   if (!existsSync(from)) {
@@ -58,13 +59,21 @@ function copyWebStatic() {
   }
 }
 
+function copyAgentSkill() {
+  const source = join(repoRoot, ".agents", "skills", "bilisum-video-understanding");
+  const target = join(skillRoot, "bilisum-video-understanding");
+  copyDir(source, target);
+}
+
 rmSync(runtimeRoot, { recursive: true, force: true });
+rmSync(skillRoot, { recursive: true, force: true });
 mkdirSync(runtimeRoot, { recursive: true });
 
 copyPackage(join("packages", "infra"));
 copyPackage(join("packages", "core"));
 copyPackage(join("apps", "service"));
 copyWebStatic();
+copyAgentSkill();
 if (existsSync(join(repoRoot, "VERSION"))) {
   copyFileSync(join(repoRoot, "VERSION"), join(runtimeRoot, "VERSION"));
 }

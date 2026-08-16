@@ -163,6 +163,25 @@ function runtimeSourceDir() {
   return packagedRoot;
 }
 
+/**
+ * Resolve the installable Agent Skill from the published package or the
+ * repository checkout used during development.
+ */
+function skillSourceDir() {
+  const packagedSkill = join(PACKAGE_ROOT, "skill", "bilisum-video-understanding");
+  if (existsSync(join(packagedSkill, "SKILL.md"))) {
+    return packagedSkill;
+  }
+
+  const repositoryRoot = resolve(PACKAGE_ROOT, "..", "..");
+  const repositorySkill = join(repositoryRoot, ".agents", "skills", "bilisum-video-understanding");
+  if (existsSync(join(repositorySkill, "SKILL.md"))) {
+    return repositorySkill;
+  }
+
+  return packagedSkill;
+}
+
 /** CLI venv lives under CLI_HOME/venv. */
 function cliVenvDir() {
   return join(cliHomeDir(), "venv");
@@ -244,6 +263,7 @@ module.exports = {
   findSystemPython,
   findPython,
   runtimeSourceDir,
+  skillSourceDir,
   cliVenvDir,
   cliVenvPython,
   ensureRuntime,

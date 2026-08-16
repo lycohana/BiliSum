@@ -18,6 +18,7 @@ const {
 const { UsageError, parseTaskCommandArgs } = require("../lib/args");
 const { formatTasks, emit } = require("../lib/output");
 const { readVersion, locateBilisumDataRoot, findPython, cliHomeDir, ensureCliVenv, cliVenvPython, findSystemPython } = require("../lib/runtime");
+const { runSkillCommand } = require("../lib/skill");
 const { readToken } = require("../lib/token");
 const {
   ensureService,
@@ -56,6 +57,7 @@ function printHelp() {
   console.log("  npx bilisum start [options]                 Start the service");
   console.log("  npx bilisum stop                            Stop the CLI-started BiliSum service");
   console.log("  npx bilisum doctor                          Check environment/service/Python setup");
+  console.log("  npx bilisum skill [path|install]            Install the Agent video-understanding skill");
   console.log("  npx bilisum --version                       Print package version");
   console.log("  npx bilisum release                         Open the latest GitHub release");
   console.log("");
@@ -645,6 +647,10 @@ async function main() {
     }
     if (command === "doctor") {
       await doctor(args);
+      return;
+    }
+    if (command === "skill") {
+      await runSkillCommand(args);
       return;
     }
     if (command === "help" || command === "-h" || command === "--help") {
