@@ -3435,13 +3435,9 @@ def test_ensure_runtime_channel_repairs_broken_stdlib(monkeypatch, tmp_path: Pat
         if (runtime_root / channel / "python.exe").exists()
         else None,
     )
-    # Simulate the broken stdlib: python.exe + matching metadata exist, but the
-    # portable runtime's DLLs are empty, so the health check reports not-ready.
-    monkeypatch.setattr(
-        rs,
-        "runtime_python_stdlib_healthy",
-        lambda channel: channel != "gpu-cu128",
-    )
+    # The fake gpu runtime is a portable layout (python312._pth lists DLLs)
+    # with an EMPTY DLLs dir, so the real stdlib health check reports
+    # not-ready — python.exe + matching metadata alone must not count as ready.
     monkeypatch.setattr(rs, "_ensure_runtime_sitecustomize", lambda channel: None)
 
     replace_calls: list[str] = []

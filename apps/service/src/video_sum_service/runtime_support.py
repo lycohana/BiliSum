@@ -1255,7 +1255,7 @@ def ensure_runtime_channel(runtime_channel: str) -> Path | None:
     # as not ready so the runtime gets re-synced from base / the seed below.
     target_ready = (
         runtime_python_executable(runtime_channel) is not None
-        and runtime_python_stdlib_healthy(runtime_channel)
+        and runtime_python_stdlib_healthy(target_dir)
     )
     target_matches_base = runtime_metadata_matches_base(target_metadata, base_metadata)
     if target_ready and target_matches_base:
@@ -1410,7 +1410,7 @@ def inspect_runtime_channels() -> dict[str, object]:
         exists = runtime_dir.exists()
         ready = (
             python_executable is not None
-            and runtime_python_stdlib_healthy(runtime_channel)
+            and runtime_python_stdlib_healthy(runtime_dir)
         )
         app_version = str(metadata.get("appVersion") or "")
         layout = str(metadata.get("runtimeLayout") or "")

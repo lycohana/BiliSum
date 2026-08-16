@@ -345,46 +345,23 @@ def _portable_layout_dir(root: Path, *, with_socket: bool) -> Path:
     return runtime_dir
 
 
-def _patch_python_executable(monkeypatch, runtime_dir: Path) -> None:
-    monkeypatch.setattr(
-        runtime_module,
-        "runtime_python_executable",
-        lambda channel: runtime_dir / "python.exe",
-    )
-
-
-def test_runtime_python_stdlib_healthy_detects_missing_dlls(monkeypatch, tmp_path: Path) -> None:
+def test_runtime_python_stdlib_healthy_detects_missing_dlls(tmp_path: Path) -> None:
     runtime_dir = _portable_layout_dir(tmp_path, with_socket=False)
-    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
-    _patch_python_executable(monkeypatch, runtime_dir)
 
-    assert runtime_module.runtime_python_stdlib_healthy("base") is False
+    assert runtime_module.runtime_python_stdlib_healthy(runtime_dir) is False
 
 
-def test_runtime_python_stdlib_healthy_accepts_populated_dlls(monkeypatch, tmp_path: Path) -> None:
+def test_runtime_python_stdlib_healthy_accepts_populated_dlls(tmp_path: Path) -> None:
     runtime_dir = _portable_layout_dir(tmp_path, with_socket=True)
-    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
-    _patch_python_executable(monkeypatch, runtime_dir)
 
-    assert runtime_module.runtime_python_stdlib_healthy("base") is True
+    assert runtime_module.runtime_python_stdlib_healthy(runtime_dir) is True
 
 
-def test_runtime_stdlib_healthy_non_portable_layout(monkeypatch, tmp_path: Path) -> None:
+def test_runtime_stdlib_healthy_non_portable_layout(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime" / "base"
     runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
-    _patch_python_executable(monkeypatch, runtime_dir)
 
-    assert runtime_module.runtime_python_stdlib_healthy("base") is True
-
-
-def test_runtime_python_stdlib_healthy_false_without_python(monkeypatch, tmp_path: Path) -> None:
-    runtime_dir = tmp_path / "runtime" / "base"
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(runtime_module, "managed_runtime_dir", lambda channel: runtime_dir)
-    monkeypatch.setattr(runtime_module, "runtime_python_executable", lambda channel: None)
-
-    assert runtime_module.runtime_python_stdlib_healthy("base") is False
+    assert runtime_module.runtime_python_stdlib_healthy(runtime_dir) is True
 
 
 def test_bootstrap_base_runtime_refreshes_broken_stdlib(monkeypatch, tmp_path: Path) -> None:

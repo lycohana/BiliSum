@@ -441,8 +441,8 @@ def runtime_python_executable(runtime_channel: str) -> Path | None:
     return None
 
 
-def runtime_python_stdlib_healthy(runtime_channel: str) -> bool:
-    """Cheap health check for a managed runtime interpreter.
+def runtime_python_stdlib_healthy(runtime_dir: Path) -> bool:
+    """Cheap health check for a managed runtime interpreter directory.
 
     The portable-CPython layout keeps the stdlib C extensions (``_socket.pyd``
     etc.) in the ``DLLs`` directory listed by ``python312._pth``.  A runtime
@@ -455,11 +455,11 @@ def runtime_python_stdlib_healthy(runtime_channel: str) -> bool:
     and the ``_socket`` extension is missing from it.  Non-portable layouts
     (plain venvs, dev-mode host interpreter) keep their extension modules
     elsewhere and are always considered healthy here.
-    """
-    runtime_dir = managed_runtime_dir(runtime_channel)
-    if runtime_python_executable(runtime_channel) is None:
-        return False
 
+    Takes the concrete runtime directory (not a channel name) so callers that
+    already resolved it — and tests that build fake runtime trees — get a
+    deterministic answer.
+    """
     expects_dlls = False
     pth_file = runtime_dir / "python312._pth"
     if pth_file.exists():
@@ -662,7 +662,7 @@ def bootstrap_managed_runtime(runtime_channel: str = "base") -> Path | None:
     runtime_metadata = read_runtime_metadata(runtime_dir)
     runtime_ready = (
         runtime_python_executable(runtime_channel) is not None
-        and runtime_python_stdlib_healthy(runtime_channel)
+        and runtime_python_stdlib_healthy(runtime_dir)
     )
     seed_version = str(seed_metadata.get("appVersion") or "")
     runtime_version = str(runtime_metadata.get("appVersion") or "")
