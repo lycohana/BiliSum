@@ -93,6 +93,13 @@ _RUNTIME_ROOT_STALE_FILES: frozenset[str] = frozenset({"pyvenv.cfg"})
 _RUNTIME_REQUIREMENT_NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)")
 _RUNTIME_CHANNEL_PATTERN = re.compile(r"^(base|gpu-cu\d+)$")
 _TORCH_FAMILY_PACKAGES: tuple[str, ...] = ("torch", "torchvision", "torchaudio")
+_PIP_REDIRECT_ENV_KEYS: tuple[str, ...] = (
+    "PIP_TARGET",
+    "PIP_PREFIX",
+    "PIP_USER",
+    "PYTHONUSERBASE",
+    "PIP_CONFIG_FILE",
+)
 
 
 def _knowledge_dependency_probe_fields(package: str) -> tuple[str, str, str]:
@@ -258,7 +265,13 @@ def windows_hidden_subprocess_kwargs() -> dict[str, object]:
 
 def runtime_subprocess_env(runtime_channel: str) -> dict[str, str]:
     env = dict(os.environ)
-    for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+    for key in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "__PYVENV_LAUNCHER__",
+        *_PIP_REDIRECT_ENV_KEYS,
+    ):
         env.pop(key, None)
     temp_dir = settings_manager.current.cache_dir / "runtime-temp" / runtime_channel
     try:
@@ -338,7 +351,13 @@ def run_command(command: list[str], runtime_channel: str, timeout: int = 3600) -
 
 def run_host_command(command: list[str], timeout: int = 3600) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
-    for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+    for key in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "__PYVENV_LAUNCHER__",
+        *_PIP_REDIRECT_ENV_KEYS,
+    ):
         env.pop(key, None)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -951,6 +970,7 @@ def pip_install_with_fallbacks(
             str(python_executable),
             "-m",
             "pip",
+            "--isolated",
             "install",
             "--disable-pip-version-check",
             "--upgrade",
@@ -998,6 +1018,53 @@ def pip_install_with_fallbacks(
             attempts.append((label, exc))
 
     raise HTTPException(status_code=500, detail=pip_install_error_detail(package_label, attempts))
+
+
+def _ensure_runtime_install_target(runtime_channel: str) -> Path:
+    """Return a writable, managed target for packages installed into a frozen runtime.
+
+    Relocatable Python distributions can retain the build-time ``sys.prefix`` or
+    ``purelib`` path (for example ``/install`` on macOS).  Allowing pip to use
+    that implicit path makes an otherwise healthy dependency download fail with
+    ``OSError: [Errno 30] Read-only file system``.  Keep installation scoped to
+    the user-writable managed runtime and fail before pip starts if it cannot be
+    written, so the UI reports the real repair path.
+    """
+    target = _assert_path_within_managed_runtime_root(
+        runtime_site_packages_dir(runtime_channel), field_name="runtime install target"
+    )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=".bilisum-install-write-test-",
+            dir=target,
+            delete=True,
+        ) as probe:
+            probe.write("ok")
+            probe.flush()
+    except OSError as exc:
+        logger.error(
+            "runtime dependency install target is not writable runtime_channel=%s target=%s error=%s",
+            _sanitize_for_log(runtime_channel),
+            _sanitize_for_log(str(target)),
+            _sanitize_for_log(str(exc)),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"知识库依赖安装目录不可写：{target}。"
+                "请检查应用数据目录权限，或同步/重建当前运行环境后重试。"
+                f" 原因：{exc}"
+            ),
+        ) from exc
+    logger.info(
+        "runtime dependency install target prepared runtime_channel=%s target=%s",
+        _sanitize_for_log(runtime_channel),
+        _sanitize_for_log(str(target)),
+    )
+    return target
 
 
 def _run_pip_install(
@@ -2332,7 +2399,13 @@ def install_local_asr(reinstall: bool, repository: SqliteTaskRepository, *, sess
         start_install_session(session_id, "本地 ASR")
     if use_streaming and use_current_python:
         host_env = dict(os.environ)
-        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+        for key in (
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONEXECUTABLE",
+            "__PYVENV_LAUNCHER__",
+            *_PIP_REDIRECT_ENV_KEYS,
+        ):
             host_env.pop(key, None)
         host_env["PYTHONIOENCODING"] = "utf-8"
         host_env["PYTHONUTF8"] = "1"
@@ -2454,7 +2527,13 @@ def install_funasr(reinstall: bool, repository: SqliteTaskRepository, *, session
         start_install_session(session_id, "FunASR")
     if use_streaming and use_current_python:
         host_env = dict(os.environ)
-        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+        for key in (
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONEXECUTABLE",
+            "__PYVENV_LAUNCHER__",
+            *_PIP_REDIRECT_ENV_KEYS,
+        ):
             host_env.pop(key, None)
         host_env["PYTHONIOENCODING"] = "utf-8"
         host_env["PYTHONUTF8"] = "1"
@@ -2614,12 +2693,26 @@ def install_knowledge_dependencies(
     if runtime_dir is None or python_executable is None:
         raise HTTPException(status_code=500, detail="Managed runtime is unavailable.")
 
+    # Never let a frozen/portable interpreter select its build-time pip target
+    # (commonly /install on macOS). The service imports dependencies from this
+    # exact directory, so the first install must use it instead of waiting for
+    # a post-install fallback that is never reached when pip hits errno 30.
+    install_target = None if use_current_python else _ensure_runtime_install_target(runtime_channel)
+
     use_streaming = session_id is not None
     if use_streaming:
         start_install_session(session_id, "知识库依赖")
+        if install_target is not None:
+            append_install_log(session_id, f"[知识库] pip 安装目标：{install_target}\n")
     if use_streaming and use_current_python:
         host_env = dict(os.environ)
-        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+        for key in (
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONEXECUTABLE",
+            "__PYVENV_LAUNCHER__",
+            *_PIP_REDIRECT_ENV_KEYS,
+        ):
             host_env.pop(key, None)
         host_env["PYTHONIOENCODING"] = "utf-8"
         host_env["PYTHONUTF8"] = "1"
@@ -2747,6 +2840,7 @@ def install_knowledge_dependencies(
             reinstall=reinstall or repair_reinstall,
             timeout=1800,
             runner=pip_runner,
+            install_target=install_target,
         )
     except subprocess.CalledProcessError as exc:
         if isinstance(pip_runner, _StreamingRunner):
@@ -2794,7 +2888,7 @@ def install_knowledge_dependencies(
                 reinstall=False,
                 timeout=1800,
                 runner=pip_runner,
-                install_target=runtime_site_packages_dir(runtime_channel),
+                install_target=install_target,
             )
         except subprocess.CalledProcessError as exc:
             if isinstance(pip_runner, _StreamingRunner):
