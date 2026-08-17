@@ -248,10 +248,19 @@ def test_runtime_subprocess_env_disables_user_site(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(runtime_support, "runtime_pythonpath_dirs", lambda channel: [])
     monkeypatch.setattr(runtime_support, "ffmpeg_location", lambda: None)
     monkeypatch.setattr(runtime_support, "is_frozen", lambda: False)
+    for key in (
+        "PIP_TARGET",
+        "PIP_PREFIX",
+        "PIP_USER",
+        "PYTHONUSERBASE",
+        "PIP_CONFIG_FILE",
+    ):
+        monkeypatch.setenv(key, "/install")
 
     env = runtime_support.runtime_subprocess_env("base")
 
     assert env.get("PYTHONNOUSERSITE") == "1"
+    assert all(key not in env for key in runtime_support._PIP_REDIRECT_ENV_KEYS)
 
 
 def test_pip_install_with_fallbacks_supports_install_target(monkeypatch, tmp_path: Path) -> None:
@@ -276,17 +285,38 @@ def test_pip_install_with_fallbacks_supports_install_target(monkeypatch, tmp_pat
     )
 
     assert captured
+    assert "--isolated" in captured[0]
     assert "--target" in captured[0]
     assert str(install_target) in captured[0]
     assert "chromadb>=1.0.0" in captured[0]
 
 
-def test_install_knowledge_dependencies_does_not_trust_probe_alone(
+def test_runtime_install_target_reports_read_only_runtime(monkeypatch, tmp_path: Path) -> None:
+    """A read-only managed target must produce a path-specific repair error."""
+    target = tmp_path / "runtime" / "base" / "lib" / "python3.12" / "site-packages"
+    monkeypatch.setattr(runtime_support, "managed_runtime_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(runtime_support, "runtime_site_packages_dir", lambda channel: target)
+
+    def fail_write(*args, **kwargs):
+        raise OSError(30, "Read-only file system", str(target))
+
+    monkeypatch.setattr(runtime_support.tempfile, "NamedTemporaryFile", fail_write)
+
+    with pytest.raises(runtime_support.HTTPException, match="知识库依赖安装目录不可写") as exc_info:
+        runtime_support._ensure_runtime_install_target("base")
+
+    assert "Read-only file system" in str(exc_info.value.detail)
+
+
+def test_install_knowledge_dependencies_targets_managed_site_packages_on_first_attempt(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """When the probe reports ready but the package is absent from the runtime
-    site-packages, the install must proceed and force the package into the
-    directory the index service actually imports from (issue #97)."""
+    """A portable runtime must not let pip fall back to its build-time /install.
+
+    The first install is explicitly targeted at the managed site-packages
+    directory, so a read-only default prefix cannot abort the request before
+    the old post-install fallback is reached (issue #97).
+    """
     runtime_dir = tmp_path / "runtime" / "base"
     runtime_dir.mkdir(parents=True)
     python_exe = runtime_dir / "python.exe"
@@ -327,14 +357,15 @@ def test_install_knowledge_dependencies_does_not_trust_probe_alone(
     monkeypatch.setattr(runtime_support, "ensure_runtime_channel", lambda channel: runtime_dir)
     monkeypatch.setattr(runtime_support, "runtime_python_executable", lambda channel: python_exe)
     monkeypatch.setattr(runtime_support, "runtime_site_packages_dir", lambda channel: site_packages)
+    monkeypatch.setattr(runtime_support, "managed_runtime_root", lambda: tmp_path / "runtime")
     monkeypatch.setattr(runtime_support, "detect_environment", lambda channel: dict(ready_env))
     monkeypatch.setattr(
         runtime_support,
         "apply_knowledge_dependency_policy",
         lambda env, provider=None: env,
     )
-    # First probe-time check and post-install check report chromadb missing from
-    # the runtime site-packages; the --target fallback then puts it there.
+    # The explicit first install target puts chromadb in the directory the
+    # service imports from; no second attempt should be necessary.
     monkeypatch.setattr(
         runtime_support,
         "packages_missing_from_site_packages",
@@ -369,11 +400,9 @@ def test_install_knowledge_dependencies_does_not_trust_probe_alone(
         reinstall=False, repository=repository
     )
 
-    # Install must NOT early-return just because the probe said "ready".
-    assert len(pip_calls) == 2
-    assert pip_calls[0].get("install_target") is None  # regular pip install first
-    assert pip_calls[1].get("install_target") == site_packages  # --target fallback
+    # Install must NOT early-return just because the probe said "ready", and
+    # it must target the managed directory on the first attempt.
+    assert len(pip_calls) == 1
+    assert pip_calls[0].get("install_target") == site_packages
     assert result["installed"] is True
     assert worker is None
-
-
