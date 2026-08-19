@@ -159,6 +159,16 @@ npm run dev
 
 遇到 Bug 或有想法可以开 Issue；修复、加功能或优化体验可以提交 PR。完整流程见 [贡献指南](docs/contributing.md)。
 
+## Star History
+
+<a href="https://github.com/lycohana/bilisum">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=lycohana/bilisum&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=lycohana/bilisum&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=lycohana/bilisum&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## License
 
 MIT License © 2026 Lycohana
