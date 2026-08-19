@@ -95,6 +95,8 @@ function createSettings(overrides: Partial<ServiceSettings> = {}): ServiceSettin
     knowledge_index_auto_rebuild: "disabled",
     summary_system_prompt: "",
     summary_user_prompt_template: "",
+    summary_context_mode: "auto",
+    summary_full_context_max_chars: 18000,
     knowledge_note_system_prompt: "",
     knowledge_note_user_prompt_template: "",
     visual_note_system_prompt: "",

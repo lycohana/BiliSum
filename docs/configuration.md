@@ -85,6 +85,8 @@ VIDEO_SUM_YTDLP_COOKIES_FILE=
 | `VIDEO_SUM_LLM_MODEL` | 空 | 模型名 |
 | `VIDEO_SUM_LLM_API_KEY` | 空 | API Key |
 | `VIDEO_SUM_SUMMARY_MODE` | `llm` | `llm` / `rule` / `auto` |
+| `VIDEO_SUM_SUMMARY_CONTEXT_MODE` | `auto` | `auto` / `full` / `chunked`；自动模式对短字幕整段发送，长字幕回退分块 |
+| `VIDEO_SUM_SUMMARY_FULL_CONTEXT_MAX_CHARS` | `18000` | 自动模式的整段字幕字符上限 |
 | `VIDEO_SUM_LANGUAGE` | `zh` | 输出语言 |
 | `VIDEO_SUM_SUMMARY_CHUNK_TARGET_CHARS` | `2200` | 摘要分块目标字数 |
 | `VIDEO_SUM_SUMMARY_CHUNK_OVERLAP_SEGMENTS` | `2` | 分块重叠段数 |

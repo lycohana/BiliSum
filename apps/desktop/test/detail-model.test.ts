@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildChapterGroups,
   buildKnowledgeCards,
+  buildTokenUsageMetrics,
   buildVideoPageBatchOptions,
   canExportKnowledgeNote,
   describeMindMapWorkspace,
@@ -121,6 +122,27 @@ run("marks completed tasks with knowledge notes as exportable", () => {
 
   assert.equal(canExportKnowledgeNote(exportable), true);
   assert.equal(canExportKnowledgeNote(blocked), false);
+});
+
+run("derives cache miss tokens and hit rate without turning missing fields into zero", () => {
+  const metrics = buildTokenUsageMetrics(createTaskResult({
+    llm_prompt_tokens: 1000,
+    llm_completion_tokens: 120,
+    llm_total_tokens: 1120,
+    llm_prompt_cache_hit_tokens: 640,
+    llm_prompt_cache_miss_tokens: null,
+    llm_prompt_cache_creation_tokens: 80,
+  }));
+
+  assert.equal(metrics.cacheMissTokens, 360);
+  assert.equal(metrics.cacheHitRate, 0.64);
+  assert.equal(metrics.cacheCreationTokens, 80);
+  const withBreakdown = buildTokenUsageMetrics(createTaskResult({
+    llm_usage_breakdown: [{ stage: "mindmap", total_tokens: 35, prompt_tokens: 30, cache_hit_tokens: 10 }],
+  }));
+  assert.equal(withBreakdown.breakdown[0]?.stage, "mindmap");
+  assert.equal(buildTokenUsageMetrics(createTaskResult()).cacheReported, false);
+  assert.equal(buildTokenUsageMetrics(createTaskResult()).cacheHitRate, null);
 });
 
 run("builds page batch status without counting aggregate summary tasks", () => {

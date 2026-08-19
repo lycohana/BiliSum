@@ -16,6 +16,7 @@ import {
   canExportKnowledgeNote,
   buildChapterGroups,
   buildKnowledgeCards,
+  buildTokenUsageMetrics,
   describeMindMapWorkspace,
   describeTaskContentState,
   describeUserFacingErrorMessage,
@@ -28,8 +29,9 @@ import {
   type DetailTab,
   type KnowledgeCard,
   type TaskPanelState,
+  type TokenUsageMetrics,
 } from "../detailModel";
-import type { MindMapNode, TaskDetail, TaskEvent, TaskMarkdownExportResponse, TaskMindMapResponse, TaskStatus, TaskSummary, TaskVisualEvidenceResponse, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse, VisualEvidenceFrame, VisualEvidenceObservation } from "../types";
+import type { LlmUsageRecord, MindMapNode, TaskDetail, TaskEvent, TaskMarkdownExportResponse, TaskMindMapResponse, TaskResult, TaskStatus, TaskSummary, TaskVisualEvidenceResponse, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse, VisualEvidenceFrame, VisualEvidenceObservation } from "../types";
 import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents, taskStatusLabel } from "../utils";
 import { buildPlayerEmbedDescriptor, withPlayerSeek } from "../videoPlayer";
 
@@ -121,6 +123,128 @@ type FloatingPlayerLayout = {
 };
 
 type KnowledgeNoteViewMode = "text" | "visual";
+
+type TokenUsageTooltipProps = {
+  result?: Pick<
+    TaskResult,
+    | "llm_total_tokens"
+    | "llm_prompt_tokens"
+    | "llm_completion_tokens"
+    | "llm_prompt_cache_hit_tokens"
+    | "llm_prompt_cache_miss_tokens"
+    | "llm_prompt_cache_creation_tokens"
+    | "llm_usage_breakdown"
+  > | null;
+};
+
+function formatTokenMetric(value: number | null) {
+  return value == null ? "未提供" : `${formatTokenCount(value)} tokens`;
+}
+
+function formatCacheRate(value: number | null) {
+  return value == null ? "未提供" : `${(value * 100).toFixed(1)}%`;
+}
+
+function usageStageLabel(stage?: string) {
+  const labels: Record<string, string> = {
+    summary_full: "整段摘要",
+    summary_chunk: "摘要分块",
+    summary_merge: "摘要合并",
+    aggregate_summary: "全集摘要",
+    knowledge_note: "知识笔记",
+    visual_keyframe_plan: "图文取帧规划",
+    visual_frame: "视觉帧解析",
+    visual_note_compose: "图文笔记合成",
+    mindmap: "思维导图",
+    mindmap_repair: "思维导图修复",
+  };
+  return labels[stage || ""] || stage || "LLM 请求";
+}
+
+function formatUsageBreakdown(record: LlmUsageRecord) {
+  const total = formatTokenMetric(typeof record.total_tokens === "number" ? record.total_tokens : null);
+  const prompt = formatTokenMetric(typeof record.prompt_tokens === "number" ? record.prompt_tokens : null);
+  const cache = typeof record.cache_hit_tokens === "number"
+    ? `，命中 ${formatTokenMetric(record.cache_hit_tokens)}`
+    : "";
+  return `${usageStageLabel(record.stage)}：${total}（输入 ${prompt}${cache}）`;
+}
+
+function TokenUsageTooltip({ result }: TokenUsageTooltipProps) {
+  const [visible, setVisible] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  const metrics: TokenUsageMetrics = buildTokenUsageMetrics(result);
+
+  const clearTimer = () => {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const showAfterDelay = () => {
+    clearTimer();
+    timerRef.current = window.setTimeout(() => setVisible(true), 520);
+  };
+
+  const hide = () => {
+    clearTimer();
+    setVisible(false);
+  };
+
+  useEffect(() => () => clearTimer(), []);
+
+  return (
+    <span
+      className="detail-token-usage"
+      onMouseEnter={showAfterDelay}
+      onMouseLeave={hide}
+      onFocus={showAfterDelay}
+      onBlur={hide}
+    >
+      <button
+        className="detail-token-usage-trigger"
+        type="button"
+        aria-label="查看 Token 与缓存用量"
+        aria-describedby={visible ? "detail-token-usage-tooltip" : undefined}
+      >
+        {formatTokenCount(metrics.totalTokens)} tokens
+        <span aria-hidden="true" className="detail-token-usage-icon">ⓘ</span>
+      </button>
+      {visible ? (
+        <span className="detail-token-usage-tooltip" id="detail-token-usage-tooltip" role="tooltip">
+          <strong>Token 用量（API 统计）</strong>
+          <span>总计：{formatTokenMetric(metrics.totalTokens)}</span>
+          <span>输入：{formatTokenMetric(metrics.promptTokens)}</span>
+          <span>输出：{formatTokenMetric(metrics.completionTokens)}</span>
+          <span className="detail-token-usage-divider" />
+          {metrics.cacheReported ? (
+            <>
+              <span>缓存命中：{formatTokenMetric(metrics.cacheHitTokens)}</span>
+              <span>未命中/常规输入：{formatTokenMetric(metrics.cacheMissTokens)}</span>
+              <span>缓存创建：{formatTokenMetric(metrics.cacheCreationTokens)}</span>
+              <span>缓存命中率：{formatCacheRate(metrics.cacheHitRate)}</span>
+            </>
+          ) : (
+            <span>缓存用量：当前服务商未返回缓存字段</span>
+          )}
+          {metrics.breakdown.length ? (
+            <>
+              <span className="detail-token-usage-divider" />
+              <strong>分阶段明细</strong>
+              <span className="detail-token-usage-breakdown">
+                {metrics.breakdown.map((record, index) => (
+                  <span key={`${record.stage || "llm"}-${index}`}>{formatUsageBreakdown(record)}</span>
+                ))}
+              </span>
+            </>
+          ) : null}
+          <small>总计来自各请求响应中的 usage 汇总；已包含摘要、知识笔记、独立思维导图和图文笔记请求。服务商未返回 usage 的阶段会显示“未提供”。</small>
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 const MINDMAP_ROOT_ACCENT: MindMapAccent = {
   stroke: "#4c9fdd",
@@ -2366,7 +2490,11 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                   {workspaceStatusLabel}
                 </span>
                 {selectedTaskCode ? <span>任务 {selectedTaskCode}</span> : null}
-                {selectedTaskTokenCount != null ? <span>{formatTokenCount(selectedTaskTokenCount)} tokens</span> : null}
+                {selectedTaskTokenCount != null ? (
+                  <TokenUsageTooltip
+                    result={selectedResult ?? selectedTaskDetail?.result ?? { llm_total_tokens: selectedTaskTokenCount }}
+                  />
+                ) : null}
               </div>
             </div>
 
