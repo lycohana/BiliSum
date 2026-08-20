@@ -4690,21 +4690,25 @@ P 数索引：
         usage_breakdown = self._llm_usage_records_from_payloads(llm_result)
         mindmap = self._normalize_mindmap_payload(llm_result, title=title, result=result)
         if not self._mindmap_has_minimum_branches(mindmap):
-            repair_payload = self._build_llm_mindmap_repair_payload(
-                title=title,
-                summary_json=summary_json,
-                knowledge_note_markdown=knowledge_note_markdown,
-            )
-            repair_result = self._request_llm_json(
-                base_url=base_url,
-                payload=repair_payload,
-                usage_stage="mindmap_repair",
-            )
-            usage_breakdown.extend(self._llm_usage_records_from_payloads(repair_result))
-            repaired_mindmap = self._normalize_mindmap_payload(repair_result, title=title, result=result)
-            if self._mindmap_has_minimum_branches(repaired_mindmap):
-                mindmap = repaired_mindmap
-            else:
+            try:
+                repair_payload = self._build_llm_mindmap_repair_payload(
+                    title=title,
+                    summary_json=summary_json,
+                    knowledge_note_markdown=knowledge_note_markdown,
+                )
+                repair_result = self._request_llm_json(
+                    base_url=base_url,
+                    payload=repair_payload,
+                    usage_stage="mindmap_repair",
+                )
+                usage_breakdown.extend(self._llm_usage_records_from_payloads(repair_result))
+                repaired_mindmap = self._normalize_mindmap_payload(repair_result, title=title, result=result)
+                if self._mindmap_has_minimum_branches(repaired_mindmap):
+                    mindmap = repaired_mindmap
+                else:
+                    mindmap = self._build_mindmap_fallback(title=title, result=result)
+            except Exception as exc:
+                logger.warning("mindmap repair failed; using local fallback error=%s", exc)
                 mindmap = self._build_mindmap_fallback(title=title, result=result)
         return mindmap, usage_breakdown
 

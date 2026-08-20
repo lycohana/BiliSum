@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -1653,29 +1654,58 @@ class SqliteTaskRepository:
                 )
         return self.get_task(task_id)
 
-    def save_result(self, task_id: str, result: TaskResult) -> TaskRecord | None:
-        updated_at = datetime.now(timezone.utc).isoformat()
+    def _save_result_locked(
+        self,
+        cursor: sqlite3.Cursor,
+        task_id: str,
+        result: TaskResult,
+        updated_at: str,
+    ) -> None:
         payload = json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
-        with self._lock, sqlite_cursor(self._connection) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO task_results (task_id, result_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET result_json = excluded.result_json, updated_at = excluded.updated_at
+            """,
+            (task_id, payload, updated_at),
+        )
+        cursor.execute("UPDATE tasks SET updated_at = ? WHERE task_id = ?", (updated_at, task_id))
+        row = cursor.execute("SELECT video_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if row is not None and row["video_id"]:
             cursor.execute(
                 """
-                INSERT INTO task_results (task_id, result_json, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(task_id) DO UPDATE SET result_json = excluded.result_json, updated_at = excluded.updated_at
+                UPDATE video_assets
+                SET latest_task_id = ?, updated_at = ?
+                WHERE video_id = ?
                 """,
-                (task_id, payload, updated_at),
+                (task_id, updated_at, row["video_id"]),
             )
-            cursor.execute("UPDATE tasks SET updated_at = ? WHERE task_id = ?", (updated_at, task_id))
-            row = cursor.execute("SELECT video_id FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-            if row is not None and row["video_id"]:
-                cursor.execute(
-                    """
-                    UPDATE video_assets
-                    SET latest_task_id = ?, updated_at = ?
-                    WHERE video_id = ?
-                    """,
-                    (task_id, updated_at, row["video_id"]),
-                )
+
+    def save_result(self, task_id: str, result: TaskResult) -> TaskRecord | None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            self._save_result_locked(cursor, task_id, result, updated_at)
+        return self.get_task(task_id)
+
+    def update_result(
+        self,
+        task_id: str,
+        updater: Callable[[TaskResult], TaskResult],
+    ) -> TaskRecord | None:
+        """Read, transform, and persist one task result under the repository lock."""
+
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute(
+                "SELECT result_json FROM task_results WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None or not row["result_json"]:
+                return None
+            current_result = TaskResult.model_validate(json.loads(row["result_json"]))
+            updated_result = updater(current_result)
+            self._save_result_locked(cursor, task_id, updated_result, updated_at)
         return self.get_task(task_id)
 
     def update_error(self, task_id: str, error_code: str, error_message: str) -> TaskRecord | None:

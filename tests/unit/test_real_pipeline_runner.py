@@ -195,6 +195,50 @@ def test_build_fallback_segments_from_long_comma_only_transcript_splits_into_mul
     assert "[01:" not in rendered or float(segments[-1]["end"]) <= 75.0
 
 
+def test_mindmap_uses_local_fallback_when_repair_request_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _build_runner()
+    calls: list[str] = []
+
+    def fake_request(*, usage_stage: str, **_kwargs):
+        calls.append(usage_stage)
+        if usage_stage == "mindmap":
+            return {
+                "title": "示例导图",
+                "root": "root",
+                "nodes": [
+                    {
+                        "id": "root",
+                        "label": "示例导图",
+                        "type": "root",
+                        "summary": "概览",
+                        "children": [
+                            {"id": "theme-1", "label": "单一分支", "type": "theme", "summary": "内容"}
+                        ],
+                    }
+                ],
+            }
+        raise RuntimeError("repair timeout")
+
+    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    mindmap, usage = runner._generate_mindmap_with_llm(
+        title="示例视频",
+        result=TaskResult(
+            overview="视频概览",
+            key_points=["关键点一", "关键点二"],
+            timeline=[
+                {"title": "概念", "start": 0, "summary": "概念说明"},
+                {"title": "方法", "start": 10, "summary": "方法说明"},
+                {"title": "应用", "start": 20, "summary": "应用说明"},
+            ],
+        ),
+    )
+
+    root = next(node for node in mindmap.nodes if node.id == mindmap.root)
+    assert len(root.children) >= 3
+    assert calls == ["mindmap", "mindmap_repair"]
+    assert usage == []
+
+
 def test_transcribe_uses_siliconflow_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = RealPipelineRunner(
         PipelineSettings(

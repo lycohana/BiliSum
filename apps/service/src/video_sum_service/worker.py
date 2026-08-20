@@ -446,13 +446,18 @@ class TaskWorker:
         )
         if normalized_mode == "text":
             normalized_mode = "frame_insert"
-        current_result = record.result.model_copy(
-            update={
-                "visual_note_status": "generating",
-                "visual_note_error_message": None,
-            }
+        started_record = self._repository.update_result(
+            task_id,
+            lambda existing: existing.model_copy(
+                update={
+                    "visual_note_status": "generating",
+                    "visual_note_error_message": None,
+                }
+            ),
         )
-        self._repository.save_result(task_id, current_result)
+        if started_record is None or started_record.result is None:
+            return
+        current_result = started_record.result
         self._repository.append_event(
             task_id=task_id,
             stage="visual_generating",
@@ -481,35 +486,37 @@ class TaskWorker:
                 force=force,
                 on_event=handle_visual_event,
             )
-            refreshed = self._repository.get_task(task_id)
-            if refreshed is None or refreshed.result is None:
-                return
             status_value = str(context.get("status") or "partial")
             error_message = "\n".join(str(item) for item in context.get("warnings", []) if str(item).strip()) or None
-            final_result = merge_llm_usage_records(
-                refreshed.result,
-                [item for item in context.get("llm_usage_breakdown", []) if isinstance(item, dict)],
-            ).model_copy(
-                update={
-                    "artifacts": {
-                        **refreshed.result.artifacts,
-                        "visual_enhanced_note_path": str(Path(note_path)),
-                        "visual_note_path": str(Path(note_path).parent / "visual_note.md"),
-                        "visual_context_path": str(Path(context_path)),
-                        "visual_frame_index_path": str(Path(note_path).parent / "frame_index.json"),
-                        "visual_insert_plan_path": str(Path(note_path).parent / "visual_insert_plan.json"),
-                    },
-                    "visual_note_status": status_value,
-                    "visual_note_error_message": error_message if status_value in {"failed", "partial", "unsupported"} else None,
-                    "visual_note_artifact_path": str(Path(note_path).parent / "visual_note.md"),
-                    "visual_enhanced_note_artifact_path": str(Path(note_path)),
-                    "visual_note_updated_at": datetime.now(timezone.utc),
-                    "visual_note_mode": str(context.get("mode") or normalized_mode),
-                    "visual_frame_count": int(context.get("frame_count") or 0),
-                    "visual_insert_count": int(context.get("insert_count") or 0),
-                }
+            updated_record = self._repository.update_result(
+                task_id,
+                lambda existing: merge_llm_usage_records(
+                    existing,
+                    [item for item in context.get("llm_usage_breakdown", []) if isinstance(item, dict)],
+                ).model_copy(
+                    update={
+                        "artifacts": {
+                            **existing.artifacts,
+                            "visual_enhanced_note_path": str(Path(note_path)),
+                            "visual_note_path": str(Path(note_path).parent / "visual_note.md"),
+                            "visual_context_path": str(Path(context_path)),
+                            "visual_frame_index_path": str(Path(note_path).parent / "frame_index.json"),
+                            "visual_insert_plan_path": str(Path(note_path).parent / "visual_insert_plan.json"),
+                        },
+                        "visual_note_status": status_value,
+                        "visual_note_error_message": error_message if status_value in {"failed", "partial", "unsupported"} else None,
+                        "visual_note_artifact_path": str(Path(note_path).parent / "visual_note.md"),
+                        "visual_enhanced_note_artifact_path": str(Path(note_path)),
+                        "visual_note_updated_at": datetime.now(timezone.utc),
+                        "visual_note_mode": str(context.get("mode") or normalized_mode),
+                        "visual_frame_count": int(context.get("frame_count") or 0),
+                        "visual_insert_count": int(context.get("insert_count") or 0),
+                    }
+                ),
             )
-            self._repository.save_result(task_id, final_result)
+            if updated_record is None or updated_record.result is None:
+                return
+            final_result = updated_record.result
             if status_value == "ready":
                 event_stage = "visual_completed"
                 event_message = "图文笔记生成完成"
@@ -534,17 +541,18 @@ class TaskWorker:
             )
         except Exception as exc:
             logger.exception("visual evidence generation failed task_id=%s error=%s", task_id, exc)
-            refreshed = self._repository.get_task(task_id)
-            if refreshed is None or refreshed.result is None:
-                return
-            failed_result = refreshed.result.model_copy(
-                update={
-                    "visual_note_status": "failed",
-                    "visual_note_error_message": str(exc),
-                    "visual_note_updated_at": datetime.now(timezone.utc),
-                }
+            failed_record = self._repository.update_result(
+                task_id,
+                lambda existing: existing.model_copy(
+                    update={
+                        "visual_note_status": "failed",
+                        "visual_note_error_message": str(exc),
+                        "visual_note_updated_at": datetime.now(timezone.utc),
+                    }
+                ),
             )
-            self._repository.save_result(task_id, failed_result)
+            if failed_record is None:
+                return
             self._repository.append_event(
                 task_id=task_id,
                 stage="visual_failed",
@@ -585,13 +593,18 @@ class TaskWorker:
             logger.warning("pipeline runner does not support mindmap generation task_id=%s", task_id)
             return
 
-        current_result = record.result.model_copy(
-            update={
-                "mindmap_status": "generating",
-                "mindmap_error_message": None,
-            }
+        started_record = self._repository.update_result(
+            task_id,
+            lambda existing: existing.model_copy(
+                update={
+                    "mindmap_status": "generating",
+                    "mindmap_error_message": None,
+                }
+            ),
         )
-        self._repository.save_result(task_id, current_result)
+        if started_record is None or started_record.result is None:
+            return
+        current_result = started_record.result
         self._repository.append_event(
             task_id=task_id,
             stage="mindmap_llm_request",
@@ -617,22 +630,24 @@ class TaskWorker:
                 progress=96,
                 message="正在整理导图结构并写入结果",
             )
-            refreshed = self._repository.get_task(task_id)
-            if refreshed is None or refreshed.result is None:
-                return
-            final_result = merge_llm_usage_records(
-                refreshed.result,
-                [item for item in usage_breakdown if isinstance(item, dict)],
-            ).model_copy(
-                update={
-                    "artifacts": {**refreshed.result.artifacts, "mindmap_path": str(Path(mindmap_path))},
-                    "mindmap_status": "ready",
-                    "mindmap_error_message": None,
-                    "mindmap_artifact_path": str(Path(mindmap_path)),
-                    "mindmap_updated_at": datetime.now(timezone.utc),
-                }
+            updated_record = self._repository.update_result(
+                task_id,
+                lambda existing: merge_llm_usage_records(
+                    existing,
+                    [item for item in usage_breakdown if isinstance(item, dict)],
+                ).model_copy(
+                    update={
+                        "artifacts": {**existing.artifacts, "mindmap_path": str(Path(mindmap_path))},
+                        "mindmap_status": "ready",
+                        "mindmap_error_message": None,
+                        "mindmap_artifact_path": str(Path(mindmap_path)),
+                        "mindmap_updated_at": datetime.now(timezone.utc),
+                    }
+                ),
             )
-            self._repository.save_result(task_id, final_result)
+            if updated_record is None or updated_record.result is None:
+                return
+            final_result = updated_record.result
             self._repository.append_event(
                 task_id=task_id,
                 stage="mindmap_completed",
@@ -651,16 +666,17 @@ class TaskWorker:
             )
         except Exception as exc:
             logger.exception("mindmap generation failed task_id=%s error=%s", task_id, exc)
-            refreshed = self._repository.get_task(task_id)
-            if refreshed is None or refreshed.result is None:
-                return
-            failed_result = refreshed.result.model_copy(
-                update={
-                    "mindmap_status": "failed",
-                    "mindmap_error_message": str(exc),
-                }
+            failed_record = self._repository.update_result(
+                task_id,
+                lambda existing: existing.model_copy(
+                    update={
+                        "mindmap_status": "failed",
+                        "mindmap_error_message": str(exc),
+                    }
+                ),
             )
-            self._repository.save_result(task_id, failed_result)
+            if failed_record is None:
+                return
             self._repository.append_event(
                 task_id=task_id,
                 stage="mindmap_failed",

@@ -1,7 +1,15 @@
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 from datetime import timezone
 
-from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
+from video_sum_core.models.tasks import (
+    InputType,
+    LLMUsageRecord,
+    TaskInput,
+    TaskResult,
+    TaskStatus,
+    merge_llm_usage_records,
+)
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import VideoAssetRecord
 
@@ -96,6 +104,34 @@ def test_repository_saves_result_and_events() -> None:
     assert listed[0].result.llm_total_tokens == 321
     assert len(events) == 1
     assert events[0].stage == "running"
+
+
+def test_repository_updates_result_atomically() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com"))
+    repository.save_result(record.task_id, TaskResult())
+
+    def append_usage(stage: str):
+        return repository.update_result(
+            record.task_id,
+            lambda current: merge_llm_usage_records(
+                current,
+                [LLMUsageRecord(stage=stage, total_tokens=10)],
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(append_usage, ["mindmap", "visual_note"]))
+
+    fetched = repository.get_task(record.task_id)
+    assert fetched is not None
+    assert fetched.result is not None
+    assert {item.stage for item in fetched.result.llm_usage_breakdown} == {"mindmap", "visual_note"}
+    assert fetched.result.llm_total_tokens == 20
 
 
 def test_task_summary_includes_duration_and_llm_tokens() -> None:
