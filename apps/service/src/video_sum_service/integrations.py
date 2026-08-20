@@ -330,7 +330,6 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             ],
             "temperature": 0,
             "max_tokens": 256,
-            "response_format": {"type": "json_object"},
         }
     else:
         request_payload = {
