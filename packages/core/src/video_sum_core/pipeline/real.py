@@ -2857,9 +2857,9 @@ class RealPipelineRunner(PipelineRunner):
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
 
-        # Note: response_format (json_object) intentionally omitted.
-        # Local LLM backends (Ollama, llama.cpp, vLLM, etc.) reject it with 400.
-        # The system prompt already instructs the model to output valid JSON.
+        # 说明：有意不传 response_format（json_object）
+        # 本地 LLM 后端（Ollama/llama.cpp/vLLM 等）不支持该参数，会返回 400
+        # 输出格式靠 system prompt 中"只输出合法 JSON"约束
         payload = {
             "model": self._settings.llm_model,
             "messages": [
