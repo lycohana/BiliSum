@@ -27,6 +27,9 @@ function resolveAutoDismissDuration(message: string, tone: FloatingNoticeTone, d
   if (/^正在(刷新|导出|复制|重新生成|生成|提交|拉起)|^已发起/i.test(message)) {
     return 3200;
   }
+  if (/检测到.+(合集|分 ?P).*(请先|选择)/i.test(message)) {
+    return 2800;
+  }
   if (/处理中|请先|检测到.+请先/i.test(message)) {
     return null;
   }

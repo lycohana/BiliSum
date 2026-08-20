@@ -120,6 +120,7 @@ export type VideoLibraryState = {
   videos: VideoAssetSummary[];
   folders: VideoFolder[];
   preferences: VideoLibraryPreferences;
+  collections: VideoCollection[];
 };
 
 export type VideoPageOption = {
@@ -137,6 +138,48 @@ export type VideoPageBatchOption = VideoPageOption & {
   has_completed_result?: boolean;
 };
 
+export type VideoCollectionItem = {
+  position: number;
+  bvid: string;
+  title: string;
+  source_url: string;
+  cover_url: string;
+  duration?: number | null;
+  is_current?: boolean;
+  video_id?: string | null;
+  has_result?: boolean;
+  latest_status?: TaskStatus | null;
+  is_global_visible?: boolean;
+  is_new?: boolean;
+};
+
+export type VideoCollection = {
+  collection_id: string;
+  title: string;
+  cover_url: string;
+  global_order: number;
+  folder_order?: number;
+  folder_id?: string | null;
+  folder_ids?: string[];
+  global_pinned?: boolean;
+  folder_pinned?: boolean;
+  is_favorite?: boolean;
+  favorite_updated_at?: string | null;
+  latest_video_updated_at?: string | null;
+  owner_mid?: string | null;
+  owner_name?: string | null;
+  owner_face?: string | null;
+  owner_url?: string | null;
+  item_count: number;
+  items: VideoCollectionItem[];
+  source_url?: string;
+  summarized_count?: number;
+  unsummarized_count?: number;
+  last_checked_at?: string | null;
+  auto_check_on_open?: boolean;
+  new_items?: VideoCollectionItem[];
+};
+
 export type VideoAssetDetail = VideoAssetSummary & {
   latest_result?: TaskResult | null;
   latest_error_message?: string | null;
@@ -147,6 +190,7 @@ export type VideoProbeResult = {
   cached: boolean;
   requires_selection: boolean;
   pages: VideoPageOption[];
+  collection?: VideoCollection | null;
 };
 
 export type PromptPreset = {

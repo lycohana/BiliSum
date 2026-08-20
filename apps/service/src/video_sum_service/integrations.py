@@ -3,6 +3,7 @@ import binascii
 import importlib.resources
 import io
 import json
+import logging
 import os
 from pathlib import Path
 import struct
@@ -27,6 +28,8 @@ from video_sum_infra.runtime import service_log_path
 
 from video_sum_service.context import COVER_CACHE_DIR, settings_manager
 from video_sum_service.settings_manager import SettingsUpdatePayload, is_blank_or_masked_secret
+
+logger = logging.getLogger(__name__)
 
 MAX_LOG_CHARS = 20_000
 MAX_LOG_LINE_CHARS = 1_000
@@ -134,7 +137,7 @@ def cache_cover_image(source_url: str, canonical_id: str, referer_url: str | Non
 
     # 视频封面 URL 白名单
     ALLOWED_COVER_DOMAINS = [
-        "bilibili.com", "hdslb.com", "bilivideo.com",  # B站
+        "bilibili.com", "hdslb.com", "bilivideo.com", "biliimg.com",  # B站
         "ytimg.com", "ggpht.com", "googleusercontent.com",  # YouTube
         "twimg.com",  # Twitter
     ]

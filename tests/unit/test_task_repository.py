@@ -410,3 +410,113 @@ def test_repository_initialize_adds_favorite_columns_to_legacy_database() -> Non
 
     assert "is_favorite" in columns
     assert "favorite_updated_at" in columns
+
+
+def test_repository_tracks_collection_membership_and_pending_refresh_items() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    visible = repository.upsert_video_asset(
+        VideoAssetRecord(canonical_id="BV-visible", title="外层视频", source_url="https://example.com/visible")
+    )
+    internal = repository.upsert_video_asset(
+        VideoAssetRecord(
+            canonical_id="BV-internal",
+            title="合集视频",
+            source_url="https://example.com/internal",
+            is_global_visible=False,
+        )
+    )
+    payload = {
+        "collection_id": "season-1",
+        "title": "测试合集",
+        "cover_url": "/media/covers/season-1.jpg",
+        "items": [
+            {"position": 1, "bvid": "BV-visible", "title": "外层视频", "source_url": visible.source_url},
+            {"position": 2, "bvid": "BV-internal", "title": "合集视频", "source_url": internal.source_url},
+        ],
+    }
+    collection = repository.upsert_video_collection(payload, visible.source_url)
+    assert collection.item_count == 2
+    assert len(repository.list_video_assets()) == 1
+
+    repository.initialize_video_collection_visibility("season-1")
+    assert len(repository.list_video_assets()) == 0
+    assert repository.get_video_collection("season-1").items[0].is_global_visible is False
+
+    refreshed = repository.refresh_video_collection(
+        {**payload, "items": [*payload["items"], {"position": 3, "bvid": "BV-new", "title": "新视频", "source_url": "https://example.com/new"}]},
+        visible.source_url,
+    )
+    assert [item.bvid for item in refreshed.new_items] == ["BV-new"]
+
+    repository.upsert_video_asset(
+        VideoAssetRecord(canonical_id="BV-new", title="新视频", source_url="https://example.com/new", is_global_visible=False)
+    )
+    repository.add_pending_video_collection_items("season-1", ["BV-new"])
+    assert repository.get_video_collection("season-1").item_count == 3
+
+    repository.promote_video_collection_item("season-1", internal.video_id)
+    repository.initialize_video_collection_visibility("season-1")
+    assert len(repository.list_video_assets()) == 1
+
+
+def test_repository_reorders_mixed_outer_library_items() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    first = repository.upsert_video_asset(VideoAssetRecord(canonical_id="BV-first", title="第一个", source_url="https://example.com/first"))
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-mixed",
+            "title": "混合集合",
+            "items": [],
+        },
+        "https://space.bilibili.com/1/lists/season-mixed",
+    )
+    repository.reorder_library_items([
+        ("video", first.video_id),
+        ("collection", "season-mixed"),
+    ])
+
+    videos = repository.list_video_assets()
+    collections = repository.list_video_collections()
+    assert videos[0].global_order < collections[0].global_order
+
+
+def test_repository_collection_asset_actions_and_detach_delete() -> None:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    video = repository.upsert_video_asset(
+        VideoAssetRecord(canonical_id="BV-actions", title="合集视频", source_url="https://example.com/actions", is_global_visible=False)
+    )
+    folder = repository.create_video_folder("合集归档")
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-actions",
+            "title": "可操作合集",
+            "items": [{"position": 1, "bvid": "BV-actions", "title": video.title, "source_url": video.source_url}],
+        },
+        "https://space.bilibili.com/1/lists/season-actions",
+    )
+
+    repository.set_video_collection_favorite("season-actions", True)
+    repository.set_video_collection_folders("season-actions", [folder.folder_id])
+    repository.set_video_collection_pin("season-actions", folder_pinned=True)
+    collection = repository.get_video_collection("season-actions")
+    assert collection is not None
+    assert collection.is_favorite is True
+    assert collection.folder_ids == [folder.folder_id]
+    assert collection.folder_pinned is True
+
+    assert repository.delete_video_collection("season-actions", detach_contents=True) == [video.video_id]
+    assert repository.get_video_collection("season-actions") is None
+    restored = repository.get_video_asset(video.video_id)
+    assert restored is not None and restored.is_global_visible is True

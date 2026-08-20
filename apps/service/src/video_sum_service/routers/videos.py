@@ -19,11 +19,19 @@ from video_sum_service.schemas import (
     VideoAssetDetailResponse,
     VideoAssetRecord,
     VideoAssetSummaryResponse,
+    VideoCollectionItemsRequest,
+    VideoCollectionDeleteRequest,
+    VideoCollectionFavoriteRequest,
+    VideoCollectionMoveRequest,
+    VideoCollectionPinRequest,
+    VideoCollectionSettingsRequest,
+    VideoCollectionResponse,
     VideoFolderCreateRequest,
     VideoFolderResponse,
     VideoFolderUpdateRequest,
     VideoLibraryPreferencesResponse,
     VideoLibraryPreferencesUpdateRequest,
+    VideoLibraryReorderRequest,
     VideoLibraryResponse,
     VideoMoveRequest,
     VideoPinRequest,
@@ -42,6 +50,7 @@ from video_sum_service.video_assets import (
     localize_video_cover,
     merge_video_asset_metadata,
     probe_local_video_asset,
+    fetch_bilibili_collection_payload,
     probe_video_asset,
     resolve_video_page,
 )
@@ -59,6 +68,38 @@ AGGREGATE_CHAPTER_LIMIT = 180
 AGGREGATE_NOTE_LIMIT = 360
 AGGREGATE_MAX_KEY_POINTS_PER_PAGE = 8
 AGGREGATE_MAX_CHAPTERS_PER_PAGE = 8
+
+
+def _ensure_collection_assets(
+    task_store: SqliteTaskRepository,
+    collection_payload: dict[str, object],
+    *,
+    hide_existing: bool = False,
+    existing_bvids: set[str] | None = None,
+) -> None:
+    known_bvids = existing_bvids or set()
+    raw_items = collection_payload.get("items") if isinstance(collection_payload.get("items"), list) else []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        bvid = str(raw_item.get("bvid") or "").strip()
+        if not bvid:
+            continue
+        existing = task_store.get_video_asset_by_canonical_id(bvid)
+        if existing is None:
+            task_store.upsert_video_asset(
+                VideoAssetRecord(
+                    canonical_id=bvid,
+                    platform="bilibili",
+                    title=str(raw_item.get("title") or bvid),
+                    source_url=str(raw_item.get("source_url") or f"https://www.bilibili.com/video/{bvid}/"),
+                    cover_url=str(raw_item.get("cover_url") or ""),
+                    duration=raw_item.get("duration"),
+                    is_global_visible=False,
+                )
+            )
+        elif (hide_existing or bvid not in known_bvids) and existing.is_global_visible:
+            task_store.set_video_global_visibility(existing.video_id, False)
 
 
 def _normalize_batch_page_numbers(video: VideoAssetRecord, page_numbers: list[int]) -> list[int]:
@@ -487,11 +528,28 @@ def probe_video(request: VideoProbeRequest, app_request: Request) -> VideoProbeR
     cached = existing is not None and not request.force_refresh
     asset = existing if cached else task_store.upsert_video_asset(merge_video_asset_metadata(existing, probed) if existing else probed)
     asset = localize_video_cover(task_store, asset)
+    collection = None
+    if str(asset.platform or "").lower() == "bilibili":
+        collection_payload = fetch_bilibili_collection_payload(request.url)
+        if collection_payload:
+            collection_id = str(collection_payload.get("collection_id") or "")
+            existing_collection = task_store.get_video_collection(collection_id) if collection_id else None
+            existing_bvids = {item.bvid for item in existing_collection.items} if existing_collection else set()
+            _ensure_collection_assets(
+                task_store,
+                collection_payload,
+                hide_existing=existing_collection is None,
+                existing_bvids=existing_bvids,
+            )
+            collection = task_store.upsert_video_collection(collection_payload, request.url)
+            task_store.initialize_video_collection_visibility(collection_id)
+            collection = task_store.get_video_collection(collection_id) or collection
     return VideoProbeResponse(
         video=asset.to_summary(),
         cached=cached,
         requires_selection=requires_selection,
         pages=asset.pages or pages,
+        collection=collection,
     )
 
 
@@ -550,11 +608,173 @@ def list_videos(request: Request) -> list[VideoAssetSummaryResponse]:
 @router.get("/library", response_model=VideoLibraryResponse)
 def get_video_library(request: Request) -> VideoLibraryResponse:
     task_store: SqliteTaskRepository = request.app.state.task_repository
+    collections = task_store.list_video_collections()
+    for collection in collections:
+        task_store.initialize_video_collection_visibility(collection.collection_id)
     return VideoLibraryResponse(
         videos=[localize_video_cover(task_store, video).to_summary() for video in task_store.list_video_assets()],
         folders=task_store.list_video_folders(),
         preferences=task_store.get_library_preferences(),
+        collections=task_store.list_video_collections(),
     )
+
+
+@router.get("/collections/{collection_id}", response_model=VideoCollectionResponse)
+def get_video_collection(collection_id: str, request: Request) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    task_store.reconcile_video_collection_assets(collection_id)
+    task_store.initialize_video_collection_visibility(collection_id)
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return collection
+
+
+@router.post("/collections/{collection_id}/refresh", response_model=VideoCollectionResponse)
+def refresh_video_collection(collection_id: str, request: Request) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    try:
+        payload = fetch_bilibili_collection_payload(collection.source_url)
+    except Exception as exc:
+        logger.warning("refresh bilibili collection failed collection_id=%s", collection_id, exc_info=True)
+        raise HTTPException(status_code=502, detail="合集刷新失败，请稍后重试。") from exc
+    if not payload:
+        raise HTTPException(status_code=404, detail="未读取到合集内容。")
+    payload["collection_id"] = collection_id
+    return task_store.refresh_video_collection(payload, collection.source_url)
+
+
+@router.patch("/collections/{collection_id}/settings", response_model=VideoCollectionResponse)
+def update_video_collection_settings(
+    collection_id: str,
+    payload: VideoCollectionSettingsRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.update_video_collection_settings(collection_id, payload.auto_check_on_open)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return updated
+
+
+@router.post("/collections/{collection_id}/favorite", response_model=VideoCollectionResponse)
+def set_video_collection_favorite(
+    collection_id: str,
+    payload: VideoCollectionFavoriteRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.set_video_collection_favorite(collection_id, payload.is_favorite)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return updated
+
+
+@router.patch("/collections/{collection_id}/move", response_model=VideoCollectionResponse)
+def move_video_collection_to_folder(
+    collection_id: str,
+    payload: VideoCollectionMoveRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    folder_ids = payload.folder_ids if payload.folder_ids is not None else ([] if payload.folder_id is None else [payload.folder_id])
+    updated = task_store.set_video_collection_folders(collection_id, folder_ids)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="合集或分组不存在。")
+    return updated
+
+
+@router.patch("/collections/{collection_id}/pin", response_model=VideoCollectionResponse)
+def set_video_collection_pin(
+    collection_id: str,
+    payload: VideoCollectionPinRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    updated = task_store.set_video_collection_pin(
+        collection_id,
+        global_pinned=payload.global_pinned,
+        folder_pinned=payload.folder_pinned,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return updated
+
+
+@router.delete("/collections/{collection_id}")
+def delete_video_collection(
+    collection_id: str,
+    request: Request,
+    payload: VideoCollectionDeleteRequest | None = None,
+) -> dict[str, object]:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    mode = payload.mode if payload is not None else "detach"
+    video_ids = list(dict.fromkeys(item.video_id for item in collection.items if item.video_id))
+    if mode == "delete_contents":
+        for video_id in video_ids:
+            video = task_store.get_video_asset(video_id)
+            if video is None:
+                continue
+            tasks = task_store.list_tasks_for_video(video_id)
+            if task_store.delete_video_asset(video_id):
+                cleanup_video_files(video, tasks, settings_manager.current)
+        deleted_ids = task_store.delete_video_collection(collection_id, detach_contents=False) or []
+    else:
+        deleted_ids = task_store.delete_video_collection(collection_id, detach_contents=True) or []
+    logger.info("delete video collection collection_id=%s mode=%s", collection_id, mode)
+    return {"deleted": True, "collection_id": collection_id, "mode": mode, "video_ids": deleted_ids}
+
+
+@router.post("/collections/{collection_id}/items", response_model=VideoCollectionResponse)
+def add_video_collection_items(
+    collection_id: str,
+    payload: VideoCollectionItemsRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    selected = set(payload.bvids)
+    pending = collection.new_items if selected else collection.new_items
+    for item in pending:
+        if selected and item.bvid not in selected:
+            continue
+        if task_store.get_video_asset_by_canonical_id(item.bvid) is None:
+            task_store.upsert_video_asset(
+                VideoAssetRecord(
+                    canonical_id=item.bvid,
+                    platform="bilibili",
+                    title=item.title,
+                    source_url=item.source_url,
+                    cover_url=item.cover_url,
+                    duration=item.duration,
+                    is_global_visible=False,
+                )
+            )
+    task_store.add_pending_video_collection_items(collection_id, payload.bvids)
+    updated = task_store.get_video_collection(collection_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return updated
+
+
+@router.post("/collections/{collection_id}/items/{video_id}/promote", response_model=VideoAssetDetailResponse)
+def promote_video_collection_item(collection_id: str, video_id: str, request: Request) -> VideoAssetDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None or not any(item.video_id == video_id for item in collection.items):
+        raise HTTPException(status_code=404, detail="合集内视频不存在。")
+    updated = task_store.promote_video_collection_item(collection_id, video_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="视频不存在。")
+    return localize_video_cover(task_store, updated).to_detail()
 
 
 @router.put("/library/preferences", response_model=VideoLibraryPreferencesResponse)
@@ -613,6 +833,24 @@ def reorder_videos(payload: VideoReorderRequest, request: Request) -> list[Video
         localize_video_cover(task_store, video).to_summary()
         for video in videos
     ]
+
+
+@router.post("/library/reorder", response_model=VideoLibraryResponse)
+def reorder_video_library(payload: VideoLibraryReorderRequest, request: Request) -> VideoLibraryResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    try:
+        task_store.reorder_library_items([(item.kind, item.id) for item in payload.items], folder_id=payload.folder_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    collections = task_store.list_video_collections()
+    for collection in collections:
+        task_store.initialize_video_collection_visibility(collection.collection_id)
+    return VideoLibraryResponse(
+        videos=[localize_video_cover(task_store, video).to_summary() for video in task_store.list_video_assets()],
+        folders=task_store.list_video_folders(),
+        preferences=task_store.get_library_preferences(),
+        collections=task_store.list_video_collections(),
+    )
 
 
 @router.patch("/{video_id}/move", response_model=VideoAssetDetailResponse)

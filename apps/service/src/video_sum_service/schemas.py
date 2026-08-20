@@ -133,6 +133,16 @@ class VideoReorderRequest(BaseModel):
     folder_id: str | None = None
 
 
+class VideoLibraryReorderItem(BaseModel):
+    kind: Literal["video", "collection"]
+    id: str
+
+
+class VideoLibraryReorderRequest(BaseModel):
+    items: list[VideoLibraryReorderItem] = Field(default_factory=list)
+    folder_id: str | None = "__global__"
+
+
 class VideoFolderResponse(BaseModel):
     folder_id: str
     parent_id: str | None = None
@@ -148,6 +158,48 @@ class VideoPageOptionResponse(BaseModel):
     source_url: str
     cover_url: str = ""
     duration: float | None = None
+
+
+class VideoCollectionItemResponse(BaseModel):
+    position: int
+    bvid: str
+    title: str
+    source_url: str
+    cover_url: str = ""
+    duration: float | None = None
+    is_current: bool = False
+    video_id: str | None = None
+    has_result: bool = False
+    latest_status: TaskStatus | None = None
+    is_global_visible: bool = False
+    is_new: bool = False
+
+
+class VideoCollectionResponse(BaseModel):
+    collection_id: str
+    title: str
+    cover_url: str = ""
+    global_order: float = 0
+    folder_order: float = 0
+    folder_id: str | None = None
+    folder_ids: list[str] = Field(default_factory=list)
+    global_pinned: bool = False
+    folder_pinned: bool = False
+    is_favorite: bool = False
+    favorite_updated_at: datetime | None = None
+    latest_video_updated_at: datetime | None = None
+    owner_mid: str | None = None
+    owner_name: str | None = None
+    owner_face: str | None = None
+    owner_url: str | None = None
+    item_count: int = 0
+    items: list[VideoCollectionItemResponse] = Field(default_factory=list)
+    source_url: str = ""
+    summarized_count: int = 0
+    unsummarized_count: int = 0
+    last_checked_at: datetime | None = None
+    auto_check_on_open: bool = True
+    new_items: list[VideoCollectionItemResponse] = Field(default_factory=list)
 
 
 class VideoAssetSummaryResponse(BaseModel):
@@ -174,6 +226,7 @@ class VideoAssetSummaryResponse(BaseModel):
     folder_order: float = 0
     global_pinned: bool = False
     folder_pinned: bool = False
+    is_global_visible: bool = True
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -209,6 +262,7 @@ class VideoAssetRecord(BaseModel):
     folder_order: float = 0
     global_pinned: bool = False
     folder_pinned: bool = False
+    is_global_visible: bool = True
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -238,6 +292,7 @@ class VideoAssetRecord(BaseModel):
             folder_order=self.folder_order,
             global_pinned=self.global_pinned,
             folder_pinned=self.folder_pinned,
+            is_global_visible=self.is_global_visible,
             pages=self.pages,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -256,12 +311,40 @@ class VideoProbeResponse(BaseModel):
     cached: bool = False
     requires_selection: bool = False
     pages: list[VideoPageOptionResponse] = Field(default_factory=list)
+    collection: VideoCollectionResponse | None = None
 
 
 class VideoLibraryResponse(BaseModel):
     videos: list[VideoAssetSummaryResponse] = Field(default_factory=list)
     folders: list[VideoFolderResponse] = Field(default_factory=list)
     preferences: VideoLibraryPreferencesResponse = Field(default_factory=VideoLibraryPreferencesResponse)
+    collections: list[VideoCollectionResponse] = Field(default_factory=list)
+
+
+class VideoCollectionSettingsRequest(BaseModel):
+    auto_check_on_open: bool
+
+
+class VideoCollectionDeleteRequest(BaseModel):
+    mode: Literal["detach", "delete_contents"] = "detach"
+
+
+class VideoCollectionMoveRequest(BaseModel):
+    folder_id: str | None = None
+    folder_ids: list[str] | None = None
+
+
+class VideoCollectionFavoriteRequest(BaseModel):
+    is_favorite: bool
+
+
+class VideoCollectionPinRequest(BaseModel):
+    global_pinned: bool | None = None
+    folder_pinned: bool | None = None
+
+
+class VideoCollectionItemsRequest(BaseModel):
+    bvids: list[str] = Field(default_factory=list)
 
 
 class TaskSummaryResponse(BaseModel):

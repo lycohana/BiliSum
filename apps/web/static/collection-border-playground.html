@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>BiliSum 暗色模式品牌边框方案</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --brand-500: #fb7299;
+      --brand-600: #f85d8e;
+      --brand-700: #d94674;
+      --bg-base: #121212;
+      --bg-canvas: #1a1a1a;
+      --bg-card: #202020;
+      --bg-elevated: #2d2d2d;
+      --bg-subtle: #282828;
+      --text-primary: #f5f5f5;
+      --text-secondary: #b0b0b0;
+      --text-tertiary: #8a8a8a;
+      --border-subtle: rgba(255,255,255,.08);
+      --border-default: rgba(255,255,255,.12);
+      --shadow-xs: 0 1px 2px rgba(0,0,0,.2);
+      --shadow-sm: 0 2px 8px rgba(0,0,0,.3);
+      --font-sans: Inter, "Plus Jakarta Sans", Manrope, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg-base: #fafbfc;
+      --bg-canvas: #fff;
+      --bg-card: #fff;
+      --bg-elevated: #fff;
+      --bg-subtle: #f5f6f8;
+      --text-primary: #1a1a1a;
+      --text-secondary: #3f4754;
+      --text-tertiary: #5f6878;
+      --border-subtle: rgba(0,0,0,.06);
+      --border-default: rgba(0,0,0,.1);
+      --shadow-xs: 0 1px 2px rgba(0,0,0,.04);
+      --shadow-sm: 0 2px 8px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg-base); }
+    body { margin: 0; min-height: 100vh; color: var(--text-primary); background: var(--bg-base); font-family: var(--font-sans); }
+    button { font: inherit; }
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 64px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 20px; border-bottom: 1px solid var(--border-subtle); }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #24151a; background: var(--brand-500); font-size: 13px; font-weight: 800; }
+    .brand-copy { display: grid; gap: 2px; }
+    .brand-copy strong { font-size: 14px; }
+    .brand-copy span { color: var(--text-tertiary); font-size: 11px; }
+    .theme-switch { display: inline-flex; padding: 3px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-card); }
+    .theme-switch button { min-height: 30px; padding: 0 11px; border: 0; border-radius: 7px; color: var(--text-tertiary); background: transparent; cursor: pointer; }
+    .theme-switch button.is-active { color: var(--text-primary); background: var(--bg-elevated); box-shadow: var(--shadow-xs); }
+    .intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 28px; padding: 42px 0 26px; }
+    .eyebrow { margin: 0 0 10px; color: var(--brand-500); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 4vw, 46px); line-height: 1.1; letter-spacing: -.04em; }
+    .intro p { max-width: 720px; margin: 14px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+    .readout { min-width: 218px; padding: 14px 16px; border: 1px solid var(--border-default); border-radius: 14px; background: var(--bg-card); box-shadow: var(--shadow-xs); }
+    .readout small { display: block; margin-bottom: 6px; color: var(--text-tertiary); font-size: 11px; }
+    .readout strong { color: var(--brand-500); font-size: 15px; }
+    .reference { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 12px; color: var(--text-secondary); background: var(--bg-canvas); font-size: 12px; }
+    .reference strong { color: var(--text-primary); }
+    .reference span:last-child { color: var(--text-tertiary); }
+    .options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .option { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--border-subtle); border-radius: 18px; background: var(--bg-card); box-shadow: var(--shadow-xs); }
+    .option.is-selected { border-color: color-mix(in srgb, var(--brand-500) 36%, var(--border-default)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-500) 10%, transparent); }
+    .option-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .option-head h2 { margin: 0; font-size: 14px; }
+    .option-number { color: var(--text-tertiary); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+    .option-head span:last-child { color: var(--text-tertiary); font-size: 11px; }
+    .samples { display: grid; gap: 10px; }
+    .sample-label { color: var(--text-tertiary); font-size: 11px; }
+    .sample-row { display: grid; grid-template-columns: 26px 82px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; min-height: 64px; padding: 9px 11px; border: 1px solid var(--variant-border); border-radius: 13px; background: color-mix(in srgb, var(--bg-card) 92%, var(--brand-500) 8%); }
+    .sample-row .check, .sample-card .check { position: relative; display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--variant-border); border-radius: 8px; color: #fff; background: var(--variant-check); font-size: 15px; font-weight: 800; line-height: 1; }
+    .sample-row img { width: 82px; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; }
+    .sample-copy { min-width: 0; }
+    .sample-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .sample-copy span { display: block; margin-top: 4px; overflow: hidden; color: var(--text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .sample-status { padding: 4px 7px; border-radius: 999px; color: var(--text-secondary); background: var(--bg-subtle); font-size: 10px; white-space: nowrap; }
+    .sample-card { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 12px; min-width: 0; padding: 10px; border: 1px solid var(--variant-border); border-radius: 13px; background: color-mix(in srgb, var(--bg-card) 92%, var(--brand-500) 8%); }
+    .sample-card-cover { position: relative; }
+    .sample-card-cover img { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; }
+    .sample-card .check { position: absolute; top: 6px; left: 6px; z-index: 1; }
+    .sample-card-copy { min-width: 0; }
+    .sample-card-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .sample-card-copy span { display: block; margin-top: 5px; color: var(--text-tertiary); font-size: 11px; }
+    .sample-card-copy em { display: inline-flex; margin-top: 8px; padding: 3px 7px; border-radius: 7px; color: var(--text-secondary); background: var(--bg-subtle); font-size: 10px; font-style: normal; }
+    .tokens { display: flex; flex-wrap: wrap; gap: 6px; color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
+    .tokens code { padding: 3px 5px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--bg-subtle); }
+    .choose { width: 100%; min-height: 34px; border: 1px solid var(--variant-border); border-radius: 9px; color: var(--text-primary); background: color-mix(in srgb, var(--brand-500) 8%, transparent); font-size: 12px; font-weight: 700; cursor: pointer; }
+    .choose:hover, .choose:focus-visible { background: color-mix(in srgb, var(--brand-500) 14%, transparent); outline: none; }
+    .option.is-selected .choose { color: #fff; background: var(--brand-600); }
+    @media (max-width: 720px) { .shell { width: min(100% - 24px, 520px); padding-top: 18px; } .intro { grid-template-columns: 1fr; align-items: start; padding-top: 32px; } .readout { min-width: 0; } .options { grid-template-columns: 1fr; } .reference { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="toolbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">B</span><span class="brand-copy"><strong>BiliSum</strong><span>Dark theme brand-border study</span></span></div>
+      <div class="theme-switch" role="group" aria-label="切换页面主题">
+        <button class="is-active" type="button" data-theme="dark" aria-pressed="true">深色</button>
+        <button type="button" data-theme="light" aria-pressed="false">浅色</button>
+      </div>
+    </header>
+
+    <section class="intro">
+      <div>
+        <p class="eyebrow">BiliSum brand pink · dark mode contrast</p>
+        <h1>选一个不刺眼的品牌边框</h1>
+        <p>10 个方案都保留 BiliSum 品牌粉，只改变暗色模式下边框的透明度、明度和选中底色。每个方案同时展示列表行、视频卡片和勾选状态。</p>
+      </div>
+      <div class="readout" aria-live="polite"><small>当前选择</small><strong id="readout">尚未选择</strong></div>
+    </section>
+
+    <div class="reference"><span><strong>比较重点</strong> · 看边框是否抢过封面和标题 · 看 ✓ 是否清晰但不发光</span><span>可切换浅色确认跨主题稳定性</span></div>
+    <section class="options" id="options" aria-label="品牌边框颜色方案"></section>
+  </main>
+
+  <script>
+    const cover = "./assets/bilibili-collection-playground-cover.jpg";
+    const variants = [
+      { id: "01", name: "品牌粉 10%", note: "最安静", border: "rgba(251,114,153,.22)", check: "rgba(251,114,153,.58)" },
+      { id: "02", name: "品牌粉 14%", note: "极轻提示", border: "rgba(251,114,153,.28)", check: "rgba(251,114,153,.64)" },
+      { id: "03", name: "品牌粉 18%", note: "克制清晰", border: "rgba(251,114,153,.34)", check: "rgba(251,114,153,.70)" },
+      { id: "04", name: "品牌粉 22%", note: "平衡方案", border: "rgba(251,114,153,.40)", check: "rgba(251,114,153,.76)" },
+      { id: "05", name: "品牌粉 26%", note: "清晰提示", border: "rgba(251,114,153,.46)", check: "rgba(251,114,153,.82)" },
+      { id: "06", name: "深品牌粉 24%", note: "降低亮度", border: "rgba(217,70,116,.48)", check: "rgba(217,70,116,.78)" },
+      { id: "07", name: "深品牌粉 30%", note: "暗夜稳定", border: "rgba(217,70,116,.56)", check: "rgba(217,70,116,.82)" },
+      { id: "08", name: "品牌粉细线", note: "薄线无外扩", border: "rgba(251,114,153,.30)", check: "rgba(251,114,153,.72)" },
+      { id: "09", name: "品牌粉叠层", note: "边框更软", border: "rgba(251,114,153,.36)", check: "rgba(248,93,142,.74)" },
+      { id: "10", name: "品牌粉低亮", note: "弱化存在感", border: "rgba(196,53,94,.44)", check: "rgba(196,53,94,.76)" }
+    ];
+    const optionsRoot = document.querySelector("#options");
+    const readout = document.querySelector("#readout");
+    optionsRoot.innerHTML = variants.map((variant) => `
+      <article class="option" data-id="${variant.id}" data-name="${variant.name}" style="--variant-border:${variant.border};--variant-check:${variant.check}">
+        <div class="option-head"><h2>${variant.name}</h2><span>${variant.id} · ${variant.note}</span></div>
+        <div class="samples">
+          <span class="sample-label">列表行 · 已选</span>
+          <div class="sample-row"><span class="check" aria-label="已选择">✓</span><img src="${cover}" alt="" /><span class="sample-copy"><strong>从林症结</strong><span>第 1 集 · 23:57</span></span><span class="sample-status">未总结</span></div>
+          <span class="sample-label">视频卡片 · 已选</span>
+          <div class="sample-card"><span class="sample-card-cover"><img src="${cover}" alt="" /><span class="check" aria-hidden="true">✓</span></span><span class="sample-card-copy"><strong>从林症结</strong><span>Bilibili · 未总结</span><em>第 1 集</em></span></div>
+        </div>
+        <div class="tokens"><code>边框 ${variant.border}</code><code>勾选 ${variant.check}</code></div>
+        <button class="choose" type="button" aria-pressed="false">选择方案 ${variant.id}</button>
+      </article>`).join("");
+
+    document.querySelectorAll(".choose").forEach((button) => button.addEventListener("click", () => {
+      const option = button.closest(".option");
+      document.querySelectorAll(".option").forEach((item) => {
+        const active = item === option;
+        item.classList.toggle("is-selected", active);
+        item.querySelector(".choose").setAttribute("aria-pressed", String(active));
+      });
+      readout.textContent = `方案 ${option.dataset.id} · ${option.dataset.name}`;
+    }));
+
+    document.querySelectorAll("[data-theme]").forEach((button) => button.addEventListener("click", () => {
+      document.documentElement.dataset.theme = button.dataset.theme;
+      document.querySelectorAll("[data-theme]").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+    }));
+  </script>
+</body>
+</html>
