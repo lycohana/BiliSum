@@ -2857,6 +2857,9 @@ class RealPipelineRunner(PipelineRunner):
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
 
+        # Note: response_format (json_object) intentionally omitted.
+        # Local LLM backends (Ollama, llama.cpp, vLLM, etc.) reject it with 400.
+        # The system prompt already instructs the model to output valid JSON.
         payload = {
             "model": self._settings.llm_model,
             "messages": [
@@ -2871,7 +2874,6 @@ class RealPipelineRunner(PipelineRunner):
             ],
             "temperature": 0,
             "max_tokens": 32,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -2927,7 +2929,6 @@ class RealPipelineRunner(PipelineRunner):
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -2943,7 +2944,6 @@ class RealPipelineRunner(PipelineRunner):
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3258,7 +3258,6 @@ P 数索引：
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3714,7 +3713,6 @@ P 数索引：
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
         }
         parsed = self._request_llm_json(
@@ -4124,7 +4122,6 @@ P 数索引：
                         ],
                     }
                 ],
-                "response_format": {"type": "json_object"},
                 "enable_thinking": False,
             }
             # Only use Anthropic image format for the real Anthropic API.
@@ -4644,7 +4641,6 @@ P 数索引：
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }

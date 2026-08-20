@@ -97,6 +97,12 @@ def chat_knowledge_llm(
     require_json: bool = False,
     _allow_empty_retry: bool = True,
 ) -> tuple[str, dict[str, object] | None]:
+    """Call the knowledge-base LLM.
+
+    Note: `require_json` no longer sets `response_format: json_object` —
+    many local LLM backends (Ollama, llama.cpp, vLLM) reject it with a 400.
+    The system prompt is expected to instruct the model to output valid JSON.
+    """
     base_url, model, api_key, provider = ensure_knowledge_llm_settings(settings)
     use_anthropic = is_anthropic_llm(provider, base_url)
     request_model = model if use_anthropic else normalize_openai_compatible_model_name(model)
@@ -117,8 +123,9 @@ def chat_knowledge_llm(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    if require_json:
-        payload["response_format"] = {"type": "json_object"}
+    # Note: response_format (json_object) intentionally omitted.
+    # Local LLM backends (Ollama, llama.cpp, vLLM, etc.) reject it with 400.
+    # The system prompt already instructs the model to output valid JSON.
     if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
         payload["thinking"] = {"type": "disabled"}
     request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)

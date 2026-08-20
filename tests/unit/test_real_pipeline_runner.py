@@ -929,7 +929,7 @@ def test_llm_summary_payload_disables_thinking_in_chat_template(tmp_path: Path) 
         segments_excerpt='[{"start":0,"text":"内容"}]',
     )
 
-    assert payload["response_format"] == {"type": "json_object"}
+    assert "response_format" not in payload  # removed: local models reject json_object mode
     assert payload["enable_thinking"] is False
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
