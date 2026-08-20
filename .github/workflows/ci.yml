@@ -253,6 +253,8 @@ jobs:
         run: npm run package:mac
 
   validate-docker-image:
+    needs: detect-desktop-package-check
+    if: ${{ needs.detect-desktop-package-check.outputs.should_run == 'true' }}
     runs-on: ubuntu-latest
 
     steps:
