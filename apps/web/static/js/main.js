@@ -498,6 +498,8 @@ async function handleSettingsSubmit(event) {
       "summary_user_prompt_template",
       current.summary_user_prompt_template || "",
     ),
+    summary_context_mode: readValue("summary_context_mode", current.summary_context_mode || "auto"),
+    summary_full_context_max_chars: Number(readValue("summary_full_context_max_chars", current.summary_full_context_max_chars || 18000)),
     summary_chunk_target_chars: Number(readValue("summary_chunk_target_chars", current.summary_chunk_target_chars || 2200)),
     summary_chunk_overlap_segments: Number(readValue("summary_chunk_overlap_segments", current.summary_chunk_overlap_segments || 2)),
     summary_chunk_concurrency: Number(readValue("summary_chunk_concurrency", current.summary_chunk_concurrency || 2)),

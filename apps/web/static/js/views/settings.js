@@ -237,6 +237,12 @@ export function renderSettingsView(state) {
               { value: "rule", label: "规则摘要" },
               { value: "llm", label: "LLM 摘要" }
             ])}
+            ${renderSelect("summary_context_mode", "摘要上下文模式", settings.summary_context_mode || "auto", [
+              { value: "auto", label: "自动：短字幕整段，长字幕分块" },
+              { value: "full", label: "整段：强制发送完整字幕" },
+              { value: "chunked", label: "分块：保持原有流程" }
+            ])}
+            ${renderInput("summary_full_context_max_chars", "自动整段上限字符数", settings.summary_full_context_max_chars || 18000, "number", "18000")}
             <label class="toggle-row">
               <span>启用 LLM 摘要</span>
               <input id="llm_enabled" type="checkbox" ${settings.llm_enabled ? "checked" : ""} />

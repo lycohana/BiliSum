@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
+from video_sum_core.models.tasks import (
+    InputType,
+    TaskInput,
+    TaskResult,
+    TaskStatus,
+    merge_llm_usage_records,
+)
 from video_sum_core.errors import VideoSumError
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
@@ -422,6 +428,95 @@ def test_export_result_preserves_llm_usage() -> None:
     assert result.knowledge_note_markdown.startswith("# 测试标题")
     assert result.chapter_groups[0]["children"][0]["title"] == "章节 1"
     assert result.artifacts["knowledge_note_path"].endswith("knowledge_note.md")
+
+
+def test_merge_llm_usage_records_adds_independent_request_totals() -> None:
+    result = TaskResult(
+        llm_prompt_tokens=100,
+        llm_completion_tokens=20,
+        llm_total_tokens=120,
+        llm_prompt_cache_hit_tokens=40,
+        llm_prompt_cache_miss_tokens=60,
+    )
+
+    merged = merge_llm_usage_records(
+        result,
+        [
+            {
+                "stage": "mindmap",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "prompt_tokens": 30,
+                "completion_tokens": 5,
+                "total_tokens": 35,
+                "cache_hit_tokens": 10,
+                "cache_miss_tokens": 20,
+            }
+        ],
+    )
+
+    assert merged.llm_total_tokens == 155
+    assert merged.llm_prompt_cache_hit_tokens == 50
+    assert merged.llm_usage_breakdown[0].stage == "mindmap"
+
+
+def test_mindmap_generation_repairs_single_root_and_falls_back_to_three_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=Path("."),
+            llm_enabled=True,
+            llm_api_key="test-key",
+            llm_base_url="https://llm.example/v1",
+            llm_model="test-model",
+        )
+    )
+    calls: list[str] = []
+
+    def fake_request(**kwargs: object) -> dict[str, object]:
+        calls.append(str(kwargs["usage_stage"]))
+        return {
+            "title": "测试导图",
+            "root": "root",
+            "nodes": [{"id": "root", "label": "测试主题", "type": "root", "children": []}],
+            "_llm_usage_record": {
+                "stage": str(kwargs["usage_stage"]),
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+            },
+        }
+
+    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    mindmap, usage_breakdown = runner._generate_mindmap_with_llm(
+        "测试导图",
+        TaskResult(
+            overview="视频介绍定义、方法和应用。",
+            key_points=["定义", "方法", "应用"],
+            timeline=[
+                {"title": "定义", "start": 1.0, "summary": "给出定义。"},
+                {"title": "方法", "start": 20.0, "summary": "说明方法。"},
+                {"title": "应用", "start": 40.0, "summary": "展示应用。"},
+            ],
+        ),
+    )
+
+    assert calls == ["mindmap", "mindmap_repair"]
+    assert len(mindmap.nodes[0].children) >= 3
+    assert all(child.children for child in mindmap.nodes[0].children)
+    assert [record["stage"] for record in usage_breakdown] == ["mindmap", "mindmap_repair"]
+
+
+def test_mindmap_prompt_only_hard_requires_three_top_level_branches() -> None:
+    runner = RealPipelineRunner(PipelineSettings(tasks_dir=Path(".")))
+
+    messages = runner._build_mindmap_messages("标题", "{}", "笔记")
+    combined = "\n".join(str(message["content"]) for message in messages)
+
+    assert "至少 3 个" in combined
+    assert "后续层级的节点数量和深度不设固定下限" in combined
+    assert "每个一级分支至少包含" not in combined
 
 
 def test_real_pipeline_normalizes_mindmap_payload_and_repairs_leaf_time() -> None:

@@ -196,6 +196,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "knowledge", targetKey: "knowledge_llm_api_key", title: "知识库 API Key", description: "独立知识库 LLM API 密钥。", keywords: ["知识库", "key", "apikey", "密钥"] },
   { category: "knowledge", targetKey: "knowledge_llm_model", title: "知识库模型名称", description: "独立知识库 LLM 模型名。", keywords: ["知识库", "model", "模型", "问答"] },
   { category: "generation", targetKey: "summary_mode", title: "摘要模式", description: "LLM 智能摘要或抽取式摘要。", keywords: ["摘要", "summary", "抽取式", "llm"] },
+  { category: "generation", targetKey: "summary_context_mode", title: "摘要上下文模式", description: "短字幕整段处理，长字幕自动回退分块。", keywords: ["摘要", "上下文", "整段", "分块", "缓存"] },
   { category: "generation", targetKey: "language", title: "语言", description: "摘要输出语言。", keywords: ["语言", "中文", "english", "日本語"] },
   { category: "generation", targetKey: "summary_chunk_target_chars", title: "分块目标字符数", description: "LLM 分块处理的目标长度。", keywords: ["分块", "chunk", "字符", "长度"] },
   { category: "generation", targetKey: "summary_chunk_overlap_segments", title: "分块重叠段数", description: "摘要分块之间保留的重叠段落。", keywords: ["重叠", "overlap", "分块"] },
@@ -3261,6 +3262,20 @@ export function SettingsPage({
                     </div>
                   </header>
                   <div className="settings-tree-grid">
+                    <label className="settings-input-group" ref={registerFocusTarget("summary_context_mode") as (node: HTMLLabelElement | null) => void}>
+                      <span className="settings-input-label">摘要上下文模式</span>
+                      <select className="settings-select-field" value={form.summary_context_mode || "auto"} onChange={(e) => updateForm({ ...form, summary_context_mode: e.target.value })}>
+                        <option value="auto">自动：短字幕整段，长字幕分块</option>
+                        <option value="full">整段：强制发送完整字幕</option>
+                        <option value="chunked">分块：保持原有分块流程</option>
+                      </select>
+                      <span className="settings-input-caption">整段模式有利于全局一致性，但超长字幕可能增加上下文压力。</span>
+                    </label>
+                    <label className="settings-input-group" ref={registerFocusTarget("summary_full_context_max_chars") as (node: HTMLLabelElement | null) => void}>
+                      <span className="settings-input-label">自动整段上限字符数</span>
+                      <input className="settings-input-field" type="number" min={800} value={form.summary_full_context_max_chars || 18000} onChange={(e) => updateForm({ ...form, summary_full_context_max_chars: Math.max(800, Number(e.target.value) || 18000) })} />
+                      <span className="settings-input-caption">仅自动模式使用；超出后回退到分块。</span>
+                    </label>
                     <label className="settings-input-group" ref={registerFocusTarget("summary_chunk_target_chars") as (node: HTMLLabelElement | null) => void}>
                       <span className="settings-input-label">分块目标字符数</span>
                       <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_target_chars} onChange={(e) => updateForm({ ...form, summary_chunk_target_chars: parseMinOneInt(e.target.value, 2200) })} />

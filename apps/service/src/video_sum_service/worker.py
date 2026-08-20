@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Condition, Lock, Thread, current_thread
 
-from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
+from video_sum_core.models.tasks import (
+    InputType,
+    TaskInput,
+    TaskResult,
+    TaskStatus,
+    merge_llm_usage_records,
+)
 from video_sum_core.pipeline.base import PipelineContext, PipelineRunner
 from video_sum_infra.config import ServiceSettings, normalize_visual_note_mode
 from video_sum_service.repository import SqliteTaskRepository
@@ -480,7 +486,10 @@ class TaskWorker:
                 return
             status_value = str(context.get("status") or "partial")
             error_message = "\n".join(str(item) for item in context.get("warnings", []) if str(item).strip()) or None
-            final_result = refreshed.result.model_copy(
+            final_result = merge_llm_usage_records(
+                refreshed.result,
+                [item for item in context.get("llm_usage_breakdown", []) if isinstance(item, dict)],
+            ).model_copy(
                 update={
                     "artifacts": {
                         **refreshed.result.artifacts,
@@ -592,11 +601,16 @@ class TaskWorker:
         )
 
         try:
-            mindmap, mindmap_path = self._pipeline_runner.build_and_export_mindmap(  # type: ignore[attr-defined]
+            mindmap_result = self._pipeline_runner.build_and_export_mindmap(  # type: ignore[attr-defined]
                 task_id=task_id,
                 title=record.task_input.title or "思维导图",
                 result=current_result,
             )
+            if isinstance(mindmap_result, tuple) and len(mindmap_result) == 3:
+                mindmap, mindmap_path, usage_breakdown = mindmap_result
+            else:
+                mindmap, mindmap_path = mindmap_result
+                usage_breakdown = []
             self._repository.append_event(
                 task_id=task_id,
                 stage="mindmap_generating",
@@ -606,7 +620,10 @@ class TaskWorker:
             refreshed = self._repository.get_task(task_id)
             if refreshed is None or refreshed.result is None:
                 return
-            final_result = refreshed.result.model_copy(
+            final_result = merge_llm_usage_records(
+                refreshed.result,
+                [item for item in usage_breakdown if isinstance(item, dict)],
+            ).model_copy(
                 update={
                     "artifacts": {**refreshed.result.artifacts, "mindmap_path": str(Path(mindmap_path))},
                     "mindmap_status": "ready",

@@ -24,6 +24,7 @@ from video_sum_infra.config import (
     DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE,
     DEFAULT_SUMMARY_SYSTEM_PROMPT,
     DEFAULT_SUMMARY_USER_PROMPT_TEMPLATE,
+    normalize_summary_context_mode,
     normalize_visual_note_mode,
 )
 from video_sum_infra.llm import (
@@ -59,7 +60,7 @@ from video_sum_core.twelvelabs import (
     analyze_video_with_pegasus,
     video_context_from_file,
 )
-from video_sum_core.models.tasks import InputType, MindMapNode, TaskInput, TaskMindMap, TaskResult
+from video_sum_core.models.tasks import InputType, MindMapNode, TaskInput, TaskMindMap, TaskResult, merge_llm_usage_records
 from video_sum_core.pipeline.base import (
     PipelineContext,
     PipelineEvent,
@@ -81,6 +82,8 @@ _BILIBILI_HTTP_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://www.bilibili.com/",
 }
+
+_MIN_MINDMAP_TOP_LEVEL_BRANCHES = 3
 
 
 def _get_ytdlp_classes():
@@ -120,6 +123,13 @@ def _windows_hidden_subprocess_kwargs() -> dict[str, object]:
 def _safe_int(value: object) -> int | None:
     try:
         return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
 
@@ -250,6 +260,8 @@ class PipelineSettings:
     visual_vlm_prompt: str = ""
     summary_system_prompt: str = ""
     summary_user_prompt_template: str = ""
+    summary_context_mode: str = "auto"
+    summary_full_context_max_chars: int = 18000
     prompt_presets_path: str = ""
     knowledge_note_system_prompt: str = ""
     knowledge_note_user_prompt_template: str = ""
@@ -2262,6 +2274,9 @@ class RealPipelineRunner(PipelineRunner):
                     title=title,
                     summary=summary,
                     source_kind=source_kind,
+                    full_context=self._should_use_full_summary_context(
+                        transcript, segments, source_kind
+                    ),
                 )
                 knowledge_note_markdown = str(note_payload.get("knowledgeNoteMarkdown") or "").strip()
                 if knowledge_note_markdown:
@@ -2275,6 +2290,17 @@ class RealPipelineRunner(PipelineRunner):
                 summary["llm_total_tokens"] = (_safe_int(summary.get("llm_total_tokens")) or 0) + (
                     _safe_int(note_payload.get("llm_total_tokens")) or 0
                 )
+                summary["llm_usage_breakdown"] = self._llm_usage_records_from_payloads(summary, note_payload)
+                summary.pop("_llm_usage_record", None)
+                for cache_key in (
+                    "llm_prompt_cache_hit_tokens",
+                    "llm_prompt_cache_miss_tokens",
+                    "llm_prompt_cache_creation_tokens",
+                ):
+                    existing = _safe_int(summary.get(cache_key))
+                    added = _safe_int(note_payload.get(cache_key))
+                    if existing is not None or added is not None:
+                        summary[cache_key] = (existing or 0) + (added or 0)
             except VideoSumError as exc:
                 logger.warning("knowledge note llm generation failed, fallback to local note builder error=%s", exc)
                 emit(
@@ -2365,6 +2391,25 @@ class RealPipelineRunner(PipelineRunner):
         if source_kind == "aggregate_series":
             return self._summarize_aggregate_series_with_llm(base_url, transcript, segments, title, emit)
         system_prompt_override, user_prompt_override = self._resolve_prompt(prompt_preset_id)
+        if self._should_use_full_summary_context(transcript, segments, source_kind):
+            emit(
+                "summarizing",
+                91,
+                "正在使用整段字幕上下文生成结构化摘要",
+                {
+                    "context_mode": normalize_summary_context_mode(
+                        self._settings.summary_context_mode
+                    )
+                },
+            )
+            return self._summarize_full_context_with_llm(
+                base_url=base_url,
+                transcript=transcript,
+                segments=segments,
+                title=title,
+                system_prompt_override=system_prompt_override,
+                user_prompt_override=user_prompt_override,
+            )
         chunks = self._build_summary_chunks(segments)
         if not chunks:
             chunks = [
@@ -2443,6 +2488,7 @@ class RealPipelineRunner(PipelineRunner):
         if not partial_summaries:
             raise VideoSumError("All LLM summary chunks failed.")
 
+        usage_breakdown = self._llm_usage_records_from_payloads(*partial_summaries)
         total_prompt_tokens = sum((_safe_int(item.get("llm_prompt_tokens")) or 0) for item in partial_summaries)
         total_completion_tokens = sum((_safe_int(item.get("llm_completion_tokens")) or 0) for item in partial_summaries)
         total_tokens = sum((_safe_int(item.get("llm_total_tokens")) or 0) for item in partial_summaries)
@@ -2472,7 +2518,9 @@ class RealPipelineRunner(PipelineRunner):
                 system_prompt_override=system_prompt_override,
                 user_prompt_override=user_prompt_override,
             ),
+            usage_stage="summary_merge",
         )
+        usage_breakdown.extend(self._llm_usage_records_from_payloads(merged))
         merged = self._merge_structured_summary(
             merged=merged,
             partial_summaries=partial_summaries,
@@ -2484,10 +2532,51 @@ class RealPipelineRunner(PipelineRunner):
         if failures:
             merged.setdefault("overview", "")
             merged["overview"] = f"{merged['overview']}\n\n注意：有 {len(failures)} 个分块摘要失败，最终结果基于成功分块汇总。".strip()
+        merged.pop("_llm_usage_record", None)
+        merged["llm_usage_breakdown"] = usage_breakdown
         merged["llm_prompt_tokens"] = total_prompt_tokens + (_safe_int(merged.get("llm_prompt_tokens")) or 0)
         merged["llm_completion_tokens"] = total_completion_tokens + (_safe_int(merged.get("llm_completion_tokens")) or 0)
         merged["llm_total_tokens"] = total_tokens + (_safe_int(merged.get("llm_total_tokens")) or 0)
+        for cache_key in (
+            "llm_prompt_cache_hit_tokens",
+            "llm_prompt_cache_miss_tokens",
+            "llm_prompt_cache_creation_tokens",
+        ):
+            values = [_safe_int(item.get(cache_key)) for item in partial_summaries]
+            values = [value for value in values if value is not None]
+            merged_value = _safe_int(merged.get(cache_key))
+            if values or merged_value is not None:
+                merged[cache_key] = sum(values) + (merged_value or 0)
         return merged
+
+    def _summarize_full_context_with_llm(
+        self,
+        *,
+        base_url: str,
+        transcript: str,
+        segments: list[dict[str, object]],
+        title: str,
+        system_prompt_override: str | None = None,
+        user_prompt_override: str | None = None,
+    ) -> dict[str, object]:
+        transcript_context, segments_context = self._build_full_summary_inputs(transcript, segments)
+        logger.info(
+            "llm full-context summary request model=%s transcript_chars=%d segments=%d",
+            self._settings.llm_model,
+            len(transcript_context),
+            len(segments),
+        )
+        return self._request_llm_json(
+            base_url=base_url,
+            payload=self._build_llm_summary_payload(
+                title=title,
+                transcript_excerpt=transcript_context,
+                segments_excerpt=segments_context,
+                system_prompt_override=system_prompt_override,
+                user_prompt_override=user_prompt_override,
+            ),
+            usage_stage="summary_full",
+        )
 
     def _summarize_aggregate_series_with_llm(
         self,
@@ -2520,6 +2609,7 @@ class RealPipelineRunner(PipelineRunner):
                 transcript_excerpt=transcript_excerpt,
                 segments_excerpt=segments_excerpt,
             ),
+            usage_stage="aggregate_summary",
         )
 
     def _request_llm_summary_chunk(
@@ -2554,6 +2644,7 @@ class RealPipelineRunner(PipelineRunner):
                         system_prompt_override=system_prompt_override,
                         user_prompt_override=user_prompt_override,
                     ),
+                    usage_stage="summary_chunk",
                 )
                 partial["chunk_index"] = chunk_index
                 partial["chunk_start"] = float(chunk.get("chunk_start") or 0)
@@ -2579,6 +2670,7 @@ class RealPipelineRunner(PipelineRunner):
         *,
         timeout: float = 180,
         retry_count: int | None = None,
+        usage_stage: str = "llm",
     ) -> dict[str, object]:
         payload = dict(payload)
         use_anthropic = is_anthropic_llm(self._settings.llm_provider, base_url)
@@ -2646,20 +2738,111 @@ class RealPipelineRunner(PipelineRunner):
         response_json = response.json()
         content = self._extract_llm_response_content(response_json)
         parsed = self._parse_llm_json_content(content)
-        usage = response_json.get("usage") or {}
+        usage_payload = response_json.get("usage")
+        usage = usage_payload if isinstance(usage_payload, dict) else {}
         parsed.setdefault("title", "")
         parsed.setdefault("overview", "")
         parsed.setdefault("bulletPoints", [])
         parsed.setdefault("chapters", [])
-        prompt_tokens = _safe_int(usage.get("prompt_tokens") or usage.get("input_tokens"))
+        usage_record = self._normalize_llm_usage_record(
+            usage,
+            stage=usage_stage,
+            model=str(payload.get("model") or self._settings.llm_model or "").strip() or None,
+            provider=self._settings.llm_provider,
+        )
+        parsed["llm_prompt_tokens"] = usage_record.get("prompt_tokens") if usage_record else None
+        parsed["llm_completion_tokens"] = usage_record.get("completion_tokens") if usage_record else None
+        parsed["llm_total_tokens"] = usage_record.get("total_tokens") if usage_record else None
+        parsed["llm_prompt_cache_hit_tokens"] = usage_record.get("cache_hit_tokens") if usage_record else None
+        parsed["llm_prompt_cache_miss_tokens"] = usage_record.get("cache_miss_tokens") if usage_record else None
+        parsed["llm_prompt_cache_creation_tokens"] = usage_record.get("cache_creation_tokens") if usage_record else None
+        if usage_record:
+            parsed["_llm_usage_record"] = usage_record
+        logger.info(
+            "llm usage model=%s prompt_tokens=%s completion_tokens=%s "
+            "prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s "
+            "prompt_cache_creation_tokens=%s",
+            self._settings.llm_model,
+            parsed["llm_prompt_tokens"],
+            parsed["llm_completion_tokens"],
+            parsed["llm_prompt_cache_hit_tokens"],
+            parsed["llm_prompt_cache_miss_tokens"],
+            parsed["llm_prompt_cache_creation_tokens"],
+        )
+        return parsed
+
+    @staticmethod
+    def _llm_usage_records_from_payloads(*payloads: dict[str, object]) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for payload in payloads:
+            explicit = payload.get("llm_usage_breakdown")
+            if isinstance(explicit, list):
+                records.extend(item for item in explicit if isinstance(item, dict))
+            record = payload.get("_llm_usage_record")
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+
+    def _normalize_llm_usage_record(
+        self,
+        usage_payload: object,
+        *,
+        stage: str,
+        model: str | None,
+        provider: str | None,
+    ) -> dict[str, object] | None:
+        usage = usage_payload if isinstance(usage_payload, dict) else {}
+        raw_prompt_tokens = _safe_int(usage.get("prompt_tokens"))
+        input_tokens = _safe_int(usage.get("input_tokens"))
+        prompt_tokens = raw_prompt_tokens if raw_prompt_tokens is not None else input_tokens
         completion_tokens = _safe_int(usage.get("completion_tokens") or usage.get("output_tokens"))
         total_tokens = _safe_int(usage.get("total_tokens"))
+        prompt_cache_hit_tokens = _safe_int(usage.get("prompt_cache_hit_tokens"))
+        prompt_cache_miss_tokens = _safe_int(usage.get("prompt_cache_miss_tokens"))
+        prompt_cache_creation_tokens = _safe_int(usage.get("cache_creation_input_tokens"))
+        prompt_token_details = usage.get("prompt_tokens_details")
+        input_token_details = usage.get("input_tokens_details")
+        anthropic_cache_read_tokens = _safe_int(usage.get("cache_read_input_tokens"))
+        anthropic_cache_creation_tokens: int | None = None
+        if prompt_cache_hit_tokens is None and isinstance(prompt_token_details, dict):
+            prompt_cache_hit_tokens = _safe_int(prompt_token_details.get("cached_tokens"))
+        if prompt_cache_hit_tokens is None and isinstance(input_token_details, dict):
+            prompt_cache_hit_tokens = _safe_int(input_token_details.get("cached_tokens"))
+        if prompt_cache_hit_tokens is None:
+            prompt_cache_hit_tokens = _safe_int(usage.get("cached_tokens"))
+        if prompt_cache_hit_tokens is None:
+            prompt_cache_hit_tokens = _safe_int(usage.get("input_cached_tokens"))
+        if prompt_cache_creation_tokens is None and isinstance(prompt_token_details, dict):
+            prompt_cache_creation_tokens = _safe_int(prompt_token_details.get("cache_creation_input_tokens"))
+        if prompt_cache_creation_tokens is None and isinstance(input_token_details, dict):
+            prompt_cache_creation_tokens = _safe_int(input_token_details.get("cache_creation_input_tokens"))
+        if prompt_cache_creation_tokens is None:
+            prompt_cache_creation_tokens = _safe_int(usage.get("cache_write_tokens"))
+        if provider == "anthropic" or anthropic_cache_read_tokens is not None:
+            anthropic_cache_creation_tokens = prompt_cache_creation_tokens
+        if anthropic_cache_read_tokens is not None or anthropic_cache_creation_tokens is not None:
+            prompt_cache_hit_tokens = anthropic_cache_read_tokens or 0
+            if input_tokens is not None:
+                prompt_cache_miss_tokens = input_tokens + (anthropic_cache_creation_tokens or 0)
+                prompt_tokens = input_tokens + prompt_cache_hit_tokens + (anthropic_cache_creation_tokens or 0)
+        elif prompt_cache_miss_tokens is None and prompt_tokens is not None and prompt_cache_hit_tokens is not None:
+            prompt_cache_miss_tokens = max(0, prompt_tokens - prompt_cache_hit_tokens)
         if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
             total_tokens = prompt_tokens + completion_tokens
-        parsed["llm_prompt_tokens"] = prompt_tokens
-        parsed["llm_completion_tokens"] = completion_tokens
-        parsed["llm_total_tokens"] = total_tokens
-        return parsed
+        values = (prompt_tokens, completion_tokens, total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_creation_tokens)
+        if not any(value is not None for value in values):
+            return None
+        return {
+            "stage": stage,
+            "provider": str(provider or "").strip() or None,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cache_hit_tokens": prompt_cache_hit_tokens,
+            "cache_miss_tokens": prompt_cache_miss_tokens,
+            "cache_creation_tokens": prompt_cache_creation_tokens,
+        }
 
     def _extract_llm_response_content(self, response_json: object) -> str:
         if not isinstance(response_json, dict):
@@ -3087,6 +3270,7 @@ P 数索引：
         title: str,
         summary: dict[str, object],
         source_kind: str | None = None,
+        full_context: bool = False,
     ) -> dict[str, object]:
         base_url = (self._settings.llm_base_url or "").rstrip("/")
         if not base_url or not self._settings.llm_model:
@@ -3094,6 +3278,10 @@ P 数索引：
         if source_kind == "aggregate_series":
             transcript_excerpt = self._build_aggregate_series_excerpt(transcript)
             segments_excerpt = self._build_aggregate_series_segments_excerpt(segments)
+        elif full_context:
+            transcript_excerpt, segments_excerpt = self._build_full_summary_inputs(
+                transcript, segments
+            )
         else:
             transcript_excerpt = self._build_transcript_excerpt(transcript)
             segments_excerpt = self._build_segments_excerpt(segments)
@@ -3123,7 +3311,7 @@ P 数索引：
             summary_json=summary_json,
             source_kind=source_kind,
         )
-        result = self._request_llm_json(base_url=base_url, payload=payload)
+        result = self._request_llm_json(base_url=base_url, payload=payload, usage_stage="knowledge_note")
         result.setdefault("knowledgeNoteMarkdown", "")
         if not str(result.get("knowledgeNoteMarkdown") or "").strip():
             raise VideoSumError("LLM returned empty knowledge note markdown.")
@@ -3134,15 +3322,15 @@ P 数索引：
         task_id: str,
         title: str,
         result: TaskResult,
-    ) -> tuple[TaskMindMap, Path]:
-        mindmap = self._generate_mindmap_with_llm(title=title, result=result)
+    ) -> tuple[TaskMindMap, Path, list[dict[str, object]]]:
+        mindmap, usage_breakdown = self._generate_mindmap_with_llm(title=title, result=result)
         task_dir = ensure_directory(self._settings.tasks_dir / task_id)
         mindmap_path = task_dir / "mindmap.json"
         mindmap_path.write_text(
             json.dumps(mindmap.model_dump(mode="json"), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return mindmap, mindmap_path
+        return mindmap, mindmap_path, usage_breakdown
 
     def build_and_export_visual_evidence(
         self,
@@ -3202,6 +3390,11 @@ P 数索引：
             plan_future = executor.submit(self._build_visual_keyframe_plan, title, result, mode)
             source_path, source_kind, warnings = source_future.result()
             keyframe_plan = plan_future.result()
+        usage_breakdown = [
+            item
+            for item in keyframe_plan.pop("_llm_usage_records", [])
+            if isinstance(item, dict)
+        ]
         self._write_json_atomic(keyframe_plan_path, keyframe_plan)
         keyframes = [item for item in keyframe_plan.get("keyframes", []) if isinstance(item, dict)]
         report(
@@ -3226,6 +3419,7 @@ P 数索引：
                 insert_plan_path=insert_plan_path,
                 mode=mode,
                 insert_count=0,
+                llm_usage_breakdown=usage_breakdown,
             )
             self._write_json_atomic(context_path, context)
             note_path.write_text("", encoding="utf-8")
@@ -3243,7 +3437,7 @@ P 数索引：
         if frames and mode == "vlm_integrated" and self._visual_llm_available():
             try:
                 report("visual_frame_analyzing", 70, "正在调用 VLM 解析画面内容", {"mode": mode, "frame_count": len(frames)})
-                observations = self._describe_visual_frames(frames, title, result)
+                observations = self._describe_visual_frames(frames, title, result, usage_breakdown)
             except Exception as exc:
                 logger.warning("visual frame description failed task_id=%s error=%s", task_id, exc)
                 warnings.append(f"视觉模型描述失败：{exc}")
@@ -3287,6 +3481,7 @@ P 数索引：
             observations=observations,
             insert_plan=insert_plan,
             mode=mode,
+            usage_breakdown=usage_breakdown,
         )
         enhanced_note_path.write_text(enhanced_note_markdown, encoding="utf-8")
         self._write_json_atomic(insert_plan_path, insert_plan)
@@ -3305,6 +3500,7 @@ P 数索引：
             insert_plan_path=insert_plan_path,
             mode=mode,
             insert_count=len(insert_plan.get("insertions", [])) if isinstance(insert_plan.get("insertions"), list) else 0,
+            llm_usage_breakdown=usage_breakdown,
         )
         self._write_json_atomic(context_path, context)
         return context, enhanced_note_path, context_path
@@ -3389,7 +3585,10 @@ P 数索引：
             "visual_frame_index_path": str(Path(note_path).parent / "frame_index.json"),
             "visual_insert_plan_path": str(Path(note_path).parent / "visual_insert_plan.json"),
         }
-        final_result = started_result.model_copy(
+        final_result = merge_llm_usage_records(
+            started_result,
+            [item for item in context.get("llm_usage_breakdown", []) if isinstance(item, dict)],
+        ).model_copy(
             update={
                 "artifacts": artifacts,
                 "visual_note_mode": str(context.get("mode") or mode),
@@ -3518,7 +3717,14 @@ P 数索引：
             "response_format": {"type": "json_object"},
             "enable_thinking": False,
         }
-        parsed = self._request_llm_json(base_url=base_url, payload=payload, timeout=90, retry_count=1)
+        parsed = self._request_llm_json(
+            base_url=base_url,
+            payload=payload,
+            timeout=90,
+            retry_count=1,
+            usage_stage="visual_keyframe_plan",
+        )
+        usage_records = self._llm_usage_records_from_payloads(parsed)
         raw_items = parsed.get("keyframes")
         keyframes: list[dict[str, object]] = []
         if isinstance(raw_items, list):
@@ -3580,9 +3786,18 @@ P 数索引：
                     }
                 )
         if not keyframes:
-            return self._build_visual_keyframe_plan_locally(result, mode)
+            fallback = self._build_visual_keyframe_plan_locally(result, mode)
+            if usage_records:
+                fallback["_llm_usage_records"] = usage_records
+            return fallback
         keyframes.sort(key=lambda item: float(item.get("priority") or 0), reverse=True)
-        return {"schema_version": 1, "mode": mode, "planner": "llm", "keyframes": keyframes[:max_frames]}
+        return {
+            "schema_version": 1,
+            "mode": mode,
+            "planner": "llm",
+            "keyframes": keyframes[:max_frames],
+            "_llm_usage_records": usage_records,
+        }
 
     def _visual_timestamps_from_keyframe_plan(self, keyframe_plan: dict[str, object], result: TaskResult) -> list[float]:
         min_interval = max(5, min(int(self._settings.visual_evidence_frame_interval_seconds or 60), 60))
@@ -3855,6 +4070,7 @@ P 数索引：
         frames: list[dict[str, object]],
         title: str,
         result: TaskResult,
+        usage_records: list[dict[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         provider, base_url, model, api_key = self._visual_llm_config()
         observations: list[dict[str, object]] = []
@@ -3931,6 +4147,14 @@ P 数索引：
                         response = client.post(request_url, headers=headers, json=request_payload)
                     response.raise_for_status()
                     body = response.json()
+                    usage_record = self._normalize_llm_usage_record(
+                        body.get("usage") if isinstance(body, dict) else None,
+                        stage="visual_frame",
+                        model=model,
+                        provider=provider,
+                    )
+                    if usage_record and usage_records is not None:
+                        usage_records.append(usage_record)
                     content = extract_llm_message_content(body)
                     parsed = json.loads(_extract_json_object_text(content))
                     key_facts_raw = parsed.get("key_facts")
@@ -4068,13 +4292,20 @@ P 数索引：
         observations: list[dict[str, object]],
         insert_plan: dict[str, object],
         mode: str,
+        usage_breakdown: list[dict[str, object]] | None = None,
     ) -> str:
         base_note = str(result.knowledge_note_markdown or "").strip()
         if not base_note:
             return ""
         if mode == "vlm_integrated" and observations and self._visual_llm_available():
             try:
-                model_note = self._compose_visual_note_with_llm(title, base_note, observations, insert_plan)
+                model_note = self._compose_visual_note_with_llm(
+                    title,
+                    base_note,
+                    observations,
+                    insert_plan,
+                    usage_records=usage_breakdown,
+                )
                 if self._visual_note_preserves_text_subject(model_note):
                     return model_note
                 logger.warning("visual enhanced note llm composition rejected because text subject was not preserved")
@@ -4099,6 +4330,7 @@ P 数索引：
         knowledge_note_markdown: str,
         observations: list[dict[str, object]],
         insert_plan: dict[str, object] | None = None,
+        usage_records: list[dict[str, object]] | None = None,
     ) -> str:
         provider, base_url, model, api_key = self._visual_llm_config()
         is_anthropic = provider == "anthropic"
@@ -4189,6 +4421,14 @@ P 数索引：
             response = client.post(request_url, headers=headers, json=request_payload)
         response.raise_for_status()
         body = response.json()
+        usage_record = self._normalize_llm_usage_record(
+            body.get("usage") if isinstance(body, dict) else None,
+            stage="visual_note_compose",
+            model=model,
+            provider=provider,
+        )
+        if usage_record and usage_records is not None:
+            usage_records.append(usage_record)
         content = extract_llm_message_content(body)
         if not content:
             raise VideoSumError("图文笔记模型返回空内容。")
@@ -4268,6 +4508,7 @@ P 数索引：
         insert_plan_path: Path,
         mode: str,
         insert_count: int,
+        llm_usage_breakdown: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return {
             "schema_version": 1,
@@ -4287,6 +4528,7 @@ P 数索引：
             "frames": frames,
             "observations": observations,
             "warnings": warnings,
+            "llm_usage_breakdown": llm_usage_breakdown or [],
         }
 
     def _write_json_atomic(self, path: Path, payload: dict[str, object]) -> None:
@@ -4318,6 +4560,10 @@ P 数索引：
                 "You must return valid json only."
             )
         )
+        system_prompt = (
+            f"{system_prompt}\n硬性验收：顶层 root.children 必须生成至少 3 个彼此有区分的一级分支，"
+            "只返回根节点或少于 3 个一级分支都视为不合格；一级分支必须来自内容本身的归纳，不能为了凑数拆碎章节或要点。"
+        )
         user_template = (
             self._settings.mindmap_user_prompt_template.strip()
             if self._settings.mindmap_user_prompt_template.strip()
@@ -4333,34 +4579,35 @@ P 数索引：
 3. nodes 必须是数组，其中包含唯一的根节点；每个节点必须包含 id、label、type、summary、children、time_anchor、source_chapter_titles、source_chapter_starts。
 4. type 只能是 root、theme、topic、leaf 之一。
 5. 整体结构必须是树，最大深度为 root -> theme -> topic/leaf -> leaf。
-6. 顶层 theme 数量应为 4 到 8 个，每个 theme 下应有 3 到 6 个 topic 或 leaf；除非原内容本身很短，否则不要生成过于稀疏的导图。
-7. leaf 节点必须能映射到原章节，并带真实时间点；time_anchor 必须取自 source_chapter_starts 中最早的时间点。
-8. source_chapter_titles 和 source_chapter_starts 只保留最相关的 1 到 3 项，且数量一致。
-9. label 必须是有内容的主题名，禁止“主题1”“Part 1”“Section 1”等占位标题。
-10. summary 要适合学习复盘，直接写信息本体，不要重复整段知识笔记；theme/topic 的 summary 尽量写成 2 到 4 句，leaf 的 summary 至少要交代“结论 / 方法 / 条件 / 例子”中的两项。
-11. label 和 summary 内如果出现数学内容，优先使用 KaTeX 兼容的 LaTeX 写法，例如 `$\\frac{1}{n}$`、`$(-1)^n$`、`$\\varepsilon$-$N$`；不要输出无法解析的伪公式。
-12. 只允许输出 JSON；但 JSON 字符串内部允许包含少量 Markdown 和 `$...$` / `$$...$$` 数学公式。
-13. 不要把 chapters 或 chapterGroups 直接一一平移成 theme/topic；必须先做语义归纳，再组织层级。
-14. 如果多个章节都在讲同一个概念、同一种方法、同一类例子，应该聚合成一个主题，而不是拆成多个并列节点。
-15. 导图的每一层都应体现“父主题如何拆成子主题”，而不是简单的时间顺序。
+6. 顶层 theme 至少必须有 3 个；通常控制在 3 到 5 个，只有内容确实存在更多互相独立的知识域时才增加。后续层级的节点数量和深度不设固定下限，以内容结构为准，不要为了满足数量硬拆。
+7. 一级分支必须有明确语义、彼此区分且能覆盖主要内容；不得用“其他”“更多内容”等空泛占位词凑数，也不得按每个章节或每个要点机械铺开。
+8. leaf 节点必须能映射到原章节，并带真实时间点；time_anchor 必须取自 source_chapter_starts 中最早的时间点。
+9. source_chapter_titles 和 source_chapter_starts 只保留最相关的 1 到 3 项，且数量一致。
+10. label 必须是有内容的主题名，禁止“主题1”“Part 1”“Section 1”等占位标题。
+11. summary 要适合学习复盘，直接写信息本体，不要重复整段知识笔记；只有在内容确实存在不同子议题时才继续细化。
+12. label 和 summary 内如果出现数学内容，优先使用 KaTeX 兼容的 LaTeX 写法，例如 `$\\frac{1}{n}$`、`$(-1)^n$`、`$\\varepsilon$-$N$`；不要输出无法解析的伪公式。
+13. 只允许输出 JSON；但 JSON 字符串内部允许包含少量 Markdown 和 `$...$` / `$$...$$` 数学公式。
+14. 不要把 chapters 或 chapterGroups 直接一一平移成 theme/topic；必须先做语义归纳，再组织层级。
+15. 如果多个章节都在讲同一个概念、同一种方法、同一类例子，应该先合并为一个主题，而不是拆成多个并列节点。
+16. 导图的每一层都应体现“父主题如何拆成子主题”，形成概念—方法—案例—条件等架构，而不是简单的时间顺序。
 
 写作要求：
 - 优先按“概念定义 / 推导方法 / 典型例子 / 易错点 / 结论判断 / 应用条件”这类知识结构重组。
 - 根节点应该是整支视频真正的学习主题，不要只是视频标题原样重复，除非标题本身已经是明确概念。
-- theme 层应该是 4 到 8 个最核心的大主题，彼此之间要有明显区分。
+- theme 层优先整理成 3 到 5 个最核心的大主题，彼此之间要有明显区分；只有材料确实需要时才增加主题。
 - topic 层应承担细化作用，只有当某个 theme 下确实存在两到三类不同子议题时才保留 topic；否则可直接挂 leaf。
 - leaf 节点要具体、短促、可点击后立刻看懂，不要写成长句，也不要只是“第X部分”。
 - 允许把多个来源章节压缩成一个更抽象、更像脑图节点的表达。
 - 如果原文本身是教程或知识讲解，优先提炼“知识结构”；如果原文是评论或资讯，优先提炼“观点结构”和“因果关系”。
-- 若视频包含公式、定义、判别条件、证明步骤、典型例题，不要省略它们；应把它们拆成独立主题或叶子节点，而不是只保留一个笼统标题。
-- 不要怕信息多，只要层级清楚即可；优先保证“覆盖完整”和“节点可学”，不要只给每个主题一个空泛标签。
+- 若视频包含公式、定义、判别条件、证明步骤、典型例题，不要省略它们；应把它们归入合适的主题或子节点，而不是只保留一个笼统标题。
+- 优先保证“覆盖完整”和“节点可学”，但要合并重复内容，避免把每个章节、每个句子都变成节点。
 - 对于数学/理工类内容，优先把“定义、命题、判别条件、证明思路、典型例题、易错点”拆成不同节点；不要把整段证明压成一句泛泛描述。
-- 如果一个 theme 下只生成了 1 个叶子节点，优先继续细化，除非原文确实只讲了这一点。
+- 如果一个 theme 下只有 1 个子节点，只要它准确概括了该主题就可以保留，不要为了凑数量继续发散。
 - 如果知识笔记已经给出分点、例题或条件，你应该把这些信息展开到对应节点，而不是只复述 theme 名称。
 - 最终观感要像学习者自己整理出来的脑图，而不是讲稿目录。
 
-输出格式示例：
-{{"title":"","root":"root","nodes":[{{"id":"root","label":"","type":"root","summary":"","children":[{{"id":"theme-1","label":"","type":"theme","summary":"","children":[{{"id":"leaf-1","label":"","type":"leaf","summary":"","children":[],"time_anchor":0,"source_chapter_titles":[""],"source_chapter_starts":[0]}}],"source_chapter_titles":[],"source_chapter_starts":[]}}],"source_chapter_titles":[],"source_chapter_starts":[]}}]}}
+输出格式示例（仅示意至少 3 个一级分支，实际节点必须根据内容整合）：
+{{"title":"","root":"root","nodes":[{{"id":"root","label":"","type":"root","summary":"","children":[{{"id":"theme-1","label":"核心概念","type":"theme","summary":"","children":[],"source_chapter_titles":[],"source_chapter_starts":[]}},{{"id":"theme-2","label":"方法与过程","type":"theme","summary":"","children":[],"source_chapter_titles":[],"source_chapter_starts":[]}},{{"id":"theme-3","label":"应用与判断","type":"theme","summary":"","children":[],"source_chapter_titles":[],"source_chapter_starts":[]}}],"source_chapter_titles":[],"source_chapter_starts":[]}}]}}
 
 视频标题：
 {title}
@@ -4406,7 +4653,7 @@ P 数索引：
         self,
         title: str,
         result: TaskResult,
-    ) -> TaskMindMap:
+    ) -> tuple[TaskMindMap, list[dict[str, object]]]:
         base_url = (self._settings.llm_base_url or "").rstrip("/")
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
@@ -4435,8 +4682,139 @@ P 数索引：
             len(result.chapter_groups or []),
         )
         payload = self._build_llm_mindmap_payload(title, summary_json, knowledge_note_markdown)
-        llm_result = self._request_llm_json(base_url=base_url, payload=payload)
-        return self._normalize_mindmap_payload(llm_result, title=title, result=result)
+        llm_result = self._request_llm_json(
+            base_url=base_url,
+            payload=payload,
+            usage_stage="mindmap",
+        )
+        usage_breakdown = self._llm_usage_records_from_payloads(llm_result)
+        mindmap = self._normalize_mindmap_payload(llm_result, title=title, result=result)
+        if not self._mindmap_has_minimum_branches(mindmap):
+            repair_payload = self._build_llm_mindmap_repair_payload(
+                title=title,
+                summary_json=summary_json,
+                knowledge_note_markdown=knowledge_note_markdown,
+            )
+            repair_result = self._request_llm_json(
+                base_url=base_url,
+                payload=repair_payload,
+                usage_stage="mindmap_repair",
+            )
+            usage_breakdown.extend(self._llm_usage_records_from_payloads(repair_result))
+            repaired_mindmap = self._normalize_mindmap_payload(repair_result, title=title, result=result)
+            if self._mindmap_has_minimum_branches(repaired_mindmap):
+                mindmap = repaired_mindmap
+            else:
+                mindmap = self._build_mindmap_fallback(title=title, result=result)
+        return mindmap, usage_breakdown
+
+    def _build_llm_mindmap_repair_payload(
+        self,
+        *,
+        title: str,
+        summary_json: str,
+        knowledge_note_markdown: str,
+    ) -> dict[str, object]:
+        payload = self._build_llm_mindmap_payload(title, summary_json, knowledge_note_markdown)
+        messages = list(payload.get("messages") or [])
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "上一版导图未通过结构验收。请重新输出完整 JSON，不要解释原因。"
+                    f"硬性要求：root.children 至少包含 {_MIN_MINDMAP_TOP_LEVEL_BRANCHES} 个有明确语义的一级 theme；"
+                    "后续层级不设固定数量，不要为了凑数继续拆分或制造空泛节点。"
+                    "请先合并同类章节，再根据已有摘要和知识笔记中的概念、方法、例子、条件或结论组织架构，严禁编造外部信息。"
+                ),
+            }
+        )
+        payload["messages"] = self._ensure_json_keyword_in_messages(messages)
+        payload["temperature"] = 0
+        return payload
+
+    @staticmethod
+    def _mindmap_has_minimum_branches(mindmap: TaskMindMap) -> bool:
+        if not mindmap.nodes:
+            return False
+        root = next((node for node in mindmap.nodes if node.id == mindmap.root), mindmap.nodes[0])
+        return len(root.children) >= _MIN_MINDMAP_TOP_LEVEL_BRANCHES
+
+    def _build_mindmap_fallback(self, *, title: str, result: TaskResult) -> TaskMindMap:
+        """Guarantee a navigable tree when a model ignores the JSON contract."""
+
+        candidates: list[tuple[str, str, float | None, str]] = []
+        for group in result.chapter_groups or []:
+            if not isinstance(group, dict):
+                continue
+            label = str(group.get("title") or "").strip()
+            summary = str(group.get("summary") or "").strip()
+            if label or summary:
+                candidates.append((label or "章节重点", summary, _safe_float(group.get("start")), "group"))
+        for chapter in result.timeline or []:
+            if not isinstance(chapter, dict):
+                continue
+            label = str(chapter.get("title") or "").strip()
+            summary = str(chapter.get("summary") or "").strip()
+            if label or summary:
+                candidates.append((label or "内容展开", summary, _safe_float(chapter.get("start")), "chapter"))
+        for point in result.key_points or []:
+            summary = str(point).strip()
+            if summary:
+                candidates.append((summary[:36], summary, None, "point"))
+
+        fallback_specs = [
+            ("核心概念", result.overview, None, "overview"),
+            ("关键方法", "；".join(str(item).strip() for item in result.key_points[:2] if str(item).strip()), None, "points"),
+            ("应用与判断", "；".join(str(item.get("summary") or "").strip() for item in result.timeline[:2] if isinstance(item, dict)), None, "chapters"),
+        ]
+        selected: list[tuple[str, str, float | None, str]] = []
+        seen: set[str] = set()
+        for item in [*candidates, *fallback_specs]:
+            label, summary, start, source_kind = item
+            label = self._normalize_content_title(label, fallback_text=summary, fallback_prefix="主题", fallback_index=len(selected) + 1)
+            key = self._dedupe_text_key(label)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            selected.append((label, summary.strip() or result.overview, start, source_kind))
+            if len(selected) >= 8:
+                break
+        while len(selected) < _MIN_MINDMAP_TOP_LEVEL_BRANCHES:
+            index = len(selected) + 1
+            selected.append((f"知识分支 {index}", result.overview.strip() or title, None, "fallback"))
+
+        root = MindMapNode(
+            id="root",
+            label=title,
+            type="root",
+            summary=_truncate_text(result.overview, 360),
+            children=[],
+        )
+        leaf_labels = ("核心内容", "关键依据", "应用提示")
+        for index, (label, summary, start, _source_kind) in enumerate(selected[:8], start=1):
+            source_titles = [label] if start is not None else []
+            source_starts = [start] if start is not None else []
+            leaf = MindMapNode(
+                id=f"fallback-leaf-{index}",
+                label=leaf_labels[(index - 1) % len(leaf_labels)],
+                type="leaf",
+                summary=_truncate_text(summary, 360),
+                time_anchor=start,
+                source_chapter_titles=source_titles,
+                source_chapter_starts=source_starts,
+            )
+            root.children.append(
+                MindMapNode(
+                    id=f"fallback-theme-{index}",
+                    label=label,
+                    type="theme",
+                    summary=_truncate_text(summary, 360),
+                    children=[leaf],
+                    source_chapter_titles=source_titles,
+                    source_chapter_starts=source_starts,
+                )
+            )
+        return TaskMindMap(version=1, title=title, root=root.id, nodes=[root])
 
     def _normalize_mindmap_payload(
         self,
@@ -4686,6 +5064,43 @@ P 数索引：
                 break
             start = max(cursor - overlap, start + 1)
         return chunks
+
+    def _build_full_summary_inputs(
+        self,
+        transcript: str,
+        segments: list[dict[str, object]],
+    ) -> tuple[str, str]:
+        transcript_context = (
+            self._render_transcript_from_segments(segments)
+            if segments
+            else str(transcript or "").strip()
+        )
+        anchors = [
+            {
+                "start": item.get("start"),
+                "end": item.get("end"),
+            }
+            for item in segments
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        return transcript_context, json.dumps(anchors, ensure_ascii=False)
+
+    def _should_use_full_summary_context(
+        self,
+        transcript: str,
+        segments: list[dict[str, object]],
+        source_kind: str | None = None,
+    ) -> bool:
+        if source_kind == "aggregate_series":
+            return False
+        mode = normalize_summary_context_mode(self._settings.summary_context_mode)
+        if mode == "full":
+            return True
+        if mode == "chunked":
+            return False
+        transcript_context, _ = self._build_full_summary_inputs(transcript, segments)
+        max_chars = max(800, int(self._settings.summary_full_context_max_chars or 18000))
+        return len(transcript_context) <= max_chars
 
     def _build_aggregate_summary_inputs(
         self,
@@ -5762,4 +6177,8 @@ P 数索引：
             llm_prompt_tokens=_safe_int(summary.get("llm_prompt_tokens")),
             llm_completion_tokens=_safe_int(summary.get("llm_completion_tokens")),
             llm_total_tokens=_safe_int(summary.get("llm_total_tokens")),
+            llm_prompt_cache_hit_tokens=_safe_int(summary.get("llm_prompt_cache_hit_tokens")),
+            llm_prompt_cache_miss_tokens=_safe_int(summary.get("llm_prompt_cache_miss_tokens")),
+            llm_prompt_cache_creation_tokens=_safe_int(summary.get("llm_prompt_cache_creation_tokens")),
+            llm_usage_breakdown=self._llm_usage_records_from_payloads(summary),
         )

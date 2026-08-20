@@ -1586,6 +1586,88 @@
   font-family: var(--font-mono);
 }
 
+.detail-token-usage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.detail-token-usage-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: help;
+}
+
+.detail-token-usage-trigger:hover,
+.detail-token-usage-trigger:focus-visible {
+  color: var(--text-primary);
+}
+
+.detail-token-usage-icon {
+  color: var(--brand-600);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+}
+
+.detail-token-usage-tooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: min(330px, calc(100vw - 32px));
+  gap: 6px;
+  padding: 13px 15px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-align: left;
+  pointer-events: none;
+}
+
+.detail-token-usage-breakdown {
+  display: grid;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.detail-token-usage-breakdown span {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.detail-token-usage-tooltip strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.detail-token-usage-tooltip small {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.detail-token-usage-divider {
+  height: 1px;
+  margin: 3px 0;
+  background: var(--border-subtle);
+}
+
 .detail-workspace-signal {
   display: inline-flex;
   align-items: center;

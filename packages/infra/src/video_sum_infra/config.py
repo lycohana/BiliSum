@@ -403,6 +403,18 @@ VISUAL_NOTE_MODE_ALIASES = {
     "integrated": "vlm_integrated",
 }
 
+SUMMARY_CONTEXT_MODE_ALIASES = {
+    "auto": "auto",
+    "automatic": "auto",
+    "full": "full",
+    "whole": "full",
+    "whole_transcript": "full",
+    "whole-transcript": "full",
+    "chunked": "chunked",
+    "chunks": "chunked",
+    "split": "chunked",
+}
+
 VISUAL_DOWNLOAD_RESOLUTION_ALIASES = {
     "auto": "auto",
     "best": "auto",
@@ -452,6 +464,13 @@ def normalize_visual_note_mode(value: str | None, default: str = "text") -> str:
     if not normalized:
         return default
     return VISUAL_NOTE_MODE_ALIASES.get(normalized, default)
+
+
+def normalize_summary_context_mode(value: str | None, default: str = "auto") -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    return SUMMARY_CONTEXT_MODE_ALIASES.get(normalized, default)
 
 
 def normalize_visual_download_resolution(value: str | None, default: str = "auto") -> str:
@@ -566,6 +585,8 @@ class ServiceSettings(BaseSettings):
     enable_cache: bool = True
     language: str = "zh"
     summary_mode: str = "llm"
+    summary_context_mode: str = "auto"
+    summary_full_context_max_chars: int = 18000
     prompt_router_mode: str = "confirm"
     prompt_presets_path: str = ""
     llm_enabled: bool = False
@@ -658,6 +679,11 @@ class ServiceSettings(BaseSettings):
     def _normalize_visual_note_mode(cls, value: str | None) -> str:
         return normalize_visual_note_mode(value)
 
+    @field_validator("summary_context_mode", mode="before")
+    @classmethod
+    def _normalize_summary_context_mode(cls, value: str | None) -> str:
+        return normalize_summary_context_mode(value)
+
     @field_validator("visual_download_resolution", mode="before")
     @classmethod
     def _normalize_visual_download_resolution(cls, value: str | None) -> str:
@@ -673,7 +699,20 @@ class ServiceSettings(BaseSettings):
     def _normalize_knowledge_index_auto_rebuild(cls, value: str | None) -> str:
         return normalize_knowledge_index_auto_rebuild(value)
 
-    @field_validator("summary_chunk_overlap_segments", "task_concurrency", "mindmap_concurrency", "summary_chunk_concurrency", "summary_chunk_retry_count", "visual_evidence_max_frames", "visual_evidence_frame_interval_seconds", "visual_evidence_frame_width", "visual_evidence_timeout_seconds", "visual_evidence_retry_count", mode="before")
+    @field_validator(
+        "summary_full_context_max_chars",
+        "summary_chunk_overlap_segments",
+        "task_concurrency",
+        "mindmap_concurrency",
+        "summary_chunk_concurrency",
+        "summary_chunk_retry_count",
+        "visual_evidence_max_frames",
+        "visual_evidence_frame_interval_seconds",
+        "visual_evidence_frame_width",
+        "visual_evidence_timeout_seconds",
+        "visual_evidence_retry_count",
+        mode="before",
+    )
     @classmethod
     def _coerce_positive_int(cls, value: int | str | None) -> int:
         parsed = int(value or 1)

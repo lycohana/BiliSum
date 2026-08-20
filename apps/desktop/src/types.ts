@@ -36,6 +36,18 @@ export type TaskMindMap = {
   nodes: MindMapNode[];
 };
 
+export type LlmUsageRecord = {
+  stage?: string;
+  provider?: string | null;
+  model?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  cache_hit_tokens?: number | null;
+  cache_miss_tokens?: number | null;
+  cache_creation_tokens?: number | null;
+};
+
 export type TaskResult = {
   overview: string;
   knowledge_note_markdown?: string;
@@ -49,6 +61,10 @@ export type TaskResult = {
   llm_prompt_tokens?: number | null;
   llm_completion_tokens?: number | null;
   llm_total_tokens?: number | null;
+  llm_prompt_cache_hit_tokens?: number | null;
+  llm_prompt_cache_miss_tokens?: number | null;
+  llm_prompt_cache_creation_tokens?: number | null;
+  llm_usage_breakdown?: LlmUsageRecord[];
   mindmap_status?: TaskMindMapStatus;
   mindmap_error_message?: string | null;
   mindmap_artifact_path?: string | null;
@@ -408,6 +424,8 @@ export type ServiceSettings = {
   enable_cache: boolean;
   language: string;
   summary_mode: string;
+  summary_context_mode: string;
+  summary_full_context_max_chars: number;
   prompt_router_mode: "auto" | "confirm" | string;
   prompt_presets_path: string;
   llm_enabled: boolean;
