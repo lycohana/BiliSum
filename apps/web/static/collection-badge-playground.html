@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>Bilibili 合集角标方案选择 · BiliSum</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --brand-500:#fb7299; --bg-base:#121212; --bg-canvas:#1a1a1a; --bg-card:#202020; --bg-elevated:#2d2d2d;
+      --text-primary:#f5f5f5; --text-secondary:#b0b0b0; --text-tertiary:#8a8a8a;
+      --border-subtle:rgba(255,255,255,.08); --border-default:rgba(255,255,255,.12); --border-strong:rgba(255,255,255,.18); --border-focus:rgba(251,114,153,.5);
+      --shadow-xs:0 1px 2px rgba(0,0,0,.2); --shadow-sm:0 2px 8px rgba(0,0,0,.3);
+      --radius-sm:8px; --radius-md:12px; --radius-lg:16px; --radius-xl:20px; --radius-pill:999px;
+      --font-sans:Inter,"Plus Jakarta Sans",Manrope,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;
+    }
+    :root[data-theme="light"] {
+      color-scheme:light; --bg-base:#fafbfc; --bg-canvas:#fff; --bg-card:#fff; --bg-elevated:#fff;
+      --text-primary:#1a1a1a; --text-secondary:#3f4754; --text-tertiary:#5f6878;
+      --border-subtle:rgba(0,0,0,.06); --border-default:rgba(0,0,0,.1); --border-strong:rgba(0,0,0,.15); --border-focus:rgba(251,114,153,.4);
+      --shadow-xs:0 1px 2px rgba(0,0,0,.04); --shadow-sm:0 2px 8px rgba(0,0,0,.06);
+    }
+    *{box-sizing:border-box} html{min-width:320px;background:var(--bg-base)}
+    body{margin:0;min-height:100vh;color:var(--text-primary);background:var(--bg-base);font-family:var(--font-sans)}
+    button{font:inherit}.shell{width:min(1180px,calc(100% - 40px));margin:0 auto;padding:30px 0 80px}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:24px;border-bottom:1px solid var(--border-subtle)}
+    .brand{display:flex;align-items:center;gap:12px}.brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--radius-sm);color:#24151a;background:var(--brand-500);font-size:14px;font-weight:800}
+    .brand-copy{display:grid;gap:2px}.brand-copy strong{font-size:14px}.brand-copy span{color:var(--text-tertiary);font-size:11px}
+    .theme-switch{display:inline-flex;padding:3px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--bg-card)}
+    .theme-button{min-width:56px;min-height:32px;padding:0 10px;border:0;border-radius:var(--radius-sm);color:var(--text-tertiary);background:transparent;cursor:pointer;transition:color 160ms ease,background 160ms ease}
+    .theme-button:hover,.theme-button:focus-visible{color:var(--text-primary);outline:none}.theme-button:focus-visible{box-shadow:0 0 0 2px var(--border-focus)}
+    .theme-button.is-active{color:var(--text-primary);background:var(--bg-elevated);box-shadow:var(--shadow-xs)}
+    .intro{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:32px;padding:54px 0 30px}
+    .eyebrow{margin:0 0 12px;color:var(--text-tertiary);font-size:11px;font-weight:700;letter-spacing:.11em;text-transform:uppercase}
+    h1{max-width:720px;margin:0;font-size:clamp(30px,4.4vw,50px);line-height:1.08;letter-spacing:-.04em}
+    .intro-copy{max-width:700px;margin:16px 0 0;color:var(--text-secondary);font-size:14px;line-height:1.75}
+    .selection-readout{min-width:204px;padding:15px 16px;border:1px solid var(--border-default);border-radius:var(--radius-lg);background:var(--bg-card);box-shadow:var(--shadow-xs)}
+    .selection-readout small{display:block;margin-bottom:6px;color:var(--text-tertiary);font-size:11px}.selection-readout strong{font-size:16px;line-height:1.35}
+    .reference{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;padding:12px 14px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);color:var(--text-secondary);background:var(--bg-canvas);font-size:12px}
+    .reference strong{color:var(--text-primary)}.reference a{color:var(--text-secondary);text-underline-offset:3px}.reference a:hover{color:var(--text-primary)}
+    .options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .option{display:flex;min-width:0;flex-direction:column;padding:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-xl);background:var(--bg-card);box-shadow:var(--shadow-xs);transition:border-color 180ms ease,transform 180ms ease,box-shadow 180ms ease}
+    .option:hover{transform:translateY(-2px);border-color:var(--border-default);box-shadow:var(--shadow-sm)}.option.is-selected{border-color:var(--brand-500);box-shadow:0 0 0 3px rgba(251,114,153,.1)}
+    .demo-cover{position:relative;aspect-ratio:16/9;overflow:hidden;border-radius:var(--radius-lg);background:#31343a;isolation:isolate}
+    .demo-cover img{display:block;width:100%;height:100%;object-fit:cover;object-position:center}
+    .option-meta{display:grid;grid-template-columns:34px minmax(0,1fr);gap:9px;padding:14px 2px 12px}.option-number{color:var(--text-tertiary);font-size:11px;font-weight:800;line-height:1.5;letter-spacing:.04em}
+    .option h2{margin:0;font-size:14px;line-height:1.45}.option-description{min-height:38px;margin:5px 0 0;color:var(--text-secondary);font-size:12px;line-height:1.55}
+    .use-case{margin:8px 0 0;color:var(--text-tertiary);font-size:11px;line-height:1.5}.use-case strong{color:var(--text-secondary);font-weight:650}
+    .choose{width:100%;min-height:36px;margin-top:auto;border:1px solid var(--border-default);border-radius:var(--radius-md);color:var(--text-secondary);background:transparent;font-size:12px;font-weight:700;cursor:pointer;transition:border-color 160ms ease,color 160ms ease,background 160ms ease}
+    .choose:hover,.choose:focus-visible{border-color:var(--border-strong);color:var(--text-primary);outline:none}.choose:focus-visible{box-shadow:0 0 0 2px var(--border-focus)}
+    .is-selected .choose{border-color:var(--brand-500);color:var(--text-primary);background:rgba(251,114,153,.08)}
+    .badge{position:absolute;top:9px;right:9px;z-index:2;color:#f7f7f5;font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.32)}
+    .badge strong,.badge span{display:block}
+    .badge-01{display:flex;align-items:baseline;justify-content:center;width:clamp(54px,18%,62px);height:28px;gap:3px;border-radius:var(--radius-pill);background:rgba(20,22,24,.78);box-shadow:0 1px 4px rgba(0,0,0,.2)}.badge-01 strong{font-size:14px}.badge-01 span{font-size:9px;font-weight:650}
+    .badge-02{display:grid;width:clamp(50px,15%,54px);height:46px;place-content:center;gap:2px;border-radius:var(--radius-sm);background:rgba(20,22,24,.82);box-shadow:var(--shadow-xs);text-align:center}.badge-02 strong{font-size:16px;line-height:1}.badge-02 span{font-size:9px;font-weight:650;line-height:1}
+    .badge-03{display:grid;width:clamp(50px,15%,54px);aspect-ratio:1;place-content:center;gap:1px;border:1px solid rgba(255,255,255,.62);border-radius:50%;background:rgba(18,20,22,.42);box-shadow:inset 0 0 0 2px rgba(18,20,22,.24);text-align:center}.badge-03 strong{font-size:15px;line-height:1}.badge-03 span{font-size:9px;font-weight:650;line-height:1}
+    .badge-04{top:auto;bottom:9px;display:grid;grid-template-columns:1fr 20px;width:clamp(62px,20%,68px);height:32px;padding:0;overflow:hidden;border:1px solid color-mix(in srgb,var(--border-strong) 82%,transparent);border-radius:var(--radius-sm);color:var(--text-primary);background:color-mix(in srgb,var(--bg-elevated) 74%,transparent);box-shadow:var(--shadow-sm);font-variant-numeric:tabular-nums;text-shadow:none;backdrop-filter:blur(12px) saturate(118%);-webkit-backdrop-filter:blur(12px) saturate(118%)}.badge-04 strong{display:grid;place-items:center;font-size:14px;font-weight:700;line-height:1}.badge-04 span{display:grid;place-items:center;border-left:1px solid color-mix(in srgb,var(--border-strong) 76%,transparent);color:var(--text-secondary);font-size:9px;font-weight:700;line-height:1}
+    .badge-05{display:grid;width:clamp(48px,16%,54px);height:40px;place-content:center;border:1px solid rgba(255,255,255,.12);border-radius:var(--radius-md);background:rgba(29,31,34,.88);box-shadow:var(--shadow-xs);text-align:center}.badge-05 strong{font-size:14px;line-height:1}.badge-05 span{margin-top:3px;color:rgba(255,255,255,.7);font-size:8px;font-weight:700;line-height:1;letter-spacing:.08em}
+    .badge-06{display:flex;align-items:baseline;justify-content:center;width:clamp(56px,19%,64px);height:30px;gap:3px;border:1px solid rgba(255,255,255,.46);border-radius:var(--radius-pill);background:rgba(255,255,255,.14);box-shadow:0 2px 6px rgba(0,0,0,.14),inset 0 1px 0 rgba(255,255,255,.18);backdrop-filter:blur(8px) saturate(108%);-webkit-backdrop-filter:blur(8px) saturate(108%)}.badge-06 strong{font-size:14px}.badge-06 span{font-size:9px;font-weight:650}
+    .badge-07{display:grid;width:clamp(50px,15%,54px);height:54px;place-content:center;gap:4px;border-radius:var(--radius-pill);background:rgba(18,20,22,.76);box-shadow:var(--shadow-xs);text-align:center}.badge-07 strong{font-size:15px;line-height:1}.badge-07 span{font-size:8px;font-weight:700;line-height:1;letter-spacing:.1em}
+    .badge-08{display:flex;align-items:baseline;justify-content:center;width:clamp(54px,18%,60px);height:29px;gap:3px;border:1px solid rgba(255,255,255,.7);border-radius:var(--radius-md);background:rgba(17,19,21,.22);box-shadow:0 1px 3px rgba(0,0,0,.14);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}.badge-08 strong{font-size:14px}.badge-08 span{font-size:9px;font-weight:650}
+    .badge-09{display:flex;width:clamp(54px,18%,60px);height:42px;flex-direction:column;justify-content:center;padding:0 9px;border-radius:var(--radius-md);background:rgba(18,20,22,.78);box-shadow:var(--shadow-xs);text-align:left}.badge-09 strong{font-size:16px;line-height:.95}.badge-09 span{margin-top:4px;color:rgba(255,255,255,.7);font-size:8px;font-weight:700;line-height:1}
+    .badge-10{display:flex;align-items:baseline;justify-content:flex-end;width:clamp(52px,17%,58px);height:27px;gap:2px;padding:0 8px;border-radius:6px;background:rgba(12,14,16,.68);box-shadow:0 1px 2px rgba(0,0,0,.18)}.badge-10 strong{font-size:13px}.badge-10 span{color:rgba(255,255,255,.74);font-size:8px;font-weight:650}
+    .footnote{margin:22px 2px 0;color:var(--text-tertiary);font-size:11px;line-height:1.7}
+    @media(max-width:960px){.options{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:640px){.shell{width:min(100% - 24px,420px);padding-top:18px}.intro{grid-template-columns:1fr;align-items:start;padding-top:38px}.selection-readout{width:100%}.reference{align-items:flex-start;flex-direction:column}.options{grid-template-columns:1fr}}
+    @media(prefers-reduced-transparency:reduce){.badge-04{background:var(--bg-elevated);backdrop-filter:none;-webkit-backdrop-filter:none}}
+    @media(prefers-contrast:more){.badge-04{background:var(--bg-elevated);border-color:var(--border-strong)}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="toolbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">B</span><span class="brand-copy"><strong>BiliSum</strong><span>Collection badge study</span></span></div>
+      <div class="theme-switch" role="group" aria-label="切换页面主题">
+        <button class="theme-button is-active" type="button" data-theme-button="dark" aria-pressed="true">深色</button>
+        <button class="theme-button" type="button" data-theme-button="light" aria-pressed="false">浅色</button>
+      </div>
+    </header>
+    <section class="intro">
+      <div><p class="eyebrow">Collection count badge · 10 directions</p><h1>合集集数角标方案选择</h1><p class="intro-copy">同一张真实封面、同一套普通视频卡片比例，只比较角标。所有方案避开大面积品牌粉、渐变、厚描边和斜切造型；选择仅记录在此页，不会修改正式视频库。</p></div>
+      <div class="selection-readout" aria-live="polite"><small>当前选择</small><strong id="selection-readout">尚未选择方案</strong></div>
+    </section>
+    <div class="reference"><span><strong>统一样张</strong> · 16:9 视频卡 · 43 集 · 本地封面已缓存</span><a href="https://www.bilibili.com/video/BV1AGdwBEEzS/" target="_blank" rel="noreferrer">参考视频 BV1AGdwBEEzS</a></div>
+    <section class="options" id="options" aria-label="合集集数角标方案"></section>
+    <p class="footnote">说明：角标宽度按普通视频卡片控制在约 15%–20%，仅方案 04 接近 21%；所有预览均使用同一张本地缓存的真实 Bilibili 封面。页面选择状态只存在当前会话内。</p>
+  </main>
+  <script>
+    const cover = "./assets/bilibili-collection-playground-cover.jpg";
+    const schemes = [
+      ["01","石墨胶囊","数字与单位同轴排列，深色半透明底稳住复杂封面。","默认视频库与高密度卡片。","集"],
+      ["02","微型方牌","紧凑圆角方牌，上下分层，轮廓明确但面积小。","封面右上角信息较少的卡片。","集"],
+      ["03","细环圆章","透明圆形配单层细环，保留封面纹理，视觉更轻。","画面明暗变化不剧烈的封面。","集"],
+      ["04","分栏计数牌","数字和单位由细分隔线组织，像编辑工具的数据标签。","强调清晰扫描与工具属性。","集"],
+      ["05","静音叠牌","低对比实底与短标签，稳定、安静，弱化悬浮感。","缩略图色彩复杂的合集。","集"],
+      ["06","轻霜玻璃","低透明白层、8px 模糊和单线边框，材质克制。","希望保留一点精致感的首页卡片。","集"],
+      ["07","纵向计数","窄体竖向胶囊，用高度换宽度，减少横向遮挡。","主体靠近右侧但顶部留白较多。","集"],
+      ["08","透明线框","近透明底加清晰细边框，只做必要的对比度保护。","整体偏暗、层次干净的封面。","集"],
+      ["09","左对齐数据牌","数字不居中，采用编辑面板式左对齐，信息层级鲜明。","偏桌面工具、数据感更强的页面。","集"],
+      ["10","极简墨条","最短矩形底和基线排版，像视频时长标识一样自然。","最高信息密度与最低存在感场景。","集"]
+    ];
+    const optionsRoot = document.querySelector("#options");
+    optionsRoot.innerHTML = schemes.map(([id,name,description,useCase,unit],index) => `
+      <article class="option" data-option="${id}" data-name="${name}">
+        <div class="demo-cover"><img src="${cover}" alt="${index === 0 ? "Bilibili 参考视频封面" : ""}" /><div class="badge badge-${id}"><strong>43</strong><span>${unit}</span></div></div>
+        <div class="option-meta"><span class="option-number">${id}</span><div><h2>${name}</h2><p class="option-description">${description}</p><p class="use-case"><strong>适用：</strong>${useCase}</p></div></div>
+        <button class="choose" type="button" aria-pressed="false">选择 ${id}</button>
+      </article>`).join("");
+    const root = document.documentElement;
+    const readout = document.querySelector("#selection-readout");
+    const themeButtons = [...document.querySelectorAll("[data-theme-button]")];
+    const options = [...document.querySelectorAll(".option")];
+    themeButtons.forEach(button => button.addEventListener("click", () => {
+      root.dataset.theme = button.dataset.themeButton;
+      themeButtons.forEach(item => { const active = item === button; item.classList.toggle("is-active", active); item.setAttribute("aria-pressed", String(active)); });
+    }));
+    options.forEach(option => option.querySelector(".choose").addEventListener("click", () => {
+      options.forEach(item => { item.classList.remove("is-selected"); item.querySelector(".choose").setAttribute("aria-pressed","false"); });
+      option.classList.add("is-selected"); option.querySelector(".choose").setAttribute("aria-pressed","true");
+      readout.textContent = `方案 ${option.dataset.option} · ${option.dataset.name}`;
+    }));
+  </script>
+</body>
+</html>

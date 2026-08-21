@@ -170,6 +170,8 @@ function formatUsageBreakdown(record: LlmUsageRecord) {
   return `${usageStageLabel(record.stage)}：${total}（输入 ${prompt}${cache}）`;
 }
 
+const TOKEN_USAGE_TOOLTIP_CLOSE_DELAY = 280;
+
 function TokenUsageTooltip({ result }: TokenUsageTooltipProps) {
   const [visible, setVisible] = useState(false);
   const timerRef = useRef<number | null>(null);
@@ -184,12 +186,23 @@ function TokenUsageTooltip({ result }: TokenUsageTooltipProps) {
 
   const showAfterDelay = () => {
     clearTimer();
-    timerRef.current = window.setTimeout(() => setVisible(true), 520);
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setVisible(true);
+    }, 520);
+  };
+
+  const keepVisible = () => {
+    clearTimer();
+    setVisible(true);
   };
 
   const hide = () => {
     clearTimer();
-    setVisible(false);
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setVisible(false);
+    }, TOKEN_USAGE_TOOLTIP_CLOSE_DELAY);
   };
 
   useEffect(() => () => clearTimer(), []);
@@ -212,7 +225,12 @@ function TokenUsageTooltip({ result }: TokenUsageTooltipProps) {
         <span aria-hidden="true" className="detail-token-usage-icon">ⓘ</span>
       </button>
       {visible ? (
-        <span className="detail-token-usage-tooltip" id="detail-token-usage-tooltip" role="tooltip">
+        <span
+          className="detail-token-usage-tooltip"
+          id="detail-token-usage-tooltip"
+          role="tooltip"
+          onMouseEnter={keepVisible}
+        >
           <strong>Token 用量（API 统计）</strong>
           <span>总计：{formatTokenMetric(metrics.totalTokens)}</span>
           <span>输入：{formatTokenMetric(metrics.promptTokens)}</span>

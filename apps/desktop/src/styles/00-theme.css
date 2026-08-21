@@ -40,6 +40,7 @@
   --border-default: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(0, 0, 0, 0.15);
   --border-focus: rgba(251, 114, 153, 0.4);
+  --selection-border: rgba(251, 114, 153, 0.22);
 
   --success: #22a866;
   --success-bg: rgba(34, 168, 102, 0.08);
@@ -134,6 +135,7 @@
   --border-default: rgba(255, 255, 255, 0.12);
   --border-strong: rgba(255, 255, 255, 0.18);
   --border-focus: rgba(251, 114, 153, 0.5);
+  --selection-border: rgba(251, 114, 153, 0.22);
   --accent-border: rgba(251, 114, 153, 0.24);
   --success-bg: rgba(34, 168, 102, 0.1);
   --success-border: rgba(34, 168, 102, 0.24);

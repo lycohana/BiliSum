@@ -489,7 +489,7 @@
 }
 
 .detail-page-option.is-selected {
-  border-color: var(--accent-border);
+  border-color: var(--selection-border);
   background: var(--bg-accent);
 }
 
@@ -506,7 +506,7 @@
 
 .detail-page-option.is-unavailable.is-selected {
   opacity: 0.82;
-  border-color: color-mix(in srgb, var(--accent-border) 72%, var(--border-subtle));
+  border-color: color-mix(in srgb, var(--selection-border) 72%, var(--border-subtle));
 }
 
 .detail-page-option.has-summary .detail-page-option-check {
@@ -1633,7 +1633,7 @@
   font-size: 0.78rem;
   line-height: 1.45;
   text-align: left;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .detail-token-usage-breakdown {

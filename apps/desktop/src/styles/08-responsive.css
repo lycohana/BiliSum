@@ -227,6 +227,91 @@
     grid-template-columns: 1fr;
   }
 
+  .collection-detail-hero {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 20px;
+  }
+
+  .collection-detail-hero-cover {
+    min-height: 0;
+  }
+
+  .collection-detail-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .collection-detail-toolbar-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
+  .collection-detail-selection-entry {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .collection-selection-dock {
+    max-width: calc(100vw - 24px);
+    padding: 6px;
+  }
+
+  .collection-detail-batch-actions {
+    justify-content: flex-start;
+  }
+
+  .collection-detail-item {
+    grid-template-columns: 18px 72px minmax(0, 1fr);
+  }
+
+  .collection-detail-item-cover {
+    width: 72px;
+  }
+
+  .collection-detail-item-badge {
+    display: none;
+  }
+
+  .collection-detail-new-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .collection-select-hero {
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .collection-select-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .collection-select-toolbar-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .collection-select-items.is-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .collection-select-list-item {
+    grid-template-columns: 28px 72px minmax(0, 1fr);
+  }
+
+  .collection-select-list-thumb {
+    width: 72px;
+  }
+
+  .collection-select-list-status {
+    display: none;
+  }
+
   .timeline-item-simple {
     grid-template-columns: 1fr;
   }
@@ -299,6 +384,41 @@
   .update-dialog-footer .primary-button,
   .update-dialog-footer .secondary-button {
     width: 100%;
+  }
+
+  .collection-folder-item {
+    grid-template-columns: 18px 44px minmax(0, 1fr);
+  }
+
+  .collection-folder-item.is-selectable {
+    grid-template-columns: 18px 20px 44px minmax(0, 1fr);
+  }
+
+  .collection-folder-item img,
+  .collection-folder-item-placeholder {
+    width: 44px;
+    height: 28px;
+  }
+
+  .collection-select-items.is-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .collection-select-drag-hint {
+    display: none;
+  }
+
+  .collection-select-selection-dock {
+    left: 12px;
+    right: 12px;
+    bottom: 78px;
+    justify-content: space-between;
+    max-width: none;
+    transform: none;
+  }
+
+  .collection-select-selection-dock > span {
+    flex: 1;
   }
 
   .config-alert-card {

@@ -49,6 +49,58 @@ def test_normalize_video_url_accepts_raw_bvid_with_page() -> None:
     assert result.page_number == 2
 
 
+def test_fetch_bilibili_collection_payload_reads_ugc_season(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service_app.video_assets,
+        "_fetch_bilibili_initial_state_payload",
+        lambda url: {
+            "videoData": {
+                "pic": "https://example.com/current.jpg",
+                "owner": {
+                    "mid": 150415653,
+                    "name": "测试 UP 主",
+                    "face": "https://example.com/face.jpg",
+                },
+                "ugc_season": {
+                    "id": 1677227,
+                    "title": "测试合集",
+                    "cover": "https://example.com/collection.jpg",
+                    "sections": [
+                        {
+                            "episodes": [
+                                {
+                                    "bvid": "BV1other",
+                                    "arc": {"title": "第一集", "pic": "https://example.com/one.jpg"},
+                                    "page": {"duration": 61},
+                                },
+                                {
+                                    "bvid": "BV1current",
+                                    "arc": {"title": "第二集"},
+                                    "page": {"duration": 95},
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    collection = service_app.video_assets.fetch_bilibili_collection_payload(
+        "https://www.bilibili.com/video/BV1current/"
+    )
+
+    assert collection is not None
+    assert collection["collection_id"] == "1677227"
+    assert collection["title"] == "测试合集"
+    assert collection["item_count"] == 2
+    assert collection["owner_mid"] == "150415653"
+    assert collection["owner_name"] == "测试 UP 主"
+    assert collection["owner_url"] == "https://space.bilibili.com/150415653"
+    assert collection["items"][1]["is_current"] is True
+    assert collection["items"][0]["source_url"] == "https://www.bilibili.com/video/BV1other/"
+
+
 def test_normalize_video_url_accepts_youtube_watch_url() -> None:
     result = normalize_video_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123")
 

@@ -204,38 +204,147 @@ def first_non_empty(*values: str | None) -> str:
     return next((value.strip() for value in values if isinstance(value, str) and value.strip()), "")
 
 
-def fetch_bilibili_page_catalog_payload(url: str) -> tuple[list[dict[str, object]], str]:
+def _fetch_bilibili_initial_state_payload(url: str) -> dict[str, object]:
     import httpx
 
     try:
         response = httpx.get(
             url,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://www.bilibili.com/",
-            },
+            headers=_BILIBILI_HTTP_HEADERS,
             follow_redirects=True,
             timeout=30.0,
         )
         response.raise_for_status()
     except httpx.HTTPError:
-        logger.warning("failed to fetch bilibili page catalog: %s", url, exc_info=True)
-        return [], ""
+        logger.warning("failed to fetch bilibili page payload: %s", url, exc_info=True)
+        return {}
 
     match = re.search(r"__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;\s*\(function", response.text, re.S)
     if not match:
-        return [], ""
+        return {}
 
     try:
         payload = json.loads(match.group(1))
     except json.JSONDecodeError:
-        logger.warning("failed to parse bilibili page catalog payload: %s", url, exc_info=True)
+        logger.warning("failed to parse bilibili page payload: %s", url, exc_info=True)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def fetch_bilibili_page_catalog_payload(url: str) -> tuple[list[dict[str, object]], str]:
+    payload = _fetch_bilibili_initial_state_payload(url)
+    video_data = payload.get("videoData") or {}
+    if not isinstance(video_data, dict):
         return [], ""
 
-    video_data = payload.get("videoData") or {}
     pages = video_data.get("pages") or []
     cover_url = str(video_data.get("pic") or "").strip()
     return [item for item in pages if isinstance(item, dict)], cover_url
+
+
+def fetch_bilibili_collection_payload(url: str) -> dict[str, object] | None:
+    """Read a Bilibili season collection embedded in the video page."""
+    try:
+        normalized = normalize_video_url(url)
+    except Exception:
+        return None
+    if normalized.platform != "bilibili":
+        return None
+
+    payload = _fetch_bilibili_initial_state_payload(normalized.normalized_url)
+    video_data = payload.get("videoData") or {}
+    if not isinstance(video_data, dict):
+        return None
+    season = video_data.get("ugc_season")
+    if not isinstance(season, dict):
+        return None
+
+    collection_id = str(season.get("id") or season.get("season_id") or "").strip()
+    if not collection_id:
+        return None
+    collection_referer = f"https://www.bilibili.com/video/{normalized.canonical_id}/"
+    items: list[dict[str, object]] = []
+    sections = season.get("sections") or []
+    for section in sections if isinstance(sections, list) else []:
+        if not isinstance(section, dict):
+            continue
+        episodes = section.get("episodes") or []
+        for episode in episodes if isinstance(episodes, list) else []:
+            if not isinstance(episode, dict):
+                continue
+            bvid = str(episode.get("bvid") or "").strip()
+            if not bvid:
+                continue
+            arc = episode.get("arc") if isinstance(episode.get("arc"), dict) else {}
+            page = episode.get("page") if isinstance(episode.get("page"), dict) else {}
+            raw_duration = page.get("duration") or arc.get("duration")
+            try:
+                duration = float(raw_duration) if raw_duration is not None else None
+            except (TypeError, ValueError):
+                duration = None
+            items.append(
+                {
+                    "position": len(items) + 1,
+                    "bvid": bvid,
+                    "title": first_non_empty(
+                        str(arc.get("title") or ""),
+                        str(episode.get("title") or ""),
+                        bvid,
+                    ),
+                    "source_url": f"https://www.bilibili.com/video/{bvid}/",
+                    "cover_url": first_non_empty(
+                        str(arc.get("pic") or ""),
+                        str(episode.get("cover") or ""),
+                    ),
+                    "duration": duration,
+                    "is_current": bvid.lower() == normalized.canonical_id.lower(),
+                }
+            )
+
+    if len(items) < 2:
+        return None
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def cache_collection_item(item: dict[str, object]) -> dict[str, object]:
+        cover_url = str(item.get("cover_url") or "").strip()
+        if cover_url:
+            item["cover_url"] = cache_cover_image(
+                cover_url,
+                f"collection-{collection_id}-{str(item.get('bvid') or 'video')}",
+                referer_url=str(item.get("source_url") or collection_referer),
+            )
+        return item
+
+    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="bilibili-cover") as executor:
+        items = list(executor.map(cache_collection_item, items))
+
+    collection_cover_url = first_non_empty(str(season.get("cover") or ""), str(video_data.get("pic") or ""))
+    cached_collection_cover = cache_cover_image(
+        collection_cover_url,
+        f"collection-{collection_id}",
+        referer_url=collection_referer,
+    )
+    owner = video_data.get("owner") if isinstance(video_data.get("owner"), dict) else {}
+    owner_mid = first_non_empty(str(owner.get("mid") or ""), str(owner.get("uid") or ""))
+    owner_name = first_non_empty(str(owner.get("name") or ""), str(owner.get("uname") or ""))
+    owner_face = first_non_empty(str(owner.get("face") or ""), str(owner.get("avatar") or ""))
+    cached_owner_face = cache_cover_image(
+        owner_face,
+        f"collection-{collection_id}-owner",
+        referer_url=collection_referer,
+    ) if owner_face else ""
+    return {
+        "collection_id": collection_id,
+        "title": first_non_empty(str(season.get("title") or ""), "Bilibili 合集"),
+        "cover_url": cached_collection_cover,
+        "owner_mid": owner_mid or None,
+        "owner_name": owner_name or None,
+        "owner_face": cached_owner_face or owner_face or None,
+        "owner_url": f"https://space.bilibili.com/{owner_mid}" if owner_mid else None,
+        "item_count": len(items),
+        "items": items,
+    }
 
 
 def fetch_bilibili_page_catalog(url: str) -> list[dict[str, object]]:

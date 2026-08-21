@@ -39,6 +39,7 @@ import {
   TrashIcon,
 } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
+import { CollectionCard, CollectionListItem } from "../components/CollectionCard";
 import { VideoCard } from "../components/VideoCard";
 import {
   buildFolderTree,
@@ -58,7 +59,7 @@ import {
   type LibraryScope,
   type LibraryViewMode,
 } from "../libraryModel";
-import type { VideoAssetDetail, VideoAssetSummary, VideoFolder } from "../types";
+import type { VideoAssetDetail, VideoAssetSummary, VideoCollection, VideoFolder } from "../types";
 import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
 
 const COVER_ROWS_PER_PAGE = 5;
@@ -79,7 +80,7 @@ function buildPaginationItems(currentPage: number, totalPages: number): Array<nu
 type LibraryPageProps = {
   snapshot: Snapshot;
   filteredVideos: VideoAssetSummary[];
-  libraryCounts: { total: number; completed: number; running: number; withResult: number; favorite: number };
+  libraryCounts: { total: number; collection: number; completed: number; running: number; withResult: number; favorite: number };
   latestVideo: VideoAssetSummary | null;
   query: string;
   setQuery(value: string): void;
@@ -95,6 +96,12 @@ type LibraryPageProps = {
   onMoveVideo(videoId: string, folderId?: string | null, folderIds?: string[]): Promise<VideoAssetDetail>;
   onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
   onReorderVideos(videoIds: string[], folderId?: string | null): Promise<void>;
+  onReorderVideoLibrary(items: Array<{ kind: "video" | "collection"; id: string }>, folderId?: string | null): Promise<void>;
+  onRefreshCollection(collectionId: string): Promise<VideoCollection>;
+  onToggleCollectionFavorite(collectionId: string, nextFavorite: boolean): Promise<VideoCollection>;
+  onMoveCollection(collectionId: string, folderId?: string | null, folderIds?: string[]): Promise<VideoCollection>;
+  onSetCollectionPin(collectionId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoCollection>;
+  onDeleteCollection(collectionId: string, mode: "detach" | "delete_contents"): Promise<void>;
   onUpdateLibraryPreferences(newVideoPosition: "front" | "back"): Promise<void>;
 };
 
@@ -103,8 +110,28 @@ type OptimisticVideoOrder = {
   ids: string[];
 } | null;
 
+type OptimisticLibraryOrder = {
+  key: string;
+  ids: string[];
+} | null;
+
+type LibraryItem =
+  | { kind: "video"; id: string; order: number; pinned: boolean; video: VideoAssetSummary }
+  | { kind: "collection"; id: string; order: number; pinned: boolean; collection: VideoCollection };
+
+function getLibraryItemId(item: LibraryItem) {
+  return item.kind === "video" ? item.video.video_id : `collection:${item.collection.collection_id}`;
+}
+
 type VideoActionMenu = {
   videoId: string;
+  x: number;
+  y: number;
+  submenuSide: "left" | "right";
+} | null;
+
+type CollectionActionMenu = {
+  collectionId: string;
   x: number;
   y: number;
   submenuSide: "left" | "right";
@@ -134,6 +161,12 @@ export function LibraryPage({
   onMoveVideo,
   onSetVideoPin,
   onReorderVideos,
+  onReorderVideoLibrary,
+  onRefreshCollection,
+  onToggleCollectionFavorite,
+  onMoveCollection,
+  onSetCollectionPin,
+  onDeleteCollection,
   onUpdateLibraryPreferences,
 }: LibraryPageProps) {
   const navigate = useNavigate();
@@ -142,6 +175,7 @@ export function LibraryPage({
   const [viewMode, setViewMode] = useState<LibraryViewMode>(() => loadLibraryViewMode());
   const [activeVideoDragId, setActiveVideoDragId] = useState<string | null>(null);
   const [optimisticVideoOrder, setOptimisticVideoOrder] = useState<OptimisticVideoOrder>(null);
+  const [optimisticLibraryOrder, setOptimisticLibraryOrder] = useState<OptimisticLibraryOrder>(null);
   const [folderDraftParentId, setFolderDraftParentId] = useState<string | null | undefined>(undefined);
   const [folderDraftName, setFolderDraftName] = useState("");
   const [folderDraftBusy, setFolderDraftBusy] = useState(false);
@@ -151,6 +185,8 @@ export function LibraryPage({
   const [folderRenameName, setFolderRenameName] = useState("");
   const [folderDeleteConfirmId, setFolderDeleteConfirmId] = useState<string | null>(null);
   const [videoActionMenu, setVideoActionMenu] = useState<VideoActionMenu>(null);
+  const [collectionActionMenu, setCollectionActionMenu] = useState<CollectionActionMenu>(null);
+  const [collectionDeleteConfirmId, setCollectionDeleteConfirmId] = useState<string | null>(null);
   const [videoDeleteConfirmId, setVideoDeleteConfirmId] = useState<string | null>(null);
   const [videoActionBusy, setVideoActionBusy] = useState(false);
   const [libraryNotice, setLibraryNotice] = useState<{ message: string; tone: "info" | "success" | "error"; version: number }>({ message: "", tone: "info", version: 0 });
@@ -172,10 +208,30 @@ export function LibraryPage({
   const folderTreeData = useMemo(() => buildFolderTree(folders), [folders]);
   const folderMenuItems = useMemo(() => flattenFolderMenuItems(folderTreeData), [folderTreeData]);
   const directVideoCounts = useMemo(() => countDirectVideosByFolder(snapshot.videos), [snapshot.videos]);
+  const directLibraryCounts = useMemo(() => {
+    const counts = new Map(directVideoCounts);
+    for (const collection of snapshot.collections) {
+      for (const folderId of collection.folder_ids || []) {
+        counts.set(folderId, (counts.get(folderId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [directVideoCounts, snapshot.collections]);
   const initialOpenState = useMemo(() => Object.fromEntries(
     folders
       .map((folder) => [folder.folder_id, !collapsedFolderIds.has(folder.folder_id)]),
   ), [collapsedFolderIds, folders]);
+  const visibleCollections = useMemo(() => {
+    if (activeFilter !== "all" && activeFilter !== "collection" && activeFilter !== "favorite") return [];
+    const keyword = query.trim().toLowerCase();
+    return snapshot.collections.filter((collection) => {
+      if (activeFilter === "favorite" && !collection.is_favorite) return false;
+      if (activeScope === "favorite" && !collection.is_favorite) return false;
+      if (activeScope === "unfiled" && (collection.folder_ids?.length || 0) > 0) return false;
+      if (activeScope !== "all" && activeScope !== "favorite" && activeScope !== "unfiled" && !(collection.folder_ids || []).includes(activeScope)) return false;
+      return !keyword || collection.title.toLowerCase().includes(keyword);
+    });
+  }, [activeFilter, activeScope, query, snapshot.collections]);
   const visibleOrderKey = `${String(activeScope)}:${activeFilter}:${query}`;
   const rawVisibleBaseVideos = useMemo(() => {
     const scoped = filterVideosByScope(filteredVideos, activeScope);
@@ -195,15 +251,44 @@ export function LibraryPage({
   const isFolderScope = Boolean(activeFolder);
   const canReorder = canReorderLibraryView(query, activeFilter) && activeScope !== "favorite";
   const videosPerPage = viewMode === "cover" ? Math.max(1, coverColumnCount) * COVER_ROWS_PER_PAGE : LIST_VIDEOS_PER_PAGE;
-  const totalPages = Math.max(1, Math.ceil(visibleBaseVideos.length / videosPerPage));
+  const rawVisibleLibraryItems = useMemo<LibraryItem[]>(() => {
+    const videoItems: LibraryItem[] = visibleBaseVideos.map((video) => ({
+      kind: "video",
+      id: video.video_id,
+      order: video.global_order,
+      pinned: video.global_pinned,
+      video,
+    }));
+    const collectionItems: LibraryItem[] = visibleCollections.map((collection) => ({
+      kind: "collection",
+      id: `collection:${collection.collection_id}`,
+      order: isFolderScope ? (collection.folder_order ?? collection.global_order) : collection.global_order,
+      pinned: isFolderScope ? Boolean(collection.folder_pinned) : Boolean(collection.global_pinned),
+      collection,
+    }));
+    if (activeScope !== "all" && activeScope !== "favorite" && activeScope !== "unfiled" && !isFolderScope) return videoItems;
+    return [...videoItems, ...collectionItems].sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.order - right.order || left.id.localeCompare(right.id));
+  }, [activeScope, isFolderScope, visibleBaseVideos, visibleCollections]);
+  const visibleLibraryItems = useMemo(() => {
+    if (!optimisticLibraryOrder || optimisticLibraryOrder.key !== visibleOrderKey) return rawVisibleLibraryItems;
+    const itemById = new Map(rawVisibleLibraryItems.map((item) => [getLibraryItemId(item), item]));
+    const hasSameItems = optimisticLibraryOrder.ids.length === rawVisibleLibraryItems.length
+      && optimisticLibraryOrder.ids.every((itemId) => itemById.has(itemId));
+    if (!hasSameItems) return rawVisibleLibraryItems;
+    return optimisticLibraryOrder.ids.map((itemId) => itemById.get(itemId)).filter((item): item is LibraryItem => Boolean(item));
+  }, [optimisticLibraryOrder, rawVisibleLibraryItems, visibleOrderKey]);
+  const totalPages = Math.max(1, Math.ceil(visibleLibraryItems.length / videosPerPage));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const pageStartIndex = (safeCurrentPage - 1) * videosPerPage;
-  const pagedVideos = visibleBaseVideos.slice(pageStartIndex, pageStartIndex + videosPerPage);
-  const pagedVideoIds = useMemo(() => pagedVideos.map((video) => video.video_id), [pagedVideos]);
+  const pagedLibraryItems = visibleLibraryItems.slice(pageStartIndex, pageStartIndex + videosPerPage);
+  const pagedVideos = pagedLibraryItems.filter((item): item is Extract<LibraryItem, { kind: "video" }> => item.kind === "video");
+  const pagedCollections = pagedLibraryItems.filter((item): item is Extract<LibraryItem, { kind: "collection" }> => item.kind === "collection");
+  const pagedLibraryIds = useMemo(() => pagedLibraryItems.map(getLibraryItemId), [pagedLibraryItems]);
   const paginationItems = buildPaginationItems(safeCurrentPage, totalPages);
   const folderTreeHeight = folders.length ? folders.length * 42 + 12 : 0;
   const filters: Array<{ id: LibraryFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: libraryCounts.total },
+    { id: "collection", label: "合集", count: libraryCounts.collection },
     { id: "favorite", label: "收藏", count: libraryCounts.favorite },
     { id: "completed", label: "已完成", count: libraryCounts.completed },
     { id: "running", label: "处理中", count: libraryCounts.running },
@@ -213,8 +298,15 @@ export function LibraryPage({
   const summaryText = latestVideo ? `最近更新：${latestVideo.title}` : "输入链接后，视频会自动进入这里统一管理。";
   const draftParentFolder = folderDraftParentId ? folderMap.get(folderDraftParentId) || null : null;
   const scopeTitle = activeScope === "all" ? "全部视频" : activeScope === "unfiled" ? "未归档" : activeScope === "favorite" ? "收藏" : activeFolder?.name || "文件夹";
-  const activeDraggedVideo = activeVideoDragId ? snapshot.videos.find((video) => video.video_id === activeVideoDragId) || null : null;
+  const activeDraggedVideo = activeVideoDragId && !activeVideoDragId.startsWith("collection:") ? snapshot.videos.find((video) => video.video_id === activeVideoDragId) || null : null;
+  const activeDraggedCollection = activeVideoDragId?.startsWith("collection:")
+    ? snapshot.collections.find((collection) => `collection:${collection.collection_id}` === activeVideoDragId) || null
+    : null;
   const videoMenuVideo = videoActionMenu ? snapshot.videos.find((video) => video.video_id === videoActionMenu.videoId) || null : null;
+  const collectionMenuCollection = collectionActionMenu
+    ? snapshot.collections.find((collection) => collection.collection_id === collectionActionMenu.collectionId) || null
+    : null;
+  const hasLibraryContent = visibleLibraryItems.length > 0;
 
   function getFolderLabel(video: VideoAssetSummary) {
     const names = getVideoFolderIds(video).map((folderId) => folderMap.get(folderId)?.name).filter((name): name is string => Boolean(name));
@@ -226,6 +318,7 @@ export function LibraryPage({
   useEffect(() => {
     setCurrentPage(1);
     setOptimisticVideoOrder(null);
+    setOptimisticLibraryOrder(null);
   }, [activeFilter, query, activeScope]);
 
   useEffect(() => {
@@ -327,6 +420,26 @@ export function LibraryPage({
     };
   }, [videoActionMenu]);
 
+  useEffect(() => {
+    if (!collectionActionMenu) return;
+    function closeCollectionActions(event?: Event) {
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest(".library-video-context-menu")) return;
+      setCollectionActionMenu(null);
+      setCollectionDeleteConfirmId(null);
+      setVideoActionBusy(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") closeCollectionActions();
+    }
+    document.addEventListener("pointerdown", closeCollectionActions);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeCollectionActions);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [collectionActionMenu]);
+
   function beginCreateFolder(parentId?: string | null) {
     setFolderDraftParentId(parentId ?? null);
     setFolderDraftName("");
@@ -394,6 +507,14 @@ export function LibraryPage({
     setVideoActionMenu({ videoId, ...resolveContextMenuPosition(event.clientX, event.clientY) });
   }
 
+  function openCollectionActions(event: MouseEvent, collectionId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setVideoActionMenu(null);
+    setVideoActionBusy(false);
+    setCollectionActionMenu({ collectionId, ...resolveContextMenuPosition(event.clientX, event.clientY) });
+  }
+
   async function runVideoAction(action: () => Promise<void>, successMessage?: string) {
     if (videoActionBusy) return;
     setVideoActionBusy(true);
@@ -409,9 +530,30 @@ export function LibraryPage({
     }
   }
 
+  async function runCollectionAction(action: () => Promise<void>, successMessage?: string) {
+    if (videoActionBusy) return;
+    setVideoActionBusy(true);
+    try {
+      await action();
+      setCollectionActionMenu(null);
+      setCollectionDeleteConfirmId(null);
+      if (successMessage) showLibraryNotice(successMessage, "success");
+    } catch (error) {
+      showLibraryNotice(error instanceof Error ? error.message : "操作失败", "error");
+    } finally {
+      setVideoActionBusy(false);
+    }
+  }
+
   function closeVideoActions() {
     setVideoActionMenu(null);
     setVideoDeleteConfirmId(null);
+    setVideoActionBusy(false);
+  }
+
+  function closeCollectionActions() {
+    setCollectionActionMenu(null);
+    setCollectionDeleteConfirmId(null);
     setVideoActionBusy(false);
   }
 
@@ -420,7 +562,9 @@ export function LibraryPage({
   }
 
   async function handleVideoDragEnd(event: DragEndEvent) {
-    const sourceVideoId = String(event.active.id);
+    const sourceItemId = String(event.active.id);
+    const sourceVideoId = sourceItemId.startsWith("collection:") ? null : sourceItemId;
+    const sourceCollectionId = sourceItemId.startsWith("collection:") ? sourceItemId.slice("collection:".length) : null;
     const over = event.over;
     setActiveVideoDragId(null);
     if (!over || videoMoveBusyRef.current) return;
@@ -430,25 +574,55 @@ export function LibraryPage({
       const folderId = overData.folderId as string | null;
       videoMoveBusyRef.current = true;
       try {
-        await onMoveVideo(sourceVideoId, folderId);
+        if (sourceCollectionId) {
+          await onMoveCollection(sourceCollectionId, folderId);
+        } else if (sourceVideoId) {
+          await onMoveVideo(sourceVideoId, folderId);
+        }
       } finally {
         videoMoveBusyRef.current = false;
       }
       return;
     }
 
-    const targetVideoId = String(over.id);
-    if (!canReorder || sourceVideoId === targetVideoId || !visibleBaseVideos.some((video) => video.video_id === targetVideoId)) return;
-    const ids = visibleBaseVideos.map((video) => video.video_id);
-    const fromIndex = ids.indexOf(sourceVideoId);
-    const toIndex = ids.indexOf(targetVideoId);
+    if (!canReorder) return;
+    if (activeScope !== "all") {
+      const targetVideoId = String(over.id);
+      if (sourceItemId === targetVideoId || !visibleLibraryItems.some((item) => getLibraryItemId(item) === targetVideoId)) return;
+      const ids = visibleLibraryItems.map(getLibraryItemId);
+      const fromIndex = ids.indexOf(sourceItemId);
+      const toIndex = ids.indexOf(targetVideoId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      const nextIds = arrayMove(ids, fromIndex, toIndex);
+      setOptimisticLibraryOrder({ key: visibleOrderKey, ids: nextIds });
+      try {
+        await onReorderVideoLibrary(nextIds.map((itemId) => (
+          itemId.startsWith("collection:")
+            ? { kind: "collection" as const, id: itemId.slice("collection:".length) }
+            : { kind: "video" as const, id: itemId }
+        )), activeScope === "unfiled" ? null : activeScope);
+      } catch (error) {
+        setOptimisticLibraryOrder(null);
+        showLibraryNotice(error instanceof Error ? error.message : "保存顺序失败", "error");
+      }
+      return;
+    }
+    const targetItemId = String(over.id);
+    if (sourceItemId === targetItemId) return;
+    const ids = visibleLibraryItems.map(getLibraryItemId);
+    const fromIndex = ids.indexOf(sourceItemId);
+    const toIndex = ids.indexOf(targetItemId);
     if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
     const nextIds = arrayMove(ids, fromIndex, toIndex);
-    setOptimisticVideoOrder({ key: visibleOrderKey, ids: nextIds });
+    setOptimisticLibraryOrder({ key: visibleOrderKey, ids: nextIds });
     try {
-      await onReorderVideos(nextIds, activeScope === "all" ? "__global__" : activeScope === "unfiled" ? null : activeScope);
+      await onReorderVideoLibrary(nextIds.map((itemId) => (
+        itemId.startsWith("collection:")
+          ? { kind: "collection" as const, id: itemId.slice("collection:".length) }
+          : { kind: "video" as const, id: itemId }
+      )));
     } catch (error) {
-      setOptimisticVideoOrder(null);
+      setOptimisticLibraryOrder(null);
       showLibraryNotice(error instanceof Error ? error.message : "保存顺序失败", "error");
     }
   }
@@ -516,12 +690,12 @@ export function LibraryPage({
             <button className="library-icon-button" type="button" title="新建文件夹" onClick={() => beginCreateFolder(null)}>+</button>
           </div>
           <div className="library-folder-list">
-            <ScopeButton icon={<LibraryIcon />} active={activeScope === "all"} label="全部视频" count={snapshot.videos.length} onClick={() => setActiveScope("all")} />
+            <ScopeButton icon={<LibraryIcon />} active={activeScope === "all"} label="全部视频" count={libraryCounts.total} onClick={() => setActiveScope("all")} />
             <ScopeButton
               icon={<FolderIcon />}
               active={activeScope === "unfiled"}
               label="未归档"
-              count={snapshot.videos.filter((video) => getVideoFolderIds(video).length === 0).length}
+              count={snapshot.videos.filter((video) => getVideoFolderIds(video).length === 0).length + snapshot.collections.filter((collection) => !(collection.folder_ids || []).length).length}
               onClick={() => setActiveScope("unfiled")}
               droppableId={UNFILED_DROP_ID}
               folderId={null}
@@ -574,7 +748,7 @@ export function LibraryPage({
                     {...props}
                     activeScope={activeScope}
                     actionOpen={folderActionId === props.node.data.id}
-                    videoCount={directVideoCounts.get(props.node.data.id) || 0}
+                    videoCount={directLibraryCounts.get(props.node.data.id) || 0}
                     onActivate={(folderId) => setActiveScope(folderId)}
                     collapsed={collapsedFolderIds.has(props.node.data.id)}
                     onBeginCreate={beginCreateFolder}
@@ -625,7 +799,7 @@ export function LibraryPage({
             <div className="library-toolbar-copy">
               <span className="library-breadcrumb">视频库 / {scopeTitle}</span>
               <h3>{scopeTitle}</h3>
-              <p>共 {visibleBaseVideos.length} 个视频，当前第 {safeCurrentPage} / {totalPages} 页</p>
+              <p>共 {visibleLibraryItems.length} 个条目，当前第 {safeCurrentPage} / {totalPages} 页</p>
             </div>
             <label className="search-field library-search-field">
               <span className="search-icon" aria-hidden="true"><SearchIcon /></span>
@@ -690,45 +864,49 @@ export function LibraryPage({
 
           {!canReorder ? <p className="library-reorder-note">搜索或状态筛选中可拖到文件夹归档，列表内排序暂时锁定。</p> : null}
 
-          {visibleBaseVideos.length ? (
+          {hasLibraryContent ? (
             <>
               {viewMode === "cover" ? (
-                <SortableContext items={pagedVideoIds} strategy={rectSortingStrategy}>
-                <div ref={coverGridRef} className="video-grid library-sortable-grid">
-                  {pagedVideos.map((video) => (
+                <SortableContext items={pagedLibraryIds} strategy={rectSortingStrategy}>
+                  <div ref={coverGridRef} className="video-grid library-sortable-grid" aria-label="视频库内容">
+                    {pagedLibraryItems.map((item) => item.kind === "collection" ? (
+                      <SortableCollectionCard key={item.id} collection={item.collection} canPinInFolder={isFolderScope} onOpenContextMenu={openCollectionActions} onToggleFavorite={onToggleCollectionFavorite} onSetCollectionPin={onSetCollectionPin} />
+                    ) : (
                       <SortableVideoCard
-                        key={video.video_id}
-                        video={video}
-                        folderName={getFolderLabel(video)}
+                        key={item.video.video_id}
+                        video={item.video}
+                        folderName={getFolderLabel(item.video)}
                         canPinInFolder={isFolderScope}
                         onToggleFavorite={onToggleFavorite}
                         onSetVideoPin={onSetVideoPin}
                         onOpenContextMenu={openVideoActions}
                       />
-                  ))}
-                </div>
+                    ))}
+                  </div>
                 </SortableContext>
               ) : (
-                <SortableContext items={pagedVideoIds} strategy={verticalListSortingStrategy}>
-                <div className="library-list-view">
-                  {pagedVideos.map((video) => (
+                <SortableContext items={pagedLibraryIds} strategy={verticalListSortingStrategy}>
+                  <div className="library-list-view">
+                    {pagedLibraryItems.map((item) => item.kind === "collection" ? (
+                      <SortableCollectionListItem key={item.id} collection={item.collection} canPinInFolder={isFolderScope} onOpenContextMenu={openCollectionActions} onToggleFavorite={onToggleCollectionFavorite} onSetCollectionPin={onSetCollectionPin} />
+                    ) : (
                       <SortableVideoListItem
-                        key={video.video_id}
-                        video={video}
-                        folderName={getFolderLabel(video)}
+                        key={item.video.video_id}
+                        video={item.video}
+                        folderName={getFolderLabel(item.video)}
                         canPinInFolder={isFolderScope}
                         onToggleFavorite={onToggleFavorite}
                         onSetVideoPin={onSetVideoPin}
                         onOpenContextMenu={openVideoActions}
                       />
-                  ))}
-                </div>
+                    ))}
+                  </div>
                 </SortableContext>
               )}
 
-              {totalPages > 1 ? (
+              {visibleLibraryItems.length > 0 && totalPages > 1 ? (
                 <div className="library-pagination" aria-label="视频库分页">
-                  <div className="library-pagination-summary">显示第 {pageStartIndex + 1}-{Math.min(pageStartIndex + pagedVideos.length, visibleBaseVideos.length)} 条，共 {visibleBaseVideos.length} 条</div>
+                  <div className="library-pagination-summary">显示第 {pageStartIndex + 1}-{Math.min(pageStartIndex + pagedLibraryItems.length, visibleLibraryItems.length)} 条，共 {visibleLibraryItems.length} 条</div>
                   <div className="library-pagination-actions">
                     <button className="library-pagination-button" type="button" disabled={safeCurrentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>上一页</button>
                     {paginationItems.map((item, index) => item === "ellipsis"
@@ -779,6 +957,14 @@ export function LibraryPage({
                 onSetVideoPin={onSetVideoPin}
                 onOpenContextMenu={openVideoActions}
               />
+            )}
+          </div>
+        ) : activeDraggedCollection ? (
+          <div className={`library-drag-overlay ${viewMode === "cover" ? "is-cover" : "is-list"}`}>
+            {viewMode === "cover" ? (
+              <CollectionCard collection={activeDraggedCollection} />
+            ) : (
+              <CollectionListItem collection={activeDraggedCollection} canPinInFolder={isFolderScope} />
             )}
           </div>
         ) : null}
@@ -853,6 +1039,56 @@ export function LibraryPage({
               await onDeleteVideo(videoMenuVideo.video_id);
             },
             "视频已删除",
+          )}
+        />
+      ) : null}
+      {collectionActionMenu && collectionMenuCollection ? (
+        <CollectionContextMenu
+          collection={collectionMenuCollection}
+          x={collectionActionMenu.x}
+          y={collectionActionMenu.y}
+          submenuSide={collectionActionMenu.submenuSide}
+          folders={folderMenuItems}
+          currentFolderName={(collectionMenuCollection.folder_ids || []).map((folderId) => folderMap.get(folderId)?.name).filter((name): name is string => Boolean(name)).join(" + ") || "未归档"}
+          canPinInFolder={(collectionMenuCollection.folder_ids || []).length > 0}
+          busy={videoActionBusy}
+          deleteConfirmOpen={collectionDeleteConfirmId === collectionMenuCollection.collection_id}
+          onOpenDetail={() => {
+            closeCollectionActions();
+            navigate(`/collections/${encodeURIComponent(collectionMenuCollection.collection_id)}`);
+          }}
+          onRevealFolder={() => {
+            const primaryFolderId = collectionMenuCollection.folder_ids?.[0] || null;
+            setActiveScope(primaryFolderId || "unfiled");
+            closeCollectionActions();
+          }}
+          onSetFolders={(folderIds) => runCollectionAction(
+            async () => { await onMoveCollection(collectionMenuCollection.collection_id, undefined, folderIds); },
+            folderIds.length ? "分组已更新" : "已移到未归档",
+          )}
+          onRefresh={() => runCollectionAction(
+            async () => {
+              await onRefreshCollection(collectionMenuCollection.collection_id);
+            },
+            "合集列表已刷新",
+          )}
+          onToggleFavorite={() => runCollectionAction(
+            async () => { await onToggleCollectionFavorite(collectionMenuCollection.collection_id, !collectionMenuCollection.is_favorite); },
+            collectionMenuCollection.is_favorite ? "已取消收藏" : "已收藏",
+          )}
+          onToggleGlobalPin={() => runCollectionAction(
+            async () => { await onSetCollectionPin(collectionMenuCollection.collection_id, { global_pinned: !collectionMenuCollection.global_pinned }); },
+            collectionMenuCollection.global_pinned ? "已取消全局置顶" : "已全局置顶",
+          )}
+          onToggleFolderPin={() => runCollectionAction(
+            async () => { await onSetCollectionPin(collectionMenuCollection.collection_id, { folder_pinned: !collectionMenuCollection.folder_pinned }); },
+            collectionMenuCollection.folder_pinned ? "已取消文件夹置顶" : "已文件夹置顶",
+          )}
+          onRequestDelete={() => setCollectionDeleteConfirmId(collectionMenuCollection.collection_id)}
+          onCancelDelete={() => setCollectionDeleteConfirmId(null)}
+          onDelete={(mode) => runCollectionAction(
+            async () => { await onDeleteCollection(collectionMenuCollection.collection_id, mode); },
+            mode === "detach" ? "合集已移除，内部视频已回到总视频库" : "合集及其视频已删除",
           )}
         />
       ) : null}
@@ -1037,6 +1273,110 @@ function VideoContextMenu({
   );
 }
 
+function CollectionContextMenu({
+  collection,
+  x,
+  y,
+  submenuSide,
+  folders,
+  currentFolderName,
+  canPinInFolder,
+  busy,
+  deleteConfirmOpen,
+  onOpenDetail,
+  onRevealFolder,
+  onSetFolders,
+  onRefresh,
+  onToggleFavorite,
+  onToggleGlobalPin,
+  onToggleFolderPin,
+  onRequestDelete,
+  onCancelDelete,
+  onDelete,
+}: {
+  collection: VideoCollection;
+  x: number;
+  y: number;
+  submenuSide: "left" | "right";
+  folders: FolderMenuItem[];
+  currentFolderName: string;
+  canPinInFolder: boolean;
+  busy: boolean;
+  deleteConfirmOpen: boolean;
+  onOpenDetail(): void;
+  onRevealFolder(): void;
+  onSetFolders(folderIds: string[]): void;
+  onRefresh(): void;
+  onToggleFavorite(): void;
+  onToggleGlobalPin(): void;
+  onToggleFolderPin(): void;
+  onRequestDelete(): void;
+  onCancelDelete(): void;
+  onDelete(mode: "detach" | "delete_contents"): void;
+}) {
+  const selectedFolderIds = collection.folder_ids || [];
+  return (
+    <div
+      className={`library-video-context-menu ${deleteConfirmOpen ? "is-expanded" : ""} ${submenuSide === "left" ? "is-submenu-left" : ""}`}
+      style={{ left: x, top: y }}
+      role="menu"
+      aria-label={`${collection.title} 的操作菜单`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+      <div className="library-video-menu-heading">
+        <strong>{collection.title}</strong>
+        <span>{currentFolderName} · {collection.item_count} 个视频</span>
+      </div>
+      <button type="button" role="menuitem" disabled={busy} onClick={onOpenDetail}>
+        <ExternalLinkIcon />
+        <span>打开合集详情</span>
+      </button>
+      <button type="button" role="menuitem" disabled={busy} onClick={onRevealFolder}>
+        <ArrowRightIcon />
+        <span>跳到所在分组</span>
+      </button>
+      <div className="library-video-menu-group">
+        <button className="library-video-submenu-trigger" type="button" role="menuitem" disabled={busy}>
+          <FolderIcon />
+          <span>设置分组</span>
+        </button>
+        <div className="library-video-submenu" role="menu" aria-label="设置分组">
+          <button type="button" role="menuitemcheckbox" aria-checked={selectedFolderIds.length === 0} disabled={busy || selectedFolderIds.length === 0} className={selectedFolderIds.length === 0 ? "is-current" : ""} onClick={() => onSetFolders([])}>
+            <span className="library-video-menu-check" aria-hidden="true">{selectedFolderIds.length === 0 ? "✓" : ""}</span><span>未归档</span>
+          </button>
+          <div className="library-video-folder-options">
+            {folders.map(({ folder, depth }) => {
+              const selected = selectedFolderIds.includes(folder.folder_id);
+              const nextFolderIds = selected ? selectedFolderIds.filter((folderId) => folderId !== folder.folder_id) : [...selectedFolderIds, folder.folder_id];
+              return <button key={folder.folder_id} type="button" role="menuitemcheckbox" aria-checked={selected} disabled={busy} className={selected ? "is-current" : ""} style={{ paddingLeft: 10 + depth * 14 }} onClick={() => onSetFolders(nextFolderIds)}><span className="library-video-menu-check" aria-hidden="true">{selected ? "✓" : ""}</span><span>{folder.name}</span></button>;
+            })}
+          </div>
+        </div>
+      </div>
+      <div className="library-video-menu-divider" />
+      <button type="button" role="menuitem" disabled={busy} onClick={onToggleFavorite}><StarIcon /><span>{collection.is_favorite ? "取消收藏" : "收藏"}</span></button>
+      <button type="button" role="menuitem" disabled={busy} onClick={onToggleGlobalPin}><PinIcon /><span>{collection.global_pinned ? "取消全局置顶" : "全局置顶"}</span></button>
+      <button type="button" role="menuitem" disabled={busy || !canPinInFolder} onClick={onToggleFolderPin}><PinIcon /><span>{collection.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}</span></button>
+      <div className="library-video-menu-divider" />
+      <button type="button" role="menuitem" disabled={busy} onClick={onRefresh}>
+        <ArrowRightIcon />
+        <span>刷新合集列表</span>
+      </button>
+      {deleteConfirmOpen ? (
+        <div className="library-video-delete-confirm collection-delete-confirm">
+          <p>请选择删除范围。仅移除合集会把内部视频恢复到总视频库。</p>
+          <div><button type="button" disabled={busy} onClick={onCancelDelete}>取消</button><button type="button" disabled={busy} onClick={() => onDelete("detach")}>仅移除合集</button><button className="is-danger" type="button" disabled={busy} onClick={() => onDelete("delete_contents")}>删除全部内容</button></div>
+        </div>
+      ) : <button className="is-danger" type="button" role="menuitem" disabled={busy} onClick={onRequestDelete}><TrashIcon /><span>删除合集</span></button>}
+    </div>
+  );
+}
+
 function flattenFolderMenuItems(nodes: LibraryFolderTreeNode[], depth = 0): FolderMenuItem[] {
   return nodes.flatMap((node) => [
     { folder: node.folder, depth },
@@ -1110,6 +1450,72 @@ function VideoListItem({
       </div>
     </div>
   );
+}
+
+function SortableCollectionCard({
+  collection,
+  canPinInFolder,
+  onOpenContextMenu,
+  onToggleFavorite,
+  onSetCollectionPin,
+}: {
+  collection: VideoCollection;
+  canPinInFolder: boolean;
+  onOpenContextMenu?: (event: MouseEvent, collectionId: string) => void;
+  onToggleFavorite(collectionId: string, nextFavorite: boolean): Promise<VideoCollection>;
+  onSetCollectionPin(collectionId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoCollection>;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `collection:${collection.collection_id}`,
+    data: { type: "collection", collectionId: collection.collection_id },
+  });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return (
+    <div ref={setNodeRef} style={style} className={`library-video-shell ${isDragging ? "is-dragging" : ""}`}>
+      <div className="library-card-drag-surface" {...attributes} {...listeners}>
+        <CollectionCard
+          collection={collection}
+          canPinInFolder={canPinInFolder}
+          onOpenContextMenu={onOpenContextMenu}
+          onToggleFavorite={onToggleFavorite}
+          onToggleGlobalPin={(collectionId, nextPinned) => onSetCollectionPin(collectionId, { global_pinned: nextPinned })}
+          onToggleFolderPin={(collectionId, nextPinned) => onSetCollectionPin(collectionId, { folder_pinned: nextPinned })}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SortableCollectionListItem({
+  collection,
+  canPinInFolder,
+  onOpenContextMenu,
+  onToggleFavorite,
+  onSetCollectionPin,
+}: {
+  collection: VideoCollection;
+  canPinInFolder: boolean;
+  onOpenContextMenu?: (event: MouseEvent, collectionId: string) => void;
+  onToggleFavorite(collectionId: string, nextFavorite: boolean): Promise<VideoCollection>;
+  onSetCollectionPin(collectionId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoCollection>;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `collection:${collection.collection_id}`,
+    data: { type: "collection", collectionId: collection.collection_id },
+  });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return <CollectionListItem
+    collection={collection}
+    canPinInFolder={canPinInFolder}
+    onOpenContextMenu={onOpenContextMenu}
+    onToggleFavorite={onToggleFavorite}
+    onToggleGlobalPin={(collectionId, nextPinned) => onSetCollectionPin(collectionId, { global_pinned: nextPinned })}
+    onToggleFolderPin={(collectionId, nextPinned) => onSetCollectionPin(collectionId, { folder_pinned: nextPinned })}
+    setNodeRef={setNodeRef}
+    style={style}
+    className={isDragging ? "is-dragging" : ""}
+    dragHandleProps={{ ...attributes, ...listeners }}
+  />;
 }
 
 function SortableVideoCard({

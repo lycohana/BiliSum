@@ -1,5 +1,5 @@
 import type { UpdateInfo } from "./components/UpdateDialog";
-import type { EnvironmentInfo, ServiceSettings, SystemInfo, TaskStatus, VideoAssetSummary, VideoFolder, VideoLibraryPreferences } from "./types";
+import type { EnvironmentInfo, ServiceSettings, SystemInfo, TaskStatus, VideoAssetSummary, VideoCollection, VideoFolder, VideoLibraryPreferences } from "./types";
 
 export type Snapshot = {
   serviceOnline: boolean;
@@ -8,6 +8,7 @@ export type Snapshot = {
   settings: ServiceSettings | null;
   videos: VideoAssetSummary[];
   folders: VideoFolder[];
+  collections: VideoCollection[];
   libraryPreferences: VideoLibraryPreferences;
   error: string;
   runtimeInitializing: boolean;
@@ -34,7 +35,7 @@ export type UpdateState = {
   errorMessage: string | null;
 };
 
-export type LibraryFilter = "all" | "completed" | "running" | "with-result" | "favorite";
+export type LibraryFilter = "all" | "completed" | "running" | "with-result" | "favorite" | "collection";
 export type MetricTone = "default" | "accent" | "success" | "info";
 export type DevicePreference = "auto" | "cpu" | "cuda";
 export type SelectOption = { value: string; label: string };
@@ -63,6 +64,7 @@ export const emptySnapshot: Snapshot = {
   settings: null,
   videos: [],
   folders: [],
+  collections: [],
   libraryPreferences: { new_video_position: "front" },
   error: "",
   runtimeInitializing: false,
