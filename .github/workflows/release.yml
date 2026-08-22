@@ -151,9 +151,11 @@ jobs:
 
       - name: Set up FFmpeg
         id: setup-ffmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+        # Keep release builds independent of the dynamic upstream "latest"
+        # version probe, which can fail before downloading the FFmpeg archive.
+        uses: FedericoCarboni/setup-ffmpeg@8073ccb51e517ed576e6871c7f2360c6de4ebb7c
         with:
-          ffmpeg-version: release
+          ffmpeg-version: "9.0.1"
           architecture: x64
 
       - name: Prepare electron-builder cache

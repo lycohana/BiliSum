@@ -178,9 +178,12 @@ jobs:
 
       - name: Set up FFmpeg
         id: setup-ffmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+        # Pin the Node 24-compatible action revision and a known Gyan build.
+        # "release" requires a live upstream version probe and can fail before
+        # the actual FFmpeg archive is downloaded.
+        uses: FedericoCarboni/setup-ffmpeg@8073ccb51e517ed576e6871c7f2360c6de4ebb7c
         with:
-          ffmpeg-version: release
+          ffmpeg-version: "9.0.1"
           architecture: x64
 
       - name: Build Windows package for validation
