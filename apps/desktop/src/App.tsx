@@ -40,6 +40,43 @@ function isAuthRequiredError(error: unknown): error is AuthRequiredError {
     || (error instanceof Error && /访问密钥|unauthorized|401/i.test(error.message));
 }
 
+function readableTaskCreationError(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (!message || /^Internal Server Error$/i.test(message)) {
+    return "服务端暂时无法创建任务，请检查运行状态后重试。";
+  }
+  if (/LLM returned no readable message content/i.test(message)) {
+    return "LLM 没有返回可读取的内容，已按设置进行重试；请检查模型响应格式。";
+  }
+  return message;
+}
+
+async function settleWithConcurrency<TItem, TResult>(
+  items: TItem[],
+  concurrency: number,
+  worker: (item: TItem, index: number) => Promise<TResult>,
+): Promise<Array<PromiseSettledResult<TResult>>> {
+  const results = new Array<PromiseSettledResult<TResult>>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency) || 1));
+
+  async function runWorker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]!, index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
 function readAuthTokenFromUrl(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -112,6 +149,10 @@ export function App() {
   const [cookieHelpDialogOpen, setCookieHelpDialogOpen] = useState(false);
   const [setupAssistantDismissed, setSetupAssistantDismissed] = useState(false);
   const setupAssistantForceRef = useRef(false);
+  // A periodic refresh can finish after a settings PUT. Keep older responses
+  // from putting the previous LLM configuration back into the UI.
+  const refreshRequestIdRef = useRef(0);
+  const settingsWriteVersionRef = useRef(0);
   const [homeTourOpen, setHomeTourOpen] = useState(() => !isHomeTourSeen());
 
   useEffect(() => {
@@ -232,13 +273,20 @@ export function App() {
       if (!authenticated) {
         return;
       }
+      const requestId = refreshRequestIdRef.current + 1;
+      refreshRequestIdRef.current = requestId;
+      const settingsWriteVersion = settingsWriteVersionRef.current;
       try {
         const [health, settings, library] = await Promise.all([
           api.getHealth(),
           api.getSettings(),
           api.getVideoLibrary(),
         ]);
-        if (!disposed) {
+        if (
+          !disposed
+          && requestId === refreshRequestIdRef.current
+          && settingsWriteVersion === settingsWriteVersionRef.current
+        ) {
           setSnapshot((current) => ({
             ...current,
             serviceOnline: health.status === "ok",
@@ -253,7 +301,11 @@ export function App() {
 
         try {
           const systemInfo = await api.getSystemInfo();
-          if (!disposed) {
+          if (
+            !disposed
+            && requestId === refreshRequestIdRef.current
+            && settingsWriteVersion === settingsWriteVersionRef.current
+          ) {
             const runtimeStartupStatus = systemInfo.runtimeStartup?.status;
             const environment = systemInfo.environment ?? systemInfo.runtimeStartup?.environment ?? null;
             const runtimeInitializing = runtimeStartupStatus === "initializing" || environment?.runtimeReady === false;
@@ -267,7 +319,11 @@ export function App() {
             }));
           }
         } catch (error) {
-          if (!disposed) {
+          if (
+            !disposed
+            && requestId === refreshRequestIdRef.current
+            && settingsWriteVersion === settingsWriteVersionRef.current
+          ) {
             setSnapshot((current) => ({
               ...current,
               serviceOnline: health.status === "ok",
@@ -277,7 +333,11 @@ export function App() {
           }
         }
       } catch (error) {
-        if (!disposed) {
+        if (
+          !disposed
+          && requestId === refreshRequestIdRef.current
+          && settingsWriteVersion === settingsWriteVersionRef.current
+        ) {
           if (isAuthRequiredError(error)) {
             setAuthenticated(false);
             setAuthError("");
@@ -696,10 +756,20 @@ export function App() {
     if (!videoIds.length) return;
     setSubmitStatus(`正在为 ${videoIds.length} 个合集视频创建摘要任务...`);
     const taskPayload = await buildCreateTaskPayload(null, "合集视频");
-    await Promise.all(videoIds.map((videoId) => api.createVideoTask(videoId, taskPayload)));
+    const results = await Promise.allSettled(videoIds.map((videoId) => api.createVideoTask(videoId, taskPayload)));
+    const failed = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    const createdCount = results.length - failed.length;
     await refreshLibrarySnapshot();
     setRefreshSeed((value) => value + 1);
-    setSubmitStatus(`已创建 ${videoIds.length} 个合集视频摘要任务`);
+    if (failed.length > 0) {
+      const firstError = readableTaskCreationError(failed[0]?.reason);
+      if (createdCount === 0) {
+        throw new Error(`合集视频摘要任务创建失败：${firstError}`);
+      }
+      setSubmitStatus(`已创建 ${createdCount} 个合集视频摘要任务，${failed.length} 个失败：${firstError}`);
+      return;
+    }
+    setSubmitStatus(`已创建 ${createdCount} 个合集视频摘要任务`);
   }
 
   function openConfigAssist(issueKey?: string) {
@@ -857,38 +927,71 @@ export function App() {
     void createVideoTaskAfterNavigation(video, video.title || sourceText);
   }
 
-  async function startCollectionSummary(collection: VideoCollection, items: VideoCollectionItem[]) {
+  function startCollectionSummary(
+    collection: VideoCollection,
+    items: VideoCollectionItem[],
+    currentVideo?: VideoAssetSummary,
+  ) {
     if (!items.length) {
       setSubmitStatus("请至少选择一个合集视频");
       return;
     }
     setProbeUrl("");
-    setSubmitStatus(`正在读取合集内 ${items.length} 个视频并创建摘要任务...`);
+    setSubmitStatus("已添加合集总结任务");
+    void processCollectionSummary(collection, items, currentVideo);
+  }
+
+  async function processCollectionSummary(
+    collection: VideoCollection,
+    items: VideoCollectionItem[],
+    currentVideo?: VideoAssetSummary,
+  ) {
     try {
-      const responses: VideoProbeResult[] = [];
-      for (const [index, item] of items.entries()) {
-        setSubmitStatus(`正在读取合集视频 ${index + 1} / ${items.length}...`);
-        const response = await api.probeVideo({ url: item.source_url, force_refresh: false });
-        if (response.requires_selection) {
+      const taskPayloadPromise = buildCreateTaskPayload(null, collection.title);
+      let collectionOpened = false;
+      const openCollection = () => {
+        if (collectionOpened) return;
+        collectionOpened = true;
+        setRefreshSeed((value) => value + 1);
+        navigate(`/collections/${collection.collection_id}`);
+      };
+
+      const probeConcurrency = Math.max(
+        1,
+        Number(snapshot.settings?.transcription_concurrency || snapshot.settings?.task_concurrency) || 1,
+      );
+      const results = await settleWithConcurrency(items, probeConcurrency, async (item) => {
+        const isCurrentVideo = Boolean(currentVideo && (
+          item.video_id === currentVideo.video_id
+          || item.bvid === currentVideo.canonical_id
+          || item.source_url === currentVideo.source_url
+        ));
+        const response = isCurrentVideo
+          ? null
+          : await api.probeVideo({ url: item.source_url, force_refresh: false });
+        if (response?.requires_selection) {
           throw new Error(`合集视频“${item.title}”还包含分 P，请先单独选择分 P。`);
         }
-        responses.push(response);
+        const targetVideo = response?.video || currentVideo;
+        if (!targetVideo) {
+          throw new Error(`合集视频“${item.title}”未返回有效视频信息。`);
+        }
+        await api.createVideoTask(targetVideo.video_id, await taskPayloadPromise);
+        openCollection();
+        return targetVideo;
+      });
+      const successfulVideos = results
+        .filter((result): result is PromiseFulfilledResult<VideoAssetSummary> => result.status === "fulfilled")
+        .map((result) => result.value);
+      if (!successfulVideos.length) {
+        const failedResult = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        throw failedResult?.reason instanceof Error ? failedResult.reason : new Error("合集没有可处理的视频。");
       }
-      const taskPayload = await buildCreateTaskPayload(null, collection.title);
-      await Promise.all(
-        responses.map((response) => api.createVideoTask(response.video.video_id, taskPayload)),
-      );
-      await refreshLibrarySnapshot();
-      const firstResponse = responses[0];
-      if (!firstResponse) {
-        throw new Error("合集没有可处理的视频。");
-      }
-      setProbePreview(firstResponse.video);
-      setRefreshSeed((value) => value + 1);
-      navigate(`/videos/${firstResponse.video.video_id}`);
-      setSubmitStatus(`已创建 ${responses.length} 个合集视频摘要任务`);
+
+      await refreshLibrarySnapshot().catch(() => undefined);
+      setDetailRefreshToken((value) => value + 1);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "创建合集摘要任务失败";
+      const message = readableTaskCreationError(error);
       if (isBilibiliCookieHelpError(message)) {
         showBilibiliCookieHelp(message);
         return;
@@ -969,7 +1072,7 @@ export function App() {
       startSingleVideoSummary(currentVideo, currentVideo.source_url, wasCached);
       return;
     }
-    void startCollectionSummary(currentCollection, items);
+    startCollectionSummary(currentCollection, items, currentVideo);
   }
 
   async function createLocalPathTasks(filePaths: string[]) {
@@ -1201,6 +1304,7 @@ export function App() {
         version={runtimeVersionLabel}
         updateState={updateState}
         configHealth={configHealth}
+        worker={snapshot.systemInfo?.worker}
         onOpenSettings={openConfigAssist}
         onOpenUpdateDialog={openUpdateDialog}
       />
@@ -1405,6 +1509,7 @@ export function App() {
                     }}
                     onRefresh={() => setRefreshSeed((value) => value + 1)}
                     onSettingsSaved={(settings, environment) => {
+                      settingsWriteVersionRef.current += 1;
                       setSnapshot((current) => ({
                         ...current,
                         settings,

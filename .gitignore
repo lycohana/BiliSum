@@ -21,6 +21,12 @@ Thumbs.db
 temp_repo_inspect/
 .env
 .data/*
+
+# Local UI exploration and browser test artifacts
+.playwright-cli/
+output/
+apps/web/static/*-playground.html
+
 # Vite build artifacts
 # The service and package:*-notfront paths serve apps/web/static directly, so
 # the hashed Vite bundle referenced by index.html must be committed with it.

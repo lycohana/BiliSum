@@ -79,6 +79,33 @@ run("prompt templates are validated before settings save", () => {
   assert.ok(settingsPageSource.includes("{mode}"), "frame planning help should list mode variable");
   assert.ok(settingsPageSource.includes("{timeline_hint}"), "VLM prompt help should list timeline_hint variable");
 });
+
+run("LLM settings save verifies the persisted snapshot", () => {
+  const saveStart = settingsPageSource.indexOf("async function save(event: FormEvent)");
+  const saveEnd = settingsPageSource.indexOf("async function installLocalAsr", saveStart);
+  const saveSource = settingsPageSource.slice(saveStart, saveEnd);
+
+  assert.ok(saveSource.includes("const currentForm = formRef.current"), "save should use the latest form ref");
+  assert.ok(saveSource.includes("nextSettings = await api.getSettings()"), "save should read settings back after PUT");
+  assert.ok(
+    saveSource.indexOf("onSettingsSaved(nextSettings, null)") < saveSource.indexOf("setIsDirty(false)"),
+    "parent snapshot should be updated before the form becomes clean",
+  );
+  assert.ok(settingsPageSource.includes("saveAndCloseGenerationModelDialog"), "model dialog should expose save-and-close behavior");
+  assert.ok(settingsPageSource.includes("保存并关闭"), "model dialog should label the action as save and close");
+});
+
+run("LLM reasoning controls are exposed with the requested defaults", () => {
+  assert.ok(settingsPageSource.includes('targetKey: "llm_thinking_type"'), "thinking mode should be searchable");
+  assert.ok(settingsPageSource.includes('targetKey: "llm_reasoning_effort"'), "reasoning effort should be searchable");
+  assert.ok(settingsPageSource.includes('value={form.llm_thinking_type || "enabled"}'), "thinking mode should default to enabled");
+  assert.ok(settingsPageSource.includes('value={form.llm_reasoning_effort || "low"}'), "reasoning effort should default to low");
+  assert.ok(settingsPageSource.includes('{"thinking":{"type":"enabled/disabled"}}'), "thinking request shape should be documented");
+  assert.ok(settingsPageSource.includes('{"reasoning_effort":"low/high/max"}'), "reasoning request shape should be documented");
+  assert.ok(settingsPageSource.includes('llm_thinking_type: form.llm_thinking_type || "enabled"'), "model test should use the selected thinking mode");
+  assert.ok(settingsPageSource.includes('llm_reasoning_effort: form.llm_reasoning_effort || "low"'), "model test should use the selected reasoning effort");
+});
+
 run("prompt inline toolbar can collapse prompt groups", () => {
   assert.ok(settingsPageSource.includes("已展开 {outerSectionsOpen.size} 项"), "toolbar should show expanded prompt group count");
   assert.ok(settingsPageSource.includes("collapseAllOuter"), "toolbar should collapse all prompt groups");
@@ -98,6 +125,17 @@ run("settings return-to-top fab is available across categories", () => {
   const contentCloseIndex = settingsPageSource.indexOf('</main>', performanceIndex);
   assert.ok(fabIndex > performanceIndex, "return-to-top fab should be rendered after category sections, not inside prompts only");
   assert.ok(fabIndex < contentCloseIndex, "return-to-top fab should stay inside the settings content area");
+});
+
+run("performance controls expose stage, mindmap, and summary sliders", () => {
+  assert.ok(settingsPageSource.includes('targetKey: "transcription_concurrency"'), "transcription concurrency should be a performance setting target");
+  assert.ok(settingsPageSource.includes('registerFocusTarget("transcription_concurrency")'), "transcription concurrency should have a settings control");
+  assert.ok(settingsPageSource.includes('targetKey: "llm_concurrency"'), "LLM concurrency should be a performance setting target");
+  assert.ok(settingsPageSource.includes('registerFocusTarget("llm_concurrency")'), "LLM concurrency should have a settings control");
+  assert.ok(settingsPageSource.includes('id="transcription-concurrency-slider"'), "transcription concurrency should use a range slider");
+  assert.ok(settingsPageSource.includes('id="llm-concurrency-slider"'), "LLM concurrency should use a range slider");
+  assert.ok(settingsPageSource.includes('id="mindmap-concurrency-slider"'), "mindmap concurrency should use a range slider");
+  assert.ok(settingsPageSource.includes('id="summary-chunk-concurrency-slider"'), "summary chunk concurrency should use a range slider");
 });
 
 run("home prompt router calls match API and filters hidden presets", () => {

@@ -1,7 +1,7 @@
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Condition, Lock, Thread, current_thread
@@ -13,7 +13,7 @@ from video_sum_core.models.tasks import (
     TaskStatus,
     merge_llm_usage_records,
 )
-from video_sum_core.pipeline.base import PipelineContext, PipelineRunner
+from video_sum_core.pipeline.base import PipelineContext, PipelineRunner, PipelineTranscription
 from video_sum_infra.config import ServiceSettings, normalize_visual_note_mode
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import TaskRecord
@@ -35,6 +35,23 @@ class _VisualEvidenceJob:
     mode: str | None = None
 
 
+@dataclass(frozen=True)
+class _LLMJob:
+    task_id: str
+
+
+@dataclass
+class _SummaryBatchState:
+    completed_tasks: int = 0
+    total_tasks: int = 0
+    total_tokens: int = 0
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    started_monotonic: float | None = None
+    completed_monotonic: float | None = None
+    items: dict[str, dict[str, object]] = field(default_factory=dict)
+
+
 class _TaskQueueState:
     def __init__(self, name: str, concurrency: int) -> None:
         self.name = name
@@ -50,6 +67,8 @@ class _TaskQueueState:
             return job.task_id
         if isinstance(job, _VisualEvidenceJob):
             return job.task_id
+        if isinstance(job, _LLMJob):
+            return job.task_id
         raise TypeError(f"Unsupported job type: {type(job)!r}")
 
     def clear_pending(self) -> int:
@@ -60,7 +79,7 @@ class _TaskQueueState:
 
 
 class TaskWorker:
-    """Background worker with separate queues for summary and mindmap work."""
+    """Background worker with independent transcription, LLM, and artifact queues."""
 
     def __init__(
         self,
@@ -71,7 +90,9 @@ class TaskWorker:
         auto_generate_visual_evidence: bool = False,
         knowledge_index_auto_rebuild: str = "disabled",
         knowledge_index_settings: ServiceSettings | None = None,
-        task_concurrency: int = 1,
+        task_concurrency: int | None = None,
+        transcription_concurrency: int | None = None,
+        llm_concurrency: int | None = None,
         mindmap_concurrency: int = 1,
     ) -> None:
         self._repository = repository
@@ -80,17 +101,31 @@ class TaskWorker:
         self._auto_generate_visual_evidence = auto_generate_visual_evidence
         self._knowledge_index_auto_rebuild = str(knowledge_index_auto_rebuild or "disabled")
         self._knowledge_index_settings = knowledge_index_settings or ServiceSettings(_env_file=None)
-        self._task_state = _TaskQueueState("task", task_concurrency)
+        legacy_concurrency = max(1, int(task_concurrency or 1))
+        self._transcription_state = _TaskQueueState(
+            "transcription",
+            transcription_concurrency if transcription_concurrency is not None else legacy_concurrency,
+        )
+        # Keep the old private name for integrations/tests that used it before
+        # the queue split. It now points at the transcription queue.
+        self._task_state = self._transcription_state
+        self._llm_state = _TaskQueueState(
+            "llm",
+            llm_concurrency if llm_concurrency is not None else legacy_concurrency,
+        )
         self._mindmap_state = _TaskQueueState("mindmap", mindmap_concurrency)
         self._visual_state = _TaskQueueState("visual", 1)
+        self._staged_transcriptions: dict[str, PipelineTranscription] = {}
         self._active_runner: object = None
         self._lock = Lock()
         self._condition = Condition(self._lock)
+        self._summary_batch: _SummaryBatchState | None = None
         self._accept_new_work = True
         self._shutdown_requested = False
         self._job_threads: set[Thread] = set()
         self._dispatch_threads = [
-            Thread(target=self._dispatch_loop, args=(self._task_state, self._run_task_job), daemon=True),
+            Thread(target=self._dispatch_loop, args=(self._transcription_state, self._run_transcription_job), daemon=True),
+            Thread(target=self._dispatch_loop, args=(self._llm_state, self._run_llm_job), daemon=True),
             Thread(target=self._dispatch_loop, args=(self._mindmap_state, self._run_mindmap_job), daemon=True),
             Thread(target=self._dispatch_loop, args=(self._visual_state, self._run_visual_evidence_job), daemon=True),
         ]
@@ -105,7 +140,7 @@ class TaskWorker:
             task.task_input.input_type.value,
             task.task_input.source,
         )
-        enqueued = self._enqueue(self._task_state, task)
+        enqueued = self._enqueue_summary(task)
         if enqueued:
             self._repository.update_status(task.task_id, TaskStatus.QUEUED)
             self._repository.append_event(
@@ -151,6 +186,7 @@ class TaskWorker:
             if cancel_pending:
                 dropped = (
                     self._task_state.clear_pending()
+                    + self._llm_state.clear_pending()
                     + self._mindmap_state.clear_pending()
                     + self._visual_state.clear_pending()
                 )
@@ -194,10 +230,77 @@ class TaskWorker:
                 "job_threads": sum(1 for thread in self._job_threads if thread.is_alive()),
                 "queues": {
                     self._task_state.name: self._queue_snapshot(self._task_state),
+                    # ``task`` remains an alias for clients that displayed
+                    # the pre-split queue name.
+                    "task": self._queue_snapshot(self._task_state),
+                    self._llm_state.name: self._queue_snapshot(self._llm_state),
                     self._mindmap_state.name: self._queue_snapshot(self._mindmap_state),
                     self._visual_state.name: self._queue_snapshot(self._visual_state),
                 },
+                "batch": self._summary_batch_snapshot_locked(),
             }
+
+    def _summary_batch_snapshot_locked(self) -> dict[str, object]:
+        batch = self._summary_batch
+        if batch is None:
+            return {
+                "completed_tasks": 0,
+                "total_tasks": 0,
+                "pending_tasks": 0,
+                "running_tasks": 0,
+                "concurrency": self._transcription_state.concurrency,
+                "transcription_concurrency": self._transcription_state.concurrency,
+                "llm_concurrency": self._llm_state.concurrency,
+                "mode": "parallel"
+                if max(self._transcription_state.concurrency, self._llm_state.concurrency) > 1
+                else "serial",
+                "total_tokens": 0,
+                "runtime_seconds": 0.0,
+                "started_at": None,
+                "completed_at": None,
+                "state": "idle",
+                "visible": False,
+                "items": [],
+            }
+
+        pending_tasks = len(self._task_state.pending) + len(self._llm_state.pending)
+        running_tasks = len(self._task_state.running_ids) + len(self._llm_state.running_ids)
+        is_complete = (
+            batch.total_tasks > 0
+            and pending_tasks == 0
+            and running_tasks == 0
+            and batch.completed_tasks >= batch.total_tasks
+        )
+        state = "completed" if is_complete else "active"
+        if batch.started_monotonic is None:
+            runtime_seconds = 0.0
+        else:
+            end_monotonic = batch.completed_monotonic if is_complete else time.monotonic()
+            runtime_seconds = max(0.0, end_monotonic - batch.started_monotonic)
+
+        return {
+            "completed_tasks": batch.completed_tasks,
+            "total_tasks": batch.total_tasks,
+            "pending_tasks": pending_tasks,
+            "running_tasks": running_tasks,
+            "concurrency": self._transcription_state.concurrency,
+            "transcription_concurrency": self._transcription_state.concurrency,
+            "llm_concurrency": self._llm_state.concurrency,
+            "transcription_pending_tasks": len(self._transcription_state.pending),
+            "transcription_running_tasks": len(self._transcription_state.running_ids),
+            "llm_pending_tasks": len(self._llm_state.pending),
+            "llm_running_tasks": len(self._llm_state.running_ids),
+            "mode": "parallel"
+            if max(self._transcription_state.concurrency, self._llm_state.concurrency) > 1
+            else "serial",
+            "total_tokens": batch.total_tokens,
+            "runtime_seconds": runtime_seconds,
+            "started_at": batch.started_at.isoformat() if batch.started_at else None,
+            "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
+            "state": state,
+            "visible": True,
+            "items": [dict(item) for item in batch.items.values()],
+        }
 
     def _queue_snapshot(self, state: _TaskQueueState) -> dict[str, object]:
         return {
@@ -205,6 +308,62 @@ class TaskWorker:
             "pending": len(state.pending),
             "running": len(state.running_ids),
         }
+
+    def _enqueue_summary(self, task: TaskRecord) -> bool:
+        job_id = self._task_state.job_id_for(task)
+        with self._condition:
+            if not self._accept_new_work:
+                logger.info("reject new summary job because worker is closed task_id=%s", job_id)
+                return False
+            if (
+                job_id in self._task_state.pending_ids
+                or job_id in self._task_state.running_ids
+                or job_id in self._llm_state.pending_ids
+                or job_id in self._llm_state.running_ids
+            ):
+                logger.info("skip duplicate summary job task_id=%s", job_id)
+                return False
+
+            if self._summary_batch is None or (
+                not self._task_state.pending
+                and not self._task_state.running_ids
+                and not self._llm_state.pending
+                and not self._llm_state.running_ids
+            ):
+                now = datetime.now(timezone.utc)
+                self._summary_batch = _SummaryBatchState(
+                    started_at=now,
+                    started_monotonic=time.monotonic(),
+                )
+
+            self._task_state.pending.append(task)
+            self._task_state.pending_ids.add(job_id)
+            self._summary_batch.total_tasks += 1
+            self._summary_batch.items[job_id] = {
+                "task_id": job_id,
+                "title": task.page_title or task.task_input.title or job_id,
+                "status": TaskStatus.QUEUED.value,
+                "progress": 0,
+                "message": "任务已进入后台队列",
+            }
+            self._condition.notify_all()
+            return True
+
+    def _enqueue_llm_locked(self, task_id: str) -> bool:
+        """Move a successfully transcribed task into the LLM queue.
+
+        The caller holds ``self._condition``. This internal handoff is allowed
+        after ``close_for_new_work`` so an already accepted task can finish;
+        shutdown still prevents new LLM work from being started.
+        """
+
+        if self._shutdown_requested:
+            return False
+        if task_id in self._llm_state.pending_ids or task_id in self._llm_state.running_ids:
+            return False
+        self._llm_state.pending.append(_LLMJob(task_id=task_id))
+        self._llm_state.pending_ids.add(task_id)
+        return True
 
     def _enqueue(self, state: _TaskQueueState, job: object) -> bool:
         job_id = state.job_id_for(job)
@@ -249,18 +408,327 @@ class TaskWorker:
                     job_id = state.job_id_for(job)
                     state.pending_ids.discard(job_id)
                     state.running_ids.add(job_id)
+                    if state is self._task_state:
+                        self._update_summary_item_locked(
+                            job_id,
+                            status=TaskStatus.RUNNING.value,
+                        )
                     return job
                 self._condition.wait()
 
     def _execute_job(self, state: _TaskQueueState, job: object, runner) -> None:
         job_id = state.job_id_for(job)
+        handed_off = False
         try:
-            runner(job)
+            runner_result = runner(job)
+            handed_off = bool(runner_result) if state is self._task_state else False
         finally:
+            task_status, task_message, task_tokens = (
+                self._summary_task_outcome(job_id)
+                if state is self._task_state or state is self._llm_state
+                else (None, None, 0)
+            )
             with self._condition:
+                was_running = job_id in state.running_ids
                 state.running_ids.discard(job_id)
+                if state is self._task_state and was_running and handed_off:
+                    if self._enqueue_llm_locked(job_id):
+                        self._repository.append_event(
+                            task_id=job_id,
+                            stage="llm_queued",
+                            progress=87,
+                            message="转写完成，已进入 LLM 队列",
+                            payload={
+                                "transcription_concurrency": self._transcription_state.concurrency,
+                                "llm_concurrency": self._llm_state.concurrency,
+                            },
+                        )
+                        self._update_summary_item_locked(
+                            job_id,
+                            status=TaskStatus.RUNNING.value,
+                            progress=87,
+                            message="转写完成，等待 LLM 并发槽位",
+                        )
+                elif (
+                    (state is self._task_state or state is self._llm_state)
+                    and was_running
+                ):
+                    self._complete_summary_task_locked(job_id, task_status, task_message, task_tokens)
                 self._job_threads.discard(current_thread())
                 self._condition.notify_all()
+
+    def _update_summary_item(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        progress: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        with self._condition:
+            self._update_summary_item_locked(task_id, status=status, progress=progress, message=message)
+
+    def _update_summary_item_locked(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        progress: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        batch = self._summary_batch
+        if batch is None:
+            return
+        item = batch.items.get(task_id)
+        if item is None:
+            return
+        if status is not None:
+            item["status"] = status
+        if progress is not None:
+            item["progress"] = max(0, min(100, int(progress)))
+        if message is not None:
+            item["message"] = message
+
+    def _summary_task_outcome(self, task_id: str) -> tuple[str, str, int]:
+        try:
+            record = self._repository.get_task(task_id)
+        except Exception:
+            logger.exception("failed to read summary task usage task_id=%s", task_id)
+            return TaskStatus.FAILED.value, "任务执行失败", 0
+        if record is None or record.result is None:
+            if record is None:
+                return TaskStatus.FAILED.value, "任务执行失败", 0
+            task_tokens = 0
+        else:
+            try:
+                task_tokens = max(0, int(record.result.llm_total_tokens or 0))
+            except (TypeError, ValueError):
+                task_tokens = 0
+
+        status = record.status.value if record is not None else TaskStatus.FAILED.value
+        if status == TaskStatus.COMPLETED.value:
+            return status, "任务已完成", task_tokens
+        if status == TaskStatus.CANCELLED.value:
+            return status, "任务已取消", task_tokens
+        if status == TaskStatus.FAILED.value:
+            return status, record.error_message or "任务执行失败", task_tokens
+        return TaskStatus.FAILED.value, "任务执行失败", task_tokens
+
+    def _complete_summary_task_locked(
+        self,
+        task_id: str,
+        task_status: str | None,
+        task_message: str | None,
+        task_tokens: int,
+    ) -> None:
+        batch = self._summary_batch
+        if batch is None:
+            return
+        final_status = task_status or TaskStatus.FAILED.value
+        final_progress = 100 if final_status == TaskStatus.COMPLETED.value else 0
+        self._update_summary_item_locked(
+            task_id,
+            status=final_status,
+            progress=final_progress,
+            message=task_message or "任务执行失败",
+        )
+        batch.completed_tasks += 1
+        batch.total_tokens += task_tokens
+        if (
+            not self._task_state.pending
+            and not self._task_state.running_ids
+            and not self._llm_state.pending
+            and not self._llm_state.running_ids
+        ):
+            batch.completed_at = datetime.now(timezone.utc)
+            batch.completed_monotonic = time.monotonic()
+
+    def _supports_staged_execution(self) -> bool:
+        supports = getattr(self._pipeline_runner, "supports_staged_execution", None)
+        if not callable(supports):
+            return False
+        try:
+            return bool(supports())
+        except Exception:
+            logger.exception("failed to inspect staged pipeline support")
+            return False
+
+    def _pipeline_event_handler(self, task_id: str):
+        def handle_pipeline_event(event) -> None:
+            payload = dict(event.payload or {})
+            result_payload = payload.get("result")
+            if isinstance(result_payload, dict):
+                try:
+                    partial_result = TaskResult.model_validate(result_payload)
+                except Exception:
+                    logger.warning(
+                        "skip invalid partial result task_id=%s stage=%s",
+                        task_id,
+                        event.stage,
+                    )
+                else:
+                    self._repository.save_result(task_id, partial_result)
+
+            self._update_summary_item(
+                task_id,
+                progress=event.progress,
+                message=event.message,
+            )
+            self._repository.append_event(
+                task_id=task_id,
+                stage=event.stage,
+                progress=event.progress,
+                message=event.message,
+                payload=payload,
+            )
+
+        return handle_pipeline_event
+
+    def _mark_task_failed(self, task_id: str, exc: Exception) -> None:
+        self._repository.update_error(task_id, "TASK_EXECUTION_FAILED", str(exc))
+        self._repository.update_status(task_id, TaskStatus.FAILED)
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.FAILED.value,
+            progress=0,
+            message=str(exc) or "任务执行失败",
+        )
+        self._repository.append_event(
+            task_id=task_id,
+            stage="failed",
+            progress=0,
+            message="任务执行失败",
+            payload={"error": str(exc)},
+        )
+
+    def _finalize_summary_task(self, record: TaskRecord, result: TaskResult) -> None:
+        task_id = record.task_id
+        final_result = result if isinstance(result, TaskResult) else TaskResult()
+        self._repository.save_result(task_id, final_result)
+        self._repository.update_status(task_id, TaskStatus.COMPLETED)
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.COMPLETED.value,
+            progress=100,
+            message="任务已完成",
+        )
+        self._repository.append_event(
+            task_id=task_id,
+            stage="completed",
+            progress=100,
+            message="任务已完成",
+            payload={"completed_at": datetime.now(timezone.utc).isoformat()},
+        )
+        logger.info(
+            "task completed task_id=%s key_points=%d timeline=%d transcript_chars=%d",
+            task_id,
+            len(final_result.key_points),
+            len(final_result.timeline),
+            len(final_result.transcript_text or ""),
+        )
+        if self._auto_generate_mindmap and self._can_auto_generate_mindmap(final_result):
+            self.submit_mindmap(task_id)
+        if (
+            self._auto_generate_visual_evidence
+            and final_result.visual_note_status not in {"generating", "ready", "partial", "unsupported", "failed"}
+            and self._can_generate_visual_evidence(record, final_result)
+        ):
+            self.submit_visual_evidence(task_id)
+        if self._knowledge_index_auto_rebuild == "on_task_completed":
+            self._index_completed_task(record.video_id, task_id)
+
+    def _run_transcription_job(self, task: TaskRecord) -> bool:
+        """Run only the download/ASR stage and release its slot on success."""
+
+        task_id = task.task_id
+        if not self._supports_staged_execution():
+            self._run_task(task_id)
+            return False
+
+        record = self._repository.get_task(task_id)
+        if record is None:
+            logger.warning("skip missing task task_id=%s", task_id)
+            return False
+
+        logger.info("start transcription stage task_id=%s", task_id)
+        self._repository.update_status(task_id, TaskStatus.RUNNING)
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.RUNNING.value,
+            progress=5,
+            message="开始转写阶段",
+        )
+        self._repository.append_event(
+            task_id=task_id,
+            stage="transcription_started",
+            progress=5,
+            message="开始转写阶段",
+        )
+
+        self._active_runner = self._pipeline_runner
+        try:
+            context = PipelineContext(task_id=task_id, task_input=record.task_input)
+            transcription = self._pipeline_runner.run_transcription(  # type: ignore[attr-defined]
+                context,
+                on_event=self._pipeline_event_handler(task_id),
+            )
+            if not isinstance(transcription, PipelineTranscription):
+                raise TypeError("staged transcription must return PipelineTranscription")
+            with self._condition:
+                self._staged_transcriptions[task_id] = transcription
+            return True
+        except Exception as exc:
+            logger.exception("transcription stage failed task_id=%s error=%s", task_id, exc)
+            self._mark_task_failed(task_id, exc)
+            return False
+        finally:
+            self._active_runner = None
+
+    def _run_llm_job(self, job: _LLMJob) -> None:
+        """Run summary/knowledge/visual LLM work for a transcribed task."""
+
+        task_id = job.task_id
+        record = self._repository.get_task(task_id)
+        if record is None:
+            logger.warning("skip missing task for LLM stage task_id=%s", task_id)
+            return
+        with self._condition:
+            transcription = self._staged_transcriptions.pop(task_id, None)
+        if transcription is None:
+            exc = RuntimeError("转写阶段结果不存在，无法进入 LLM 阶段")
+            logger.error("missing staged transcription task_id=%s", task_id)
+            self._mark_task_failed(task_id, exc)
+            return
+
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.RUNNING.value,
+            progress=88,
+            message="正在进入 LLM 摘要阶段",
+        )
+        self._repository.append_event(
+            task_id=task_id,
+            stage="llm_started",
+            progress=88,
+            message="正在进入 LLM 摘要阶段",
+            payload={"llm_concurrency": self._llm_state.concurrency},
+        )
+        self._active_runner = self._pipeline_runner
+        try:
+            context = PipelineContext(task_id=task_id, task_input=record.task_input)
+            event_handler = self._pipeline_event_handler(task_id)
+            self._pipeline_runner.preflight(context, on_event=event_handler)
+            result = self._pipeline_runner.run_summary(  # type: ignore[attr-defined]
+                context,
+                transcription,
+                on_event=event_handler,
+            )
+            self._finalize_summary_task(record, result)
+        except Exception as exc:
+            logger.exception("LLM stage failed task_id=%s error=%s", task_id, exc)
+            self._mark_task_failed(task_id, exc)
+        finally:
+            self._active_runner = None
 
     def _run_task_job(self, task: TaskRecord) -> None:
         self._run_task(task.task_id)
@@ -279,6 +747,12 @@ class TaskWorker:
         )
 
         self._repository.update_status(task_id, TaskStatus.RUNNING)
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.RUNNING.value,
+            progress=5,
+            message="任务开始执行",
+        )
         self._repository.append_event(
             task_id=task_id,
             stage="running",
@@ -305,6 +779,11 @@ class TaskWorker:
                     else:
                         self._repository.save_result(task_id, partial_result)
 
+                self._update_summary_item(
+                    task_id,
+                    progress=event.progress,
+                    message=event.message,
+                )
                 self._repository.append_event(
                     task_id=task_id,
                     stage=event.stage,
@@ -326,6 +805,12 @@ class TaskWorker:
             final_result = result if isinstance(result, TaskResult) else TaskResult()
             self._repository.save_result(task_id, final_result)
             self._repository.update_status(task_id, TaskStatus.COMPLETED)
+            self._update_summary_item(
+                task_id,
+                status=TaskStatus.COMPLETED.value,
+                progress=100,
+                message="任务已完成",
+            )
             self._repository.append_event(
                 task_id=task_id,
                 stage="completed",
@@ -354,10 +839,16 @@ class TaskWorker:
             logger.exception("task failed task_id=%s error=%s", task_id, exc)
             self._repository.update_error(task_id, "TASK_EXECUTION_FAILED", str(exc))
             self._repository.update_status(task_id, TaskStatus.FAILED)
+            self._update_summary_item(
+                task_id,
+                status=TaskStatus.FAILED.value,
+                progress=0,
+                message=str(exc) or "任务执行失败",
+            )
             self._repository.append_event(
                 task_id=task_id,
                 stage="failed",
-                progress=100,
+                progress=0,
                 message="任务执行失败",
                 payload={"error": str(exc)},
             )

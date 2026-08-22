@@ -1501,41 +1501,57 @@
   display: grid;
   place-items: center;
   padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.video-card-select-indicator {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
   border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px) saturate(118%);
   -webkit-backdrop-filter: blur(10px) saturate(118%);
-  cursor: pointer;
+  color: var(--text-on-brand);
+  pointer-events: none;
   transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
-.video-card-select::after {
-  content: "";
-  width: 7px;
-  height: 12px;
-  border: solid var(--text-on-brand);
-  border-width: 0 2px 2px 0;
-  opacity: 0;
-  transform: translateY(-1px) rotate(45deg) scale(0.76);
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
+.video-card-select-indicator svg {
+  width: 16px;
+  height: 16px;
 }
 
-.video-card-select:hover {
+.video-card-select-indicator.is-checked {
+  border-color: var(--brand-500);
+  background: var(--brand-500);
+}
+
+.video-card-select:hover + .video-card-select-indicator,
+.video-card-select:focus-visible + .video-card-select-indicator {
   border-color: var(--brand-400);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
-.video-card-select:checked {
+.video-card-select:checked + .video-card-select-indicator {
   border-color: var(--brand-500);
   background: var(--brand-500);
-}
-
-.video-card-select:checked::after {
-  opacity: 1;
-  transform: translateY(-1px) rotate(45deg) scale(1);
 }
 
 .video-card-select:focus-visible {
@@ -1543,7 +1559,8 @@
   outline-offset: 2px;
 }
 
-.video-card-select:disabled {
+.video-card-select:disabled,
+.video-card-select:disabled + .video-card-select-indicator {
   cursor: not-allowed;
   opacity: 0.5;
 }

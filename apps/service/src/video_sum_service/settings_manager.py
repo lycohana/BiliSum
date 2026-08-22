@@ -23,8 +23,10 @@ from video_sum_infra.config import (
     PREVIOUS_DEFAULT_VISUAL_FRAME_PLANNING_PROMPT,
     PREVIOUS_DEFAULT_VISUAL_VLM_PROMPT,
     ServiceSettings,
+    recommend_llm_concurrency,
     recommend_mindmap_concurrency,
     recommend_task_concurrency,
+    recommend_transcription_concurrency,
 )
 
 SECRET_SETTINGS_FIELDS = {
@@ -37,6 +39,7 @@ SECRET_SETTINGS_FIELDS = {
     "twelvelabs_api_key",
 }
 MASKED_SECRET_PLACEHOLDER = "******"
+SETTINGS_SCHEMA_VERSION = 2
 
 
 def is_blank_or_masked_secret(value: object) -> bool:
@@ -113,6 +116,8 @@ class SettingsUpdatePayload(BaseModel):
     llm_provider: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_thinking_type: str | None = None
+    llm_reasoning_effort: str | None = None
     llm_api_key: str | None = None
     llm_test_scope: Literal["main", "knowledge", "visual"] | None = None
     knowledge_llm_mode: str | None = None
@@ -143,6 +148,8 @@ class SettingsUpdatePayload(BaseModel):
     summary_chunk_target_chars: int | None = None
     summary_chunk_overlap_segments: int | None = None
     task_concurrency: int | None = None
+    transcription_concurrency: int | None = None
+    llm_concurrency: int | None = None
     mindmap_concurrency: int | None = None
     summary_chunk_concurrency: int | None = None
     summary_chunk_retry_count: int | None = None
@@ -196,9 +203,40 @@ class SettingsManager:
             if stored.get("visual_vlm_prompt") == PREVIOUS_DEFAULT_VISUAL_VLM_PROMPT:
                 stored["visual_vlm_prompt"] = DEFAULT_VISUAL_VLM_PROMPT
             migrated = False
+            try:
+                stored_schema_version = int(stored.get("settings_schema_version", 0) or 0)
+            except (TypeError, ValueError):
+                stored_schema_version = 0
+            # 2 was the previous built-in retry default. Migrate unversioned
+            # settings once; a versioned file with an explicit value of 2 is
+            # a user choice and must remain unchanged on later startups.
+            if stored_schema_version < SETTINGS_SCHEMA_VERSION and stored.get("summary_chunk_retry_count") == 2:
+                stored["summary_chunk_retry_count"] = 5
+                migrated = True
+            if stored_schema_version < SETTINGS_SCHEMA_VERSION:
+                stored["settings_schema_version"] = SETTINGS_SCHEMA_VERSION
+                migrated = True
             candidate = ServiceSettings.model_validate({**self._base_settings.model_dump(), **stored})
             if "task_concurrency" not in stored:
-                stored["task_concurrency"] = recommend_task_concurrency(candidate)
+                stored["task_concurrency"] = stored.get(
+                    "transcription_concurrency",
+                    recommend_task_concurrency(candidate),
+                )
+                migrated = True
+            legacy_task_concurrency = stored.get("task_concurrency")
+            if "transcription_concurrency" not in stored:
+                stored["transcription_concurrency"] = (
+                    legacy_task_concurrency
+                    if legacy_task_concurrency is not None
+                    else recommend_transcription_concurrency(candidate)
+                )
+                migrated = True
+            if "llm_concurrency" not in stored:
+                stored["llm_concurrency"] = (
+                    legacy_task_concurrency
+                    if legacy_task_concurrency is not None
+                    else recommend_llm_concurrency(candidate)
+                )
                 migrated = True
             if "mindmap_concurrency" not in stored:
                 stored["mindmap_concurrency"] = recommend_mindmap_concurrency()
@@ -214,6 +252,8 @@ class SettingsManager:
             self._settings = self._base_settings.model_copy(
                 update={
                     "task_concurrency": recommend_task_concurrency(self._base_settings),
+                    "transcription_concurrency": recommend_transcription_concurrency(self._base_settings),
+                    "llm_concurrency": recommend_llm_concurrency(self._base_settings),
                     "mindmap_concurrency": recommend_mindmap_concurrency(),
                 }
             )
@@ -230,6 +270,16 @@ class SettingsManager:
                     and current_dump.get(field)
                 ):
                     updates.pop(field)
+            # Older desktop clients still send task_concurrency. Treat it as
+            # a one-shot update for both stages, while keeping the legacy
+            # field synchronized with the transcription value for older
+            # readers. New clients can update either stage independently.
+            legacy_concurrency = updates.get("task_concurrency")
+            if legacy_concurrency is not None:
+                updates.setdefault("transcription_concurrency", legacy_concurrency)
+                updates.setdefault("llm_concurrency", legacy_concurrency)
+            if "transcription_concurrency" in updates:
+                updates["task_concurrency"] = updates["transcription_concurrency"]
             next_settings = ServiceSettings.model_validate({**current_dump, **updates})
             self._settings_path.parent.mkdir(parents=True, exist_ok=True)
             # Write atomically (temp file + rename) so an interrupted or

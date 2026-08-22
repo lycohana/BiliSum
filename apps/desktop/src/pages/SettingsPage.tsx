@@ -1,4 +1,4 @@
-import { type FocusEvent, type FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, type FocusEvent, type FormEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import {
@@ -23,9 +23,12 @@ import type { EnvironmentInfo, PromptPreset, PromptPresetCreateRequest, RuntimeS
 
 import { formatDateTime, taskStatusLabel } from "../utils";
 import { buildKnowledgeDependencyTree, buildAsrDependencyTree } from "../utils/dependencyTreeBuilder";
+import { getSummaryStrategy, getSummaryStrategyPatch, SUMMARY_STRATEGY_COPY, type PresetSummaryStrategy } from "../utils/summaryStrategy";
 import { settingsCategories, type SettingsCategory } from "./settingsConfig";
 
 const HIDDEN_PROMPT_PRESETS_STORAGE_KEY = "bilisum.hiddenPromptPresetIds";
+
+const getRangeProgress = (value: number, min: number, max: number) => `${((value - min) / (max - min)) * 100}%`;
 
 function SiliconFlowApiKeyHelp({ purpose = "asr" }: { purpose?: "asr" | "embedding" }) {
   return (
@@ -186,6 +189,8 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "llm_base_url", title: "LLM API Base URL", description: "主摘要 LLM API 地址。", keywords: ["base url", "openai", "compatible", "api", "地址"] },
   { category: "generation", targetKey: "llm_api_key", title: "LLM API Key", description: "主摘要 LLM API 密钥。", keywords: ["key", "apikey", "api key", "密钥"] },
   { category: "generation", targetKey: "llm_model", title: "LLM 模型名称", description: "主摘要使用的模型名。", keywords: ["model", "模型", "gpt", "qwen", "mimo", "claude"] },
+  { category: "generation", targetKey: "llm_thinking_type", title: "LLM 思考模式", description: "控制兼容模型是否启用思考输出。", keywords: ["thinking", "思考", "enabled", "disabled"] },
+  { category: "generation", targetKey: "llm_reasoning_effort", title: "LLM 推理强度", description: "选择兼容模型的推理强度。", keywords: ["reasoning", "推理", "low", "high", "max"] },
   { category: "knowledge", targetKey: "knowledge_enabled", title: "启用知识库", description: "开启知识库索引和问答能力。", keywords: ["知识库", "knowledge", "rag", "索引", "问答"] },
   { category: "knowledge", targetKey: "knowledge_dependencies", title: "知识库依赖", description: "安装和检查知识库扩展依赖。", keywords: ["依赖", "安装", "runtime", "faiss", "向量"] },
   { category: "knowledge", targetKey: "knowledge_embedding_provider", title: "Embedding 模型来源", description: "选择向量模型的下载源：本地 HuggingFace（支持镜像）、本地 ModelScope 或硅基流动在线 API。", keywords: ["embedding", "bge", "向量", "huggingface", "modelscope", "siliconflow", "硅基流动"] },
@@ -200,7 +205,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "language", title: "语言", description: "摘要输出语言。", keywords: ["语言", "中文", "english", "日本語"] },
   { category: "generation", targetKey: "summary_chunk_target_chars", title: "分块目标字符数", description: "LLM 分块处理的目标长度。", keywords: ["分块", "chunk", "字符", "长度"] },
   { category: "generation", targetKey: "summary_chunk_overlap_segments", title: "分块重叠段数", description: "摘要分块之间保留的重叠段落。", keywords: ["重叠", "overlap", "分块"] },
-  { category: "generation", targetKey: "summary_chunk_retry_count", title: "重试次数", description: "摘要 API 失败后的重试次数。", keywords: ["重试", "retry", "失败"] },
+  { category: "generation", targetKey: "summary_chunk_retry_count", title: "LLM 检测与摘要重试次数", description: "LLM 预检和摘要 API 失败后的重试次数，默认 5 次。", keywords: ["重试", "retry", "失败", "检测", "预检"] },
   { category: "generation", targetKey: "twelvelabs_summary_enabled", title: "Pegasus 视频理解", description: "Twelve Labs Pegasus 直接观看画面生成摘要。仅本地视频生效。", keywords: ["twelvelabs", "pegasus", "视频理解", "画面", "笔记"] },
   { category: "prompts", targetKey: "summary_system_prompt", title: "摘要 System Prompt", description: "控制视频摘要生成的角色、风格和整体约束。", keywords: ["摘要", "prompt", "system", "提示词", "风格"] },
   { category: "prompts", targetKey: "summary_user_prompt_template", title: "摘要 User Template", description: "控制摘要变量、结构和输出格式。", keywords: ["摘要", "template", "模板", "格式", "transcript"] },
@@ -210,8 +215,10 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "prompts", targetKey: "visual_note_user_prompt_template", title: "图文笔记 User Template", description: "控制图文笔记变量、结构和格式。", keywords: ["图文笔记", "template", "模板", "格式", "prompt"] },
   { category: "prompts", targetKey: "visual_frame_planning_prompt", title: "捕获帧规划 Prompt", description: "控制如何判断哪些时间点值得截图。", keywords: ["截图", "规划", "关键帧", "prompt"] },
   { category: "prompts", targetKey: "visual_vlm_prompt", title: "画面理解 Prompt", description: "控制 VLM 如何解析截图。", keywords: ["vlm", "画面理解", "ocr", "prompt"] },
-  { category: "performance", targetKey: "task_concurrency", title: "任务并发数", description: "控制整体任务吞吐。", keywords: ["并发", "concurrency", "任务", "性能"] },
+  { category: "performance", targetKey: "transcription_concurrency", title: "转写并发数", description: "控制同时进行下载、转写和转写前处理的任务数量。", keywords: ["转写", "ASR", "下载", "并发", "concurrency", "性能"] },
+  { category: "performance", targetKey: "llm_concurrency", title: "LLM 并发数", description: "控制同时进入摘要、知识笔记和图文笔记阶段的任务数量。", keywords: ["LLM", "摘要", "并发", "concurrency", "性能"] },
   { category: "performance", targetKey: "mindmap_concurrency", title: "导图并发数", description: "控制导图生成并发。", keywords: ["导图", "并发", "mindmap"] },
+  { category: "performance", targetKey: "summary_strategy", title: "摘要处理策略", description: "快速选择速度优先或缓存优先。", keywords: ["摘要", "策略", "速度", "缓存", "并发"] },
   { category: "performance", targetKey: "summary_chunk_concurrency", title: "摘要分块并发数", description: "控制单任务内部摘要请求并发。", keywords: ["摘要", "分块", "并发", "chunk"] },
   { category: "performance", targetKey: "cuda_variant", title: "CUDA 变体", description: "选择 PyTorch CUDA 版本。", keywords: ["cuda", "cu128", "cu126", "cu124", "gpu"] },
   { category: "performance", targetKey: "runtime_channel", title: "运行环境通道", description: "选择基础版或 GPU 运行环境。", keywords: ["runtime", "运行环境", "gpu", "base"] },
@@ -331,7 +338,12 @@ export function SettingsPage({
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(false);
   const [logAutoRefresh, setLogAutoRefresh] = useState(false);
   const [logLevelFilter, setLogLevelFilter] = useState<"all" | "ERROR" | "WARNING" | "INFO">("all");
+  const formRef = useRef<ServiceSettings | null>(form);
   const logTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
 
   // Load desktop preferences once
   useEffect(() => {
@@ -1218,10 +1230,17 @@ export function SettingsPage({
   const usesSiliconFlowAsr = form.transcription_provider === "siliconflow";
   const usesMultimodalAsr = form.transcription_provider === "multimodal";
   const usesFunAsr = form.transcription_provider === "funasr";
-  const recommendedTaskConcurrency = form.transcription_provider === "local" ? 1 : 2;
-  const performanceRecommendation = recommendedTaskConcurrency === 1
-    ? "当前建议：本地 ASR / CPU 场景任务并发数设为 1，导图并发数设为 1。"
-    : "当前建议：云 ASR 或 GPU 场景任务并发数设为 2，导图并发数设为 1。";
+  const recommendedTranscriptionConcurrency = form.transcription_provider === "local" ? 1 : 2;
+  const recommendedLlmConcurrency = form.transcription_provider === "local" ? 1 : 2;
+  const performanceRecommendation = `当前建议：转写并发数 ${recommendedTranscriptionConcurrency}，LLM 并发数 ${recommendedLlmConcurrency}；导图并发数保持 1；摘要分块并发使用上方策略或按需手动调整。`;
+  const summaryStrategy = getSummaryStrategy(form);
+  const summaryStrategyLabel = summaryStrategy === "custom"
+    ? "自定义"
+    : SUMMARY_STRATEGY_COPY[summaryStrategy].title;
+  const transcriptionConcurrencySliderValue = Math.min(8, Math.max(1, form.transcription_concurrency || form.task_concurrency || 1));
+  const llmConcurrencySliderValue = Math.min(8, Math.max(1, form.llm_concurrency || form.task_concurrency || 1));
+  const mindmapConcurrencySliderValue = Math.min(8, Math.max(1, form.mindmap_concurrency || 1));
+  const summaryChunkConcurrencySliderValue = Math.min(8, Math.max(1, form.summary_chunk_concurrency || 1));
   const queuedTaskCount = taskList.filter((task) => task.status === "queued").length;
   const runningTaskCount = taskList.filter((task) => task.status === "running").length;
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
@@ -1289,10 +1308,19 @@ export function SettingsPage({
 
   function updateForm(next: ServiceSettings) {
     setIsDirty(true);
+    formRef.current = next;
     setForm(next);
     setModelAvailability({
       main: { status: "unknown", message: "" },
       visual: { status: "unknown", message: "" },
+    });
+  }
+
+  function applySummaryStrategy(strategy: PresetSummaryStrategy) {
+    if (!form) return;
+    updateForm({
+      ...form,
+      ...getSummaryStrategyPatch(strategy),
     });
   }
 
@@ -1549,27 +1577,42 @@ export function SettingsPage({
     return payload;
   }
 
-  async function save(event: FormEvent) {
+  async function save(event: FormEvent): Promise<boolean> {
     event.preventDefault();
-    if (!form || isSaving) return;
+    const currentForm = formRef.current;
+    if (!currentForm || isSaving) return false;
     if (!isDirty) {
       setSaveStatus("");
-      return;
+      return true;
     }
-    const validationError = validateSettingsBeforeSave(form);
+    const validationError = validateSettingsBeforeSave(currentForm);
     if (validationError) {
       setSaveStatus(validationError.message);
       setActiveCategory(validationError.category);
       setPendingFocusTarget(validationError.targetKey);
-      return;
+      return false;
     }
     try {
       setIsSaving(true);
-      const response = await api.updateSettings(buildSettingsSavePayload(form));
-      const nextSettings = response.settings;
-      setForm(maskConfiguredApiKeys(nextSettings));
-      setIsDirty(false);
+      const response = await api.updateSettings(buildSettingsSavePayload(currentForm));
+      // PUT returns the persisted snapshot, but read it back as the source of
+      // truth. This catches a service-side persistence regression immediately
+      // instead of showing a value that will disappear on the next refresh.
+      let nextSettings = response.settings;
+      try {
+        nextSettings = await api.getSettings();
+      } catch {
+        // The PUT response is still a valid fallback when the follow-up GET
+        // is temporarily unavailable during service startup.
+      }
+      const maskedNextSettings = maskConfiguredApiKeys(nextSettings);
+      formRef.current = maskedNextSettings;
+      setForm(maskedNextSettings);
       setSaveStatus(response.message || "设置已保存");
+      // Update the parent snapshot before clearing dirty state. Otherwise the
+      // clean-form synchronization effect can briefly restore its old values.
+      onSettingsSaved(nextSettings, null);
+      setIsDirty(false);
       void (async () => {
         try {
           const nextEnvironment = await api.getEnvironment({ runtimeChannel: nextSettings.runtime_channel });
@@ -1579,8 +1622,10 @@ export function SettingsPage({
           onSettingsSaved(nextSettings, null);
         }
       })();
+      return true;
     } catch (error) {
       setSaveStatus(error instanceof Error ? error.message : "保存设置失败");
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -1850,6 +1895,8 @@ export function SettingsPage({
         llm_provider: form.llm_provider,
         llm_base_url: form.llm_base_url,
         llm_model: form.llm_model,
+        llm_thinking_type: form.llm_thinking_type || "enabled",
+        llm_reasoning_effort: form.llm_reasoning_effort || "low",
         ...(form.llm_api_key.trim() && !isMaskedApiKey(form.llm_api_key) ? { llm_api_key: form.llm_api_key } : {}),
       };
     }
@@ -1861,6 +1908,8 @@ export function SettingsPage({
       llm_provider: form.visual_vlm_provider || form.llm_provider,
       llm_base_url: form.visual_evidence_base_url || form.llm_base_url,
       llm_model: form.visual_evidence_model || form.llm_model,
+      llm_thinking_type: form.llm_thinking_type || "enabled",
+      llm_reasoning_effort: form.llm_reasoning_effort || "low",
       ...(!visualApiKey || isMaskedApiKey(visualApiKey)
         ? mainApiKey && !isMaskedApiKey(mainApiKey)
           ? { llm_api_key: mainApiKey }
@@ -1966,6 +2015,13 @@ export function SettingsPage({
       return;
     }
     void silentlyCheckGenerationModel(scope);
+  }
+
+  async function saveAndCloseGenerationModelDialog() {
+    const saved = await save({ preventDefault() {} } as FormEvent);
+    if (saved) {
+      closeGenerationModelDialog();
+    }
   }
 
   async function silentlyCheckGenerationModel(scope: GenerationModelScope) {
@@ -2993,8 +3049,8 @@ export function SettingsPage({
                     </label>
                     <label className="settings-input-group" ref={registerFocusTarget("summary_chunk_retry_count") as (node: HTMLLabelElement | null) => void}>
                       <span className="settings-input-label">重试次数</span>
-                      <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_retry_count} onChange={(e) => updateForm({ ...form, summary_chunk_retry_count: parseMinOneInt(e.target.value, 2) })} />
-                      <span className="settings-input-caption">摘要 API 调用失败时的重试次数。</span>
+                      <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_retry_count} onChange={(e) => updateForm({ ...form, summary_chunk_retry_count: parseMinOneInt(e.target.value, 5) })} />
+                      <span className="settings-input-caption">LLM 预检和摘要 API 调用失败时的重试次数，默认 5 次。</span>
                     </label>
                   </div>
                 </section>
@@ -3009,11 +3065,13 @@ export function SettingsPage({
                   </header>
                   <div className="settings-model-summary-grid">
                     <article
-                      className={`settings-model-card settings-focus-target ${activeFocusTarget === "llm_base_url" || activeFocusTarget === "llm_api_key" || activeFocusTarget === "llm_model" ? "is-highlighted" : ""}`}
+                      className={`settings-model-card settings-focus-target ${activeFocusTarget === "llm_base_url" || activeFocusTarget === "llm_api_key" || activeFocusTarget === "llm_model" || activeFocusTarget === "llm_thinking_type" || activeFocusTarget === "llm_reasoning_effort" ? "is-highlighted" : ""}`}
                       ref={(node) => {
                         registerFocusTarget("llm_base_url")(node);
                         registerFocusTarget("llm_api_key")(node);
                         registerFocusTarget("llm_model")(node);
+                        registerFocusTarget("llm_thinking_type")(node);
+                        registerFocusTarget("llm_reasoning_effort")(node);
                       }}
                     >
                       <div className="settings-model-card-top">
@@ -3998,22 +4056,136 @@ export function SettingsPage({
             <section className="settings-category-section">
               <header className="settings-category-header">
                 <h2>性能调优</h2>
-                <p>控制任务级并发与单任务内部分块并发，减少本地资源争抢和云端限流压力。</p>
+                <p>先选择摘要处理策略，再按需微调转写、LLM、摘要分块和导图请求并发。</p>
               </header>
+              <div className="settings-strategy-block" ref={registerFocusTarget("summary_strategy") as (node: HTMLDivElement | null) => void}>
+                <div className="settings-strategy-header">
+                  <div>
+                    <span className="settings-input-label">摘要处理策略</span>
+                    <span className="settings-input-caption">快速选择速度与缓存之间的取舍。选择预设只会同步摘要分块并发和上下文模式，转写与 LLM 并发可单独微调。</span>
+                  </div>
+                  <span className={`settings-strategy-current ${summaryStrategy === "custom" ? "is-custom" : ""}`}>
+                    当前：{summaryStrategyLabel}
+                  </span>
+                </div>
+                <div className="settings-strategy-grid" role="group" aria-label="摘要处理策略">
+                  {(["speed", "cache"] as const).map((strategy) => {
+                    const copy = SUMMARY_STRATEGY_COPY[strategy];
+                    const selected = summaryStrategy === strategy;
+                    const patch = getSummaryStrategyPatch(strategy);
+                    return (
+                      <button
+                        className={`settings-strategy-card ${selected ? "is-selected" : ""}`}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => applySummaryStrategy(strategy)}
+                        key={strategy}
+                      >
+                        <span className="settings-strategy-card-top">
+                          <span className="settings-strategy-card-title">{copy.title}</span>
+                          {selected ? <span className="settings-strategy-card-state">当前</span> : null}
+                        </span>
+                        <span className="settings-strategy-card-description">{copy.description}</span>
+                        <span className="settings-strategy-card-values">
+                          <span>摘要分块 {patch.summary_chunk_concurrency}</span>
+                          <span>{copy.contextLabel}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="settings-strategy-note">
+                  <strong>缓存优先提示</strong>
+                  <span>串行只会给提供商更多复用机会，实际命中率仍取决于 LLM API 的缓存实现和有效期。</span>
+                </div>
+              </div>
               <div className="settings-form-group">
-                <label className="settings-input-group" ref={registerFocusTarget("task_concurrency") as (node: HTMLLabelElement | null) => void}>
-                  <span className="settings-input-label">任务并发数</span>
-                  <input className="settings-input-field" type="number" min={1} value={form.task_concurrency} onChange={(e) => updateForm({ ...form, task_concurrency: parseMinOneInt(e.target.value, recommendedTaskConcurrency) })} />
-                  <span className="settings-input-caption">影响下载、转写、摘要的整体链路吞吐；云 API 可能存在并发限流，建议按当前环境推荐值设置。</span>
+                <label className="settings-input-group" ref={registerFocusTarget("transcription_concurrency") as (node: HTMLLabelElement | null) => void}>
+                  <span className="settings-range-heading">
+                    <span className="settings-input-label">转写并发数</span>
+                    <output className="settings-range-value" htmlFor="transcription-concurrency-slider">
+                      {transcriptionConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    </output>
+                  </span>
+                  <input
+                    id="transcription-concurrency-slider"
+                    className="settings-range-input"
+                    type="range"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={transcriptionConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(transcriptionConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, transcription_concurrency: Number(e.target.value) })}
+                    aria-label="转写并发数"
+                  />
+                  <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
+                  <span className="settings-input-caption">控制同时进行下载、转写和转写前处理的任务数量；转写完成后会立即释放槽位，继续下一个转写任务。</span>
+                </label>
+                <label className="settings-input-group" ref={registerFocusTarget("llm_concurrency") as (node: HTMLLabelElement | null) => void}>
+                  <span className="settings-range-heading">
+                    <span className="settings-input-label">LLM 并发数</span>
+                    <output className="settings-range-value" htmlFor="llm-concurrency-slider">
+                      {llmConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    </output>
+                  </span>
+                  <input
+                    id="llm-concurrency-slider"
+                    className="settings-range-input"
+                    type="range"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={llmConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(llmConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, llm_concurrency: Number(e.target.value) })}
+                    aria-label="LLM 并发数"
+                  />
+                  <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
+                  <span className="settings-input-caption">控制同时进入摘要、知识笔记和图文笔记阶段的任务数量；摘要分块并发仍是单个任务内部的并发。</span>
                 </label>
                 <label className="settings-input-group" ref={registerFocusTarget("mindmap_concurrency") as (node: HTMLLabelElement | null) => void}>
-                  <span className="settings-input-label">导图并发数</span>
-                  <input className="settings-input-field" type="number" min={1} value={form.mindmap_concurrency} onChange={(e) => updateForm({ ...form, mindmap_concurrency: parseMinOneInt(e.target.value, 1) })} />
+                  <span className="settings-range-heading">
+                    <span className="settings-input-label">导图并发数</span>
+                    <output className="settings-range-value" htmlFor="mindmap-concurrency-slider">
+                      {mindmapConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    </output>
+                  </span>
+                  <input
+                    id="mindmap-concurrency-slider"
+                    className="settings-range-input"
+                    type="range"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={mindmapConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(mindmapConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, mindmap_concurrency: Number(e.target.value) })}
+                    aria-label="导图并发数"
+                  />
+                  <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
                   <span className="settings-input-caption">影响摘要完成后的导图生成吞吐，不会占用摘要任务的并发槽位；建议保持 1。</span>
                 </label>
                 <label className="settings-input-group" ref={registerFocusTarget("summary_chunk_concurrency") as (node: HTMLLabelElement | null) => void}>
-                  <span className="settings-input-label">摘要分块并发数</span>
-                  <input className="settings-input-field" type="number" min={1} value={form.summary_chunk_concurrency} onChange={(e) => updateForm({ ...form, summary_chunk_concurrency: parseMinOneInt(e.target.value, 2) })} />
+                  <span className="settings-range-heading">
+                    <span className="settings-input-label">摘要分块并发数</span>
+                    <output className="settings-range-value" htmlFor="summary-chunk-concurrency-slider">
+                      {summaryChunkConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    </output>
+                  </span>
+                  <input
+                    id="summary-chunk-concurrency-slider"
+                    className="settings-range-input"
+                    type="range"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={summaryChunkConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(summaryChunkConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, summary_chunk_concurrency: Number(e.target.value) })}
+                    aria-label="摘要分块并发数"
+                  />
+                  <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
                   <span className="settings-input-caption">仅控制单个摘要任务内部同时请求的分块数量，不等同于任务并发数。</span>
                 </label>
               </div>
@@ -4831,6 +5003,23 @@ export function SettingsPage({
                     <span className="settings-input-label">模型名称</span>
                     <input className="settings-input-field" value={form.llm_model} onChange={(e) => updateForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
                   </label>
+                  <label className={`settings-input-group settings-focus-target ${activeFocusTarget === "llm_thinking_type" ? "is-highlighted" : ""}`}>
+                    <span className="settings-input-label">思考模式</span>
+                    <select className="settings-select-field" value={form.llm_thinking_type || "enabled"} onChange={(e) => updateForm({ ...form, llm_thinking_type: e.target.value })}>
+                      <option value="enabled">开启</option>
+                      <option value="disabled">关闭</option>
+                    </select>
+                    <span className="settings-input-caption">发送 {`{"thinking":{"type":"enabled/disabled"}}`}；默认开启。仅兼容该参数的模型生效。</span>
+                  </label>
+                  <label className={`settings-input-group settings-focus-target ${activeFocusTarget === "llm_reasoning_effort" ? "is-highlighted" : ""}`}>
+                    <span className="settings-input-label">推理强度</span>
+                    <select className="settings-select-field" value={form.llm_reasoning_effort || "low"} onChange={(e) => updateForm({ ...form, llm_reasoning_effort: e.target.value })}>
+                      <option value="low">Low</option>
+                      <option value="high">High</option>
+                      <option value="max">Max</option>
+                    </select>
+                    <span className="settings-input-caption">发送 {`{"reasoning_effort":"low/high/max"}`}；默认 Low。</span>
+                  </label>
                   <div className={`settings-inline-alert ${llmReady ? "success" : "warning"}`}>
                     <strong>{llmReady ? "主摘要模型配置完整" : "主摘要模型仍需补全"}</strong>
                     <span>{llmReady ? "可以保存后用于摘要、导图和默认视觉模型。": "启用 LLM 摘要时，需要 Base URL、API Key 与模型名称都有效。"}</span>
@@ -4871,8 +5060,8 @@ export function SettingsPage({
               )}
             </div>
             <footer className="update-dialog-footer">
-              <button className="secondary-button" type="button" onClick={closeGenerationModelDialog}>
-                关闭
+              <button className="secondary-button" type="button" disabled={isSaving} onClick={() => void saveAndCloseGenerationModelDialog()}>
+                {isSaving ? "保存中..." : "保存并关闭"}
               </button>
               <button
                 className="primary-button"

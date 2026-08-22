@@ -2,7 +2,7 @@ import "@xyflow/react/dist/style.css";
 import { Controls, Handle, Position, ReactFlow, type Edge, type Node as FlowNode, type NodeProps } from "@xyflow/react";
 import { toBlob } from "html-to-image";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type SVGProps } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
 import { api } from "../api";
@@ -476,9 +476,32 @@ function isBilibiliCookieHelpError(message: string) {
   return /HTTP\s*412|cookies?\.txt|B\s*站返回|Bilibili rejected|风控拦截|登录态|cookiesfrombrowser|DPAPI/i.test(message);
 }
 
+function getVideoDetailBackPath(state: unknown) {
+  if (state && typeof state === "object" && "from" in state && typeof state.from === "string") {
+    const from = state.from.trim();
+    if (from.startsWith("/") && !from.startsWith("//")) {
+      return from;
+    }
+  }
+  return "/library";
+}
+
+function getVideoDetailBackLabel(path: string) {
+  if (path.startsWith("/collections/")) {
+    return "返回合集面板";
+  }
+  if (path === "/" || path.startsWith("/?")) {
+    return "返回首页";
+  }
+  return "返回视频库";
+}
+
 export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSettings, onOpenCookieTutorial, onCaptureLoginCookies }: VideoDetailPageProps) {
   const { videoId = "" } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const backPath = getVideoDetailBackPath(location.state);
+  const backLabel = getVideoDetailBackLabel(backPath);
   const [video, setVideo] = useState<VideoAssetDetail | null>(null);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [taskContexts, setTaskContexts] = useState<Record<string, TaskContext>>({});
@@ -1825,9 +1848,9 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
 
       <div className="detail-page-shell">
         <div className="detail-page-toolbar">
-          <Link className="detail-back-button" to="/library">
+          <Link className="detail-back-button" to={backPath}>
             <IconChevronLeft className="detail-back-icon" />
-            返回视频库
+            {backLabel}
           </Link>
         </div>
 

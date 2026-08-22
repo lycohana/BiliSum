@@ -26,6 +26,17 @@ type CollectionSelectionDrag = {
   lastVideoId: string | null;
 };
 
+function readableCollectionError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (!message || /^Internal Server Error$/i.test(message)) {
+    return fallback;
+  }
+  if (/LLM returned no readable message content/i.test(message)) {
+    return "LLM 没有返回可读取的内容，已按设置进行重试；请检查模型响应格式。";
+  }
+  return message;
+}
+
 export function CollectionDetailPage({
   serviceOnline,
   onRefreshCollection,
@@ -52,8 +63,12 @@ export function CollectionDetailPage({
   const selectionDragRef = useRef<CollectionSelectionDrag | null>(null);
   const suppressNextSelectionClickRef = useRef(false);
 
-  const summarizedItems = useMemo(() => collection?.items.filter((item) => item.has_result) || [], [collection]);
-  const unsummarizedItems = useMemo(() => collection?.items.filter((item) => !item.has_result) || [], [collection]);
+  const summarizedItems = useMemo(() => collection?.items.filter((item) => (
+    item.has_result || item.latest_status === "queued" || item.latest_status === "running"
+  )) || [], [collection]);
+  const unsummarizedItems = useMemo(() => collection?.items.filter((item) => (
+    !item.has_result && item.latest_status !== "queued" && item.latest_status !== "running"
+  )) || [], [collection]);
   const newItems = collection?.new_items || [];
   const ownerUrl = collection?.owner_url || (collection?.owner_mid ? `https://space.bilibili.com/${collection.owner_mid}` : "");
 
@@ -77,14 +92,14 @@ export function CollectionDetailPage({
               setCollection(refreshed);
             }
           } catch (error) {
-            if (!cancelled) setErrorMessage(error instanceof Error ? error.message : "合集刷新失败，请稍后重试。");
+            if (!cancelled) setErrorMessage(readableCollectionError(error, "合集刷新失败，请稍后重试。"));
           } finally {
             if (!cancelled) setRefreshing(false);
           }
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : "合集读取失败，请稍后重试。");
+          setErrorMessage(readableCollectionError(error, "合集读取失败，请稍后重试。"));
           setLoading(false);
         }
       }
@@ -176,7 +191,7 @@ export function CollectionDetailPage({
       setOwnerFaceFailed(false);
       setCollection(await onRefreshCollection(collectionId));
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "合集刷新失败，请稍后重试。");
+      setErrorMessage(readableCollectionError(error, "合集刷新失败，请稍后重试。"));
     } finally {
       setRefreshing(false);
     }
@@ -250,7 +265,7 @@ export function CollectionDetailPage({
       const refreshed = await api.getVideoCollection(collectionId);
       setCollection(refreshed);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "批量总结任务创建失败。");
+      setErrorMessage(readableCollectionError(error, "批量总结任务创建失败，请稍后重试。"));
     } finally {
       setBusy(false);
     }
@@ -263,7 +278,7 @@ export function CollectionDetailPage({
       setCollection(await onAddCollectionItems(collectionId, newItems.map((item) => item.bvid)));
       setNewNoticeDismissed(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "新增视频加入失败。");
+      setErrorMessage(readableCollectionError(error, "新增视频加入失败。"));
     } finally {
       setBusy(false);
     }
@@ -276,7 +291,7 @@ export function CollectionDetailPage({
     try {
       setCollection(await onUpdateCollectionSettings(collectionId, collection.auto_check_on_open === false));
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "合集设置保存失败。");
+      setErrorMessage(readableCollectionError(error, "合集设置保存失败。"));
     } finally {
       setBusy(false);
     }
@@ -289,7 +304,7 @@ export function CollectionDetailPage({
       await onDeleteCollection(collectionId, mode);
       navigate("/library");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "合集删除失败，请稍后重试。");
+      setErrorMessage(readableCollectionError(error, "合集删除失败，请稍后重试。"));
     } finally {
       setBusy(false);
       setDeleteConfirmOpen(false);
@@ -307,7 +322,7 @@ export function CollectionDetailPage({
         items: current.items.map((entry) => entry.video_id === item.video_id ? { ...entry, is_global_visible: true } : entry),
       } : current);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "添加到外层视频库失败。");
+      setErrorMessage(readableCollectionError(error, "添加到外层视频库失败。"));
     } finally {
       setBusy(false);
       setContextMenu(null);
