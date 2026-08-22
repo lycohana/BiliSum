@@ -39,6 +39,7 @@ SECRET_SETTINGS_FIELDS = {
     "twelvelabs_api_key",
 }
 MASKED_SECRET_PLACEHOLDER = "******"
+SETTINGS_SCHEMA_VERSION = 2
 
 
 def is_blank_or_masked_secret(value: object) -> bool:
@@ -202,11 +203,18 @@ class SettingsManager:
             if stored.get("visual_vlm_prompt") == PREVIOUS_DEFAULT_VISUAL_VLM_PROMPT:
                 stored["visual_vlm_prompt"] = DEFAULT_VISUAL_VLM_PROMPT
             migrated = False
-            # 2 was the previous built-in retry default. Move that legacy
-            # default to 5 so existing installs get the safer preflight
-            # behavior while the setting remains user-editable afterwards.
-            if stored.get("summary_chunk_retry_count") == 2:
+            try:
+                stored_schema_version = int(stored.get("settings_schema_version", 0) or 0)
+            except (TypeError, ValueError):
+                stored_schema_version = 0
+            # 2 was the previous built-in retry default. Migrate unversioned
+            # settings once; a versioned file with an explicit value of 2 is
+            # a user choice and must remain unchanged on later startups.
+            if stored_schema_version < SETTINGS_SCHEMA_VERSION and stored.get("summary_chunk_retry_count") == 2:
                 stored["summary_chunk_retry_count"] = 5
+                migrated = True
+            if stored_schema_version < SETTINGS_SCHEMA_VERSION:
+                stored["settings_schema_version"] = SETTINGS_SCHEMA_VERSION
                 migrated = True
             candidate = ServiceSettings.model_validate({**self._base_settings.model_dump(), **stored})
             if "task_concurrency" not in stored:

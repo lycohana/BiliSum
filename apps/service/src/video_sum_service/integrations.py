@@ -334,7 +334,6 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             ],
             "temperature": 0,
             "max_tokens": 256,
-            "response_format": {"type": "json_object"},
         }
     else:
         request_payload = {
@@ -368,6 +367,8 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             request_payload,
             thinking_type=effective_settings.llm_thinking_type,
             reasoning_effort=effective_settings.llm_reasoning_effort,
+            provider=effective_settings.llm_provider,
+            model=model,
         )
         request_json["model"] = normalize_openai_compatible_model_name(model)
     elif use_anthropic:
@@ -388,6 +389,8 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             request_payload,
             thinking_type=effective_settings.llm_thinking_type,
             reasoning_effort=effective_settings.llm_reasoning_effort,
+            provider=effective_settings.llm_provider,
+            model=model,
         )
 
     probe_timeout = 120 if test_scope == "visual" else 30

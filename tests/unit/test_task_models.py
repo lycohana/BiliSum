@@ -20,6 +20,7 @@ from video_sum_infra.config import (
     recommend_task_concurrency,
     recommend_transcription_concurrency,
 )
+from video_sum_infra.llm import apply_openai_reasoning_settings
 from video_sum_infra.runtime import default_data_dir
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
 
@@ -44,6 +45,29 @@ def test_llm_reasoning_settings_have_compatible_defaults_and_normalize_invalid_v
     )
     assert normalized.llm_thinking_type == "enabled"
     assert normalized.llm_reasoning_effort == "low"
+
+
+def test_llm_reasoning_controls_are_omitted_for_unknown_openai_compatible_models() -> None:
+    payload = {"model": "generic-model", "messages": []}
+
+    unchanged = apply_openai_reasoning_settings(
+        payload,
+        provider="openai-compatible",
+        model="generic-model",
+        thinking_type="enabled",
+        reasoning_effort="max",
+    )
+    assert unchanged == payload
+
+    mimo_payload = apply_openai_reasoning_settings(
+        payload,
+        provider="openai-compatible",
+        model="MiMo-V2.5-Pro",
+        thinking_type="disabled",
+        reasoning_effort="max",
+    )
+    assert mimo_payload["thinking"] == {"type": "disabled"}
+    assert mimo_payload["reasoning_effort"] == "max"
 
 
 def test_summarize_scope_summary_skips_knowledge_note(monkeypatch) -> None:
@@ -272,6 +296,29 @@ def test_settings_manager_migrates_legacy_llm_retry_default(tmp_path: Path) -> N
     assert loaded.summary_chunk_retry_count == 5
     persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
     assert persisted.summary_chunk_retry_count == 5
+    assert persisted.settings_schema_version == 2
+
+
+def test_settings_manager_preserves_versioned_retry_count_two(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        '{"settings_schema_version":2,"summary_chunk_retry_count":2}',
+        encoding="utf-8",
+    )
+
+    loaded = manager.load()
+
+    assert loaded.summary_chunk_retry_count == 2
+    persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
+    assert persisted.summary_chunk_retry_count == 2
+    assert persisted.settings_schema_version == 2
 
 
 def test_settings_manager_migrates_missing_knowledge_note_prompt_fields(tmp_path: Path) -> None:

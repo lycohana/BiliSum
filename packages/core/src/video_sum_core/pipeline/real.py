@@ -2772,10 +2772,15 @@ class RealPipelineRunner(PipelineRunner):
         payload = dict(payload)
         use_anthropic = is_anthropic_llm(self._settings.llm_provider, base_url)
         if not use_anthropic:
+            payload["model"] = normalize_openai_compatible_model_name(
+                str(payload.get("model") or self._settings.llm_model or "")
+            )
             payload = apply_openai_reasoning_settings(
                 payload,
                 thinking_type=self._settings.llm_thinking_type,
                 reasoning_effort=self._settings.llm_reasoning_effort,
+                provider=self._settings.llm_provider,
+                model=str(payload.get("model") or ""),
             )
         payload["model"] = (
             str(payload.get("model") or "").strip()
@@ -2960,6 +2965,9 @@ class RealPipelineRunner(PipelineRunner):
         if not base_url or not self._settings.llm_model:
             raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
 
+        # 说明：有意不传 response_format（json_object）
+        # 本地 LLM 后端（Ollama/llama.cpp/vLLM 等）不支持该参数，会返回 400
+        # 输出格式靠 system prompt 中"只输出合法 JSON"约束
         payload = {
             "model": self._settings.llm_model,
             "messages": [
@@ -2974,7 +2982,6 @@ class RealPipelineRunner(PipelineRunner):
             ],
             "temperature": 0,
             "max_tokens": 32,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3055,7 +3062,6 @@ class RealPipelineRunner(PipelineRunner):
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3071,7 +3077,6 @@ class RealPipelineRunner(PipelineRunner):
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3386,7 +3391,6 @@ P 数索引：
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
@@ -3842,7 +3846,6 @@ P 数索引：
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
         }
         parsed = self._request_llm_json(
@@ -4252,7 +4255,6 @@ P 数索引：
                         ],
                     }
                 ],
-                "response_format": {"type": "json_object"},
                 "enable_thinking": False,
             }
             # Only use Anthropic image format for the real Anthropic API.
@@ -4270,6 +4272,8 @@ P 数索引：
                     payload,
                     thinking_type=self._settings.llm_thinking_type,
                     reasoning_effort=self._settings.llm_reasoning_effort,
+                    provider=self._settings.llm_provider,
+                    model=model,
                 )
                 payload["model"] = normalize_openai_compatible_model_name(model)
                 request_payload = payload
@@ -4550,6 +4554,8 @@ P 数索引：
                 openai_payload,
                 thinking_type=self._settings.llm_thinking_type,
                 reasoning_effort=self._settings.llm_reasoning_effort,
+                provider=self._settings.llm_provider,
+                model=model,
             )
             request_url = f"{base_url}/chat/completions"
             request_payload = openai_payload
@@ -4782,7 +4788,6 @@ P 数索引：
         return {
             "model": self._settings.llm_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }

@@ -673,6 +673,9 @@ class ServiceSettings(BaseSettings):
     mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
     summary_chunk_retry_count: int = 5
+    # Persisted marker used to distinguish the one-time retry-default
+    # migration from a user who intentionally selected retry count 2.
+    settings_schema_version: int = 2
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 

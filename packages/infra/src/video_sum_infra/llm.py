@@ -16,9 +16,28 @@ def apply_openai_reasoning_settings(
     *,
     thinking_type: str | None,
     reasoning_effort: str | None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, object]:
-    """Add the provider-neutral reasoning controls used by compatible APIs."""
+    """Add reasoning controls only for model families known to accept them.
+
+    The settings are exposed for OpenAI-compatible endpoints, but the request
+    fields are not part of the OpenAI-compatible contract. Sending them to an
+    arbitrary endpoint can turn an otherwise valid request into a 400. MiMo
+    is the currently supported model family; unknown providers/models keep
+    the original payload unchanged until their request schema is verified.
+    """
     next_payload = dict(payload)
+    normalized_provider = str(provider or "").strip().lower().replace("_", "-")
+    normalized_model = normalize_openai_compatible_model_name(
+        str(model or next_payload.get("model") or "")
+    ).lower()
+    supports_controls = (
+        normalized_provider in {"mimo", "xiaomi-mimo"}
+        or normalized_model.startswith(("mimo-", "mimo_"))
+    )
+    if not supports_controls:
+        return next_payload
     next_payload["thinking"] = {"type": normalize_llm_thinking_type(thinking_type)}
     next_payload["reasoning_effort"] = normalize_llm_reasoning_effort(reasoning_effort)
     return next_payload

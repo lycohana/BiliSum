@@ -51,6 +51,32 @@ function readableTaskCreationError(error: unknown): string {
   return message;
 }
 
+async function settleWithConcurrency<TItem, TResult>(
+  items: TItem[],
+  concurrency: number,
+  worker: (item: TItem, index: number) => Promise<TResult>,
+): Promise<Array<PromiseSettledResult<TResult>>> {
+  const results = new Array<PromiseSettledResult<TResult>>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency) || 1));
+
+  async function runWorker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]!, index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
 function readAuthTokenFromUrl(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -930,7 +956,11 @@ export function App() {
         navigate(`/collections/${collection.collection_id}`);
       };
 
-      const taskPromises = items.map(async (item) => {
+      const probeConcurrency = Math.max(
+        1,
+        Number(snapshot.settings?.transcription_concurrency || snapshot.settings?.task_concurrency) || 1,
+      );
+      const results = await settleWithConcurrency(items, probeConcurrency, async (item) => {
         const isCurrentVideo = Boolean(currentVideo && (
           item.video_id === currentVideo.video_id
           || item.bvid === currentVideo.canonical_id
@@ -950,8 +980,6 @@ export function App() {
         openCollection();
         return targetVideo;
       });
-
-      const results = await Promise.allSettled(taskPromises);
       const successfulVideos = results
         .filter((result): result is PromiseFulfilledResult<VideoAssetSummary> => result.status === "fulfilled")
         .map((result) => result.value);
