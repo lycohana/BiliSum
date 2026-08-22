@@ -144,6 +144,8 @@ def test_serialize_settings_includes_persisted_file_flag(monkeypatch, tmp_path: 
 
     assert payload["settings_file_exists"] is False
     assert payload["task_concurrency"] == current.task_concurrency
+    assert payload["transcription_concurrency"] == current.transcription_concurrency
+    assert payload["llm_concurrency"] == current.llm_concurrency
     assert payload["mindmap_concurrency"] == current.mindmap_concurrency
     assert payload["knowledge_note_system_prompt"] == current.knowledge_note_system_prompt
     assert payload["knowledge_note_user_prompt_template"] == current.knowledge_note_user_prompt_template

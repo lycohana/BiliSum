@@ -527,6 +527,9 @@ export type ServiceSettings = {
   visual_vlm_prompt: string;
   summary_chunk_target_chars: number;
   summary_chunk_overlap_segments: number;
+  transcription_concurrency: number;
+  llm_concurrency: number;
+  /** Legacy alias kept for older service versions/clients. */
   task_concurrency: number;
   mindmap_concurrency: number;
   summary_chunk_concurrency: number;
@@ -598,6 +601,12 @@ export type WorkerBatchSnapshot = WorkerQueueSnapshot & {
   remaining?: number;
   running_tasks?: number;
   pending_tasks?: number;
+  transcription_concurrency?: number;
+  llm_concurrency?: number;
+  transcription_pending_tasks?: number;
+  transcription_running_tasks?: number;
+  llm_pending_tasks?: number;
+  llm_running_tasks?: number;
 };
 
 export type WorkerSnapshot = {
@@ -607,6 +616,8 @@ export type WorkerSnapshot = {
   job_threads?: number;
   queues?: {
     task?: WorkerQueueSnapshot;
+    transcription?: WorkerQueueSnapshot;
+    llm?: WorkerQueueSnapshot;
     mindmap?: WorkerQueueSnapshot;
     visual?: WorkerQueueSnapshot;
     [key: string]: WorkerQueueSnapshot | undefined;

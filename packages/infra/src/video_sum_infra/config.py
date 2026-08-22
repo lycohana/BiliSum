@@ -537,6 +537,26 @@ def recommend_mindmap_concurrency() -> int:
     return 1
 
 
+def recommend_transcription_concurrency(
+    settings: "ServiceSettings", *, cuda_available: bool | None = None
+) -> int:
+    """Recommend concurrency for the download/ASR side of the pipeline."""
+
+    return recommend_task_concurrency(settings, cuda_available=cuda_available)
+
+
+def recommend_llm_concurrency(
+    settings: "ServiceSettings", *, cuda_available: bool | None = None
+) -> int:
+    """Recommend task-level concurrency for the LLM side of the pipeline.
+
+    Keep the initial recommendation aligned with the historical task queue;
+    users can now tune this independently from transcription concurrency.
+    """
+
+    return recommend_task_concurrency(settings, cuda_available=cuda_available)
+
+
 def normalize_knowledge_index_auto_rebuild(value: str | None) -> str:
     normalized = str(value or "disabled").strip().lower()
     if normalized in {"on_task_completed", "task_completed", "completed"}:
@@ -641,7 +661,12 @@ class ServiceSettings(BaseSettings):
     mindmap_user_prompt_template: str = DEFAULT_MINDMAP_USER_PROMPT_TEMPLATE
     summary_chunk_target_chars: int = 2200
     summary_chunk_overlap_segments: int = 2
+    # ``task_concurrency`` is retained as a compatibility alias for older
+    # clients/settings files. New code should use the two stage-specific
+    # values below.
     task_concurrency: int = 2
+    transcription_concurrency: int = 2
+    llm_concurrency: int = 2
     mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
     summary_chunk_retry_count: int = 5
@@ -703,6 +728,8 @@ class ServiceSettings(BaseSettings):
         "summary_full_context_max_chars",
         "summary_chunk_overlap_segments",
         "task_concurrency",
+        "transcription_concurrency",
+        "llm_concurrency",
         "mindmap_concurrency",
         "summary_chunk_concurrency",
         "summary_chunk_retry_count",

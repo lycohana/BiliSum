@@ -105,6 +105,8 @@ function createSettings(overrides: Partial<ServiceSettings> = {}): ServiceSettin
     visual_vlm_prompt: "",
     summary_chunk_target_chars: 2200,
     summary_chunk_overlap_segments: 2,
+    transcription_concurrency: 2,
+    llm_concurrency: 2,
     task_concurrency: 2,
     mindmap_concurrency: 1,
     summary_chunk_concurrency: 2,

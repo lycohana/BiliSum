@@ -14,9 +14,11 @@ from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
 from video_sum_infra.config import (
     ServiceSettings,
+    recommend_llm_concurrency,
     normalize_transcription_provider,
     recommend_mindmap_concurrency,
     recommend_task_concurrency,
+    recommend_transcription_concurrency,
 )
 from video_sum_infra.runtime import default_data_dir
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
@@ -129,6 +131,8 @@ def test_recommend_task_concurrency_prefers_cloud_or_gpu_parallel_execution() ->
     settings = ServiceSettings(transcription_provider="siliconflow", runtime_channel="base", device_preference="cpu")
 
     assert recommend_task_concurrency(settings, cuda_available=False) == 2
+    assert recommend_transcription_concurrency(settings, cuda_available=False) == 2
+    assert recommend_llm_concurrency(settings, cuda_available=False) == 2
     assert recommend_mindmap_concurrency() == 1
 
 
@@ -207,9 +211,35 @@ def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Pat
     persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
 
     assert loaded.task_concurrency == 1
+    assert loaded.transcription_concurrency == 1
+    assert loaded.llm_concurrency == 1
     assert loaded.mindmap_concurrency == 1
     assert persisted.task_concurrency == 1
+    assert persisted.transcription_concurrency == 1
+    assert persisted.llm_concurrency == 1
     assert persisted.mindmap_concurrency == 1
+
+
+def test_settings_manager_persists_independent_stage_concurrency(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+
+    saved = manager.save(
+        SettingsUpdatePayload(transcription_concurrency=3, llm_concurrency=1)
+    )
+
+    assert saved.transcription_concurrency == 3
+    assert saved.llm_concurrency == 1
+    assert saved.task_concurrency == 3
+
+    reloaded = SettingsManager(base_settings).load()
+    assert reloaded.transcription_concurrency == 3
+    assert reloaded.llm_concurrency == 1
+    assert reloaded.task_concurrency == 3
 
 
 def test_settings_manager_migrates_legacy_llm_retry_default(tmp_path: Path) -> None:

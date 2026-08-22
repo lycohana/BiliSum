@@ -116,10 +116,13 @@ run("settings return-to-top fab is available across categories", () => {
   assert.ok(fabIndex < contentCloseIndex, "return-to-top fab should stay inside the settings content area");
 });
 
-run("performance controls expose task, mindmap, and summary sliders", () => {
-  assert.ok(settingsPageSource.includes('targetKey: "task_concurrency"'), "task concurrency should be a performance setting target");
-  assert.ok(settingsPageSource.includes('registerFocusTarget("task_concurrency")'), "task concurrency should have a settings control");
-  assert.ok(settingsPageSource.includes('id="task-concurrency-slider"'), "task concurrency should use a range slider");
+run("performance controls expose stage, mindmap, and summary sliders", () => {
+  assert.ok(settingsPageSource.includes('targetKey: "transcription_concurrency"'), "transcription concurrency should be a performance setting target");
+  assert.ok(settingsPageSource.includes('registerFocusTarget("transcription_concurrency")'), "transcription concurrency should have a settings control");
+  assert.ok(settingsPageSource.includes('targetKey: "llm_concurrency"'), "LLM concurrency should be a performance setting target");
+  assert.ok(settingsPageSource.includes('registerFocusTarget("llm_concurrency")'), "LLM concurrency should have a settings control");
+  assert.ok(settingsPageSource.includes('id="transcription-concurrency-slider"'), "transcription concurrency should use a range slider");
+  assert.ok(settingsPageSource.includes('id="llm-concurrency-slider"'), "LLM concurrency should use a range slider");
   assert.ok(settingsPageSource.includes('id="mindmap-concurrency-slider"'), "mindmap concurrency should use a range slider");
   assert.ok(settingsPageSource.includes('id="summary-chunk-concurrency-slider"'), "summary chunk concurrency should use a range slider");
 });

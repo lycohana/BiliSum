@@ -2164,7 +2164,8 @@ def build_worker(
             else "disabled"
         ),
         knowledge_index_settings=current_settings,
-        task_concurrency=current_settings.task_concurrency,
+        transcription_concurrency=current_settings.transcription_concurrency,
+        llm_concurrency=current_settings.llm_concurrency,
         mindmap_concurrency=current_settings.mindmap_concurrency,
     )
 
@@ -2286,6 +2287,8 @@ def serialize_settings(
         "summary_chunk_target_chars": current_settings.summary_chunk_target_chars,
         "summary_chunk_overlap_segments": current_settings.summary_chunk_overlap_segments,
         "task_concurrency": current_settings.task_concurrency,
+        "transcription_concurrency": current_settings.transcription_concurrency,
+        "llm_concurrency": current_settings.llm_concurrency,
         "mindmap_concurrency": current_settings.mindmap_concurrency,
         "summary_chunk_concurrency": current_settings.summary_chunk_concurrency,
         "summary_chunk_retry_count": current_settings.summary_chunk_retry_count,

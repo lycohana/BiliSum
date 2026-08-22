@@ -25,7 +25,7 @@ function firstNumber(...values: Array<number | null | undefined>): number | null
 }
 
 function queueSnapshot(worker: WorkerSnapshot | null | undefined): QueueStatusView {
-  const taskQueue: WorkerQueueSnapshot = worker?.queues?.task ?? worker?.task ?? {};
+  const taskQueue: WorkerQueueSnapshot = worker?.queues?.transcription ?? worker?.queues?.task ?? worker?.task ?? {};
   const batch = worker?.batch ?? worker?.active_batch ?? null;
   const completion = worker?.completion ?? (batch?.state === "completed" || batch?.state === "done" ? batch : null);
   const completed = firstNumber(

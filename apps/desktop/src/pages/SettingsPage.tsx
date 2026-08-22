@@ -213,7 +213,8 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "prompts", targetKey: "visual_note_user_prompt_template", title: "图文笔记 User Template", description: "控制图文笔记变量、结构和格式。", keywords: ["图文笔记", "template", "模板", "格式", "prompt"] },
   { category: "prompts", targetKey: "visual_frame_planning_prompt", title: "捕获帧规划 Prompt", description: "控制如何判断哪些时间点值得截图。", keywords: ["截图", "规划", "关键帧", "prompt"] },
   { category: "prompts", targetKey: "visual_vlm_prompt", title: "画面理解 Prompt", description: "控制 VLM 如何解析截图。", keywords: ["vlm", "画面理解", "ocr", "prompt"] },
-  { category: "performance", targetKey: "task_concurrency", title: "任务并发数", description: "控制下载、转写、摘要任务的整体并发。", keywords: ["并发", "concurrency", "任务", "性能"] },
+  { category: "performance", targetKey: "transcription_concurrency", title: "转写并发数", description: "控制同时进行下载、转写和转写前处理的任务数量。", keywords: ["转写", "ASR", "下载", "并发", "concurrency", "性能"] },
+  { category: "performance", targetKey: "llm_concurrency", title: "LLM 并发数", description: "控制同时进入摘要、知识笔记和图文笔记阶段的任务数量。", keywords: ["LLM", "摘要", "并发", "concurrency", "性能"] },
   { category: "performance", targetKey: "mindmap_concurrency", title: "导图并发数", description: "控制导图生成并发。", keywords: ["导图", "并发", "mindmap"] },
   { category: "performance", targetKey: "summary_strategy", title: "摘要处理策略", description: "快速选择速度优先或缓存优先。", keywords: ["摘要", "策略", "速度", "缓存", "并发"] },
   { category: "performance", targetKey: "summary_chunk_concurrency", title: "摘要分块并发数", description: "控制单任务内部摘要请求并发。", keywords: ["摘要", "分块", "并发", "chunk"] },
@@ -1227,13 +1228,15 @@ export function SettingsPage({
   const usesSiliconFlowAsr = form.transcription_provider === "siliconflow";
   const usesMultimodalAsr = form.transcription_provider === "multimodal";
   const usesFunAsr = form.transcription_provider === "funasr";
-  const recommendedTaskConcurrency = form.transcription_provider === "local" ? 1 : 2;
-  const performanceRecommendation = `当前建议：任务并发数 ${recommendedTaskConcurrency}；导图并发数保持 1；摘要分块并发使用上方策略或按需手动调整。`;
+  const recommendedTranscriptionConcurrency = form.transcription_provider === "local" ? 1 : 2;
+  const recommendedLlmConcurrency = form.transcription_provider === "local" ? 1 : 2;
+  const performanceRecommendation = `当前建议：转写并发数 ${recommendedTranscriptionConcurrency}，LLM 并发数 ${recommendedLlmConcurrency}；导图并发数保持 1；摘要分块并发使用上方策略或按需手动调整。`;
   const summaryStrategy = getSummaryStrategy(form);
   const summaryStrategyLabel = summaryStrategy === "custom"
     ? "自定义"
     : SUMMARY_STRATEGY_COPY[summaryStrategy].title;
-  const taskConcurrencySliderValue = Math.min(8, Math.max(1, form.task_concurrency || 1));
+  const transcriptionConcurrencySliderValue = Math.min(8, Math.max(1, form.transcription_concurrency || form.task_concurrency || 1));
+  const llmConcurrencySliderValue = Math.min(8, Math.max(1, form.llm_concurrency || form.task_concurrency || 1));
   const mindmapConcurrencySliderValue = Math.min(8, Math.max(1, form.mindmap_concurrency || 1));
   const summaryChunkConcurrencySliderValue = Math.min(8, Math.max(1, form.summary_chunk_concurrency || 1));
   const queuedTaskCount = taskList.filter((task) => task.status === "queued").length;
@@ -4045,13 +4048,13 @@ export function SettingsPage({
             <section className="settings-category-section">
               <header className="settings-category-header">
                 <h2>性能调优</h2>
-                <p>先选择摘要处理策略，再按需微调任务、摘要和导图请求并发。</p>
+                <p>先选择摘要处理策略，再按需微调转写、LLM、摘要分块和导图请求并发。</p>
               </header>
               <div className="settings-strategy-block" ref={registerFocusTarget("summary_strategy") as (node: HTMLDivElement | null) => void}>
                 <div className="settings-strategy-header">
                   <div>
                     <span className="settings-input-label">摘要处理策略</span>
-                    <span className="settings-input-caption">快速选择速度与缓存之间的取舍。选择预设只会同步摘要分块并发和上下文模式。</span>
+                    <span className="settings-input-caption">快速选择速度与缓存之间的取舍。选择预设只会同步摘要分块并发和上下文模式，转写与 LLM 并发可单独微调。</span>
                   </div>
                   <span className={`settings-strategy-current ${summaryStrategy === "custom" ? "is-custom" : ""}`}>
                     当前：{summaryStrategyLabel}
@@ -4089,27 +4092,49 @@ export function SettingsPage({
                 </div>
               </div>
               <div className="settings-form-group">
-                <label className="settings-input-group" ref={registerFocusTarget("task_concurrency") as (node: HTMLLabelElement | null) => void}>
+                <label className="settings-input-group" ref={registerFocusTarget("transcription_concurrency") as (node: HTMLLabelElement | null) => void}>
                   <span className="settings-range-heading">
-                    <span className="settings-input-label">任务并发数</span>
-                    <output className="settings-range-value" htmlFor="task-concurrency-slider">
-                      {taskConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    <span className="settings-input-label">转写并发数</span>
+                    <output className="settings-range-value" htmlFor="transcription-concurrency-slider">
+                      {transcriptionConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
                     </output>
                   </span>
                   <input
-                    id="task-concurrency-slider"
+                    id="transcription-concurrency-slider"
                     className="settings-range-input"
                     type="range"
                     min={1}
                     max={8}
                     step={1}
-                    value={taskConcurrencySliderValue}
-                    style={{ "--range-progress": getRangeProgress(taskConcurrencySliderValue, 1, 8) } as CSSProperties}
-                    onChange={(e) => updateForm({ ...form, task_concurrency: Number(e.target.value) })}
-                    aria-label="任务并发数"
+                    value={transcriptionConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(transcriptionConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, transcription_concurrency: Number(e.target.value) })}
+                    aria-label="转写并发数"
                   />
                   <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
-                  <span className="settings-input-caption">影响下载、转写、摘要任务的整体吞吐；云 API 可能存在并发限流，建议结合当前机器和服务商限制调整。</span>
+                  <span className="settings-input-caption">控制同时进行下载、转写和转写前处理的任务数量；转写完成后会立即释放槽位，继续下一个转写任务。</span>
+                </label>
+                <label className="settings-input-group" ref={registerFocusTarget("llm_concurrency") as (node: HTMLLabelElement | null) => void}>
+                  <span className="settings-range-heading">
+                    <span className="settings-input-label">LLM 并发数</span>
+                    <output className="settings-range-value" htmlFor="llm-concurrency-slider">
+                      {llmConcurrencySliderValue}<span className="settings-range-value-max" aria-hidden="true"> / 8</span>
+                    </output>
+                  </span>
+                  <input
+                    id="llm-concurrency-slider"
+                    className="settings-range-input"
+                    type="range"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={llmConcurrencySliderValue}
+                    style={{ "--range-progress": getRangeProgress(llmConcurrencySliderValue, 1, 8) } as CSSProperties}
+                    onChange={(e) => updateForm({ ...form, llm_concurrency: Number(e.target.value) })}
+                    aria-label="LLM 并发数"
+                  />
+                  <span className="settings-range-scale" aria-hidden="true"><span>1</span><span>8</span></span>
+                  <span className="settings-input-caption">控制同时进入摘要、知识笔记和图文笔记阶段的任务数量；摘要分块并发仍是单个任务内部的并发。</span>
                 </label>
                 <label className="settings-input-group" ref={registerFocusTarget("mindmap_concurrency") as (node: HTMLLabelElement | null) => void}>
                   <span className="settings-range-heading">

@@ -66,6 +66,7 @@ from video_sum_core.pipeline.base import (
     PipelineEvent,
     PipelineEventReporter,
     PipelineRunner,
+    PipelineTranscription,
 )
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
 
@@ -283,6 +284,9 @@ class RealPipelineRunner(PipelineRunner):
     def cancel(self) -> None:
         self._cancelled = True
 
+    def supports_staged_execution(self) -> bool:
+        return True
+
     def preflight(
         self,
         context: PipelineContext,
@@ -315,13 +319,104 @@ class RealPipelineRunner(PipelineRunner):
         context: PipelineContext,
         on_event: PipelineEventReporter | None = None,
     ) -> tuple[list[PipelineEvent], TaskResult]:
-        task_input = context.task_input
-
         events: list[PipelineEvent] = []
 
+        def record_event(event: PipelineEvent) -> None:
+            events.append(event)
+            if on_event is not None:
+                on_event(event)
+
+        task_input = context.task_input
+        logger.info(
+            "pipeline run start task_id=%s input_type=%s source=%s",
+            context.task_id,
+            task_input.input_type.value,
+            task_input.source,
+        )
+        transcription = self.run_transcription(context, on_event=record_event)
+        result = self.run_summary(context, transcription, on_event=record_event)
+        return events, result
+
+    def run_transcription(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None = None,
+    ) -> PipelineTranscription:
+        emit = self._build_stage_emitter(context, on_event)
+        task_input = context.task_input
+        if task_input.input_type is InputType.URL:
+            return self._transcribe_from_url(context, emit)
+        if task_input.input_type in {InputType.VIDEO_FILE, InputType.AUDIO_FILE}:
+            return self._transcribe_from_local_media(context, emit)
+        if task_input.input_type is InputType.TRANSCRIPT_TEXT:
+            return self._transcribe_from_transcript_text(context, emit)
+        raise UnsupportedInputError(
+            f"Current runner does not support input type '{task_input.input_type.value}'."
+        )
+
+    def run_summary(
+        self,
+        context: PipelineContext,
+        transcription: PipelineTranscription,
+        on_event: PipelineEventReporter | None = None,
+    ) -> TaskResult:
+        emit = self._build_stage_emitter(context, on_event)
+        task_input = context.task_input
+        pegasus_video = None
+        if transcription.source_path and self._settings.twelvelabs_summary_enabled:
+            pegasus_video = video_context_from_file(transcription.source_path)
+        summary = self._summarize(
+            transcription.transcript,
+            transcription.segments,
+            transcription.title,
+            emit,
+            source_kind=transcription.source_kind,
+            prompt_preset_id=task_input.options.prompt_preset_id,
+            summary_scope=task_input.options.summary_scope,
+            pegasus_video=pegasus_video,
+        )
+        emit("exporting", 97, "正在导出任务结果")
+        result = self._export_result(
+            transcription.task_dir,
+            transcription.title,
+            transcription.transcript,
+            transcription.segments,
+            summary,
+        )
+        emit(
+            "exporting",
+            98,
+            "纯文本知识笔记已写入，正在生成图文笔记",
+            {
+                "result": result.model_dump(mode="json"),
+                "result_scope": "knowledge_note",
+            },
+        )
+        result = self._build_inline_visual_note(
+            context.task_id,
+            task_input,
+            transcription.task_dir,
+            transcription.title,
+            result,
+            emit,
+        )
+        emit("exporting", 99, "结果文件已写入本地目录")
+        logger.info(
+            "pipeline summary stage finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
+            context.task_id,
+            len(transcription.segments),
+            len(transcription.transcript),
+            transcription.task_dir,
+        )
+        return result
+
+    def _build_stage_emitter(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None,
+    ) -> Callable[[str, int, str, dict[str, object] | None], None]:
         def emit(stage: str, progress: int, message: str, payload: dict[str, object] | None = None) -> None:
             event = PipelineEvent(stage=stage, progress=progress, message=message, payload=payload or {})
-            events.append(event)
             logger.info(
                 "pipeline event task_id=%s stage=%s progress=%s message=%s payload=%s",
                 context.task_id,
@@ -333,30 +428,25 @@ class RealPipelineRunner(PipelineRunner):
             if on_event is not None:
                 on_event(event)
 
-        logger.info(
-            "pipeline run start task_id=%s input_type=%s source=%s",
-            context.task_id,
-            task_input.input_type.value,
-            task_input.source,
-        )
-
-        if task_input.input_type is InputType.URL:
-            result = self._run_from_url(context, emit)
-        elif task_input.input_type in {InputType.VIDEO_FILE, InputType.AUDIO_FILE}:
-            result = self._run_from_local_media(context, emit)
-        elif task_input.input_type is InputType.TRANSCRIPT_TEXT:
-            result = self._run_from_transcript_text(context, emit)
-        else:
-            raise UnsupportedInputError(
-                f"Current runner does not support input type '{task_input.input_type.value}'."
-            )
-        return events, result
+        return emit
 
     def _run_from_url(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_url(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_url(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_input = context.task_input
         emit("preparing", 8, "正在规范化视频链接")
         normalized = normalize_video_url(task_input.source)
@@ -464,41 +554,30 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "transcript",
             },
         )
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
-            prompt_preset_id=task_input.options.prompt_preset_id,
-            summary_scope=task_input.options.summary_scope,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
         )
-        emit("exporting", 97, "正在导出任务结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "结果文件已写入本地目录")
-        logger.info(
-            "pipeline url run finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _run_from_transcript_text(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_transcript_text(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_transcript_text(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_dir = ensure_directory(self._settings.tasks_dir / context.task_id)
         title, transcript, segments, source_kind = self._parse_transcript_payload(
             context.task_input.source,
@@ -517,42 +596,31 @@ class RealPipelineRunner(PipelineRunner):
             "已跳过重新转写，直接复用分 P 摘要素材" if is_aggregate_series else "已跳过重新转写，直接复用当前版本文本",
             {"transcript_chars": len(transcript), "segment_count": len(segments)},
         )
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
             source_kind=source_kind,
-            prompt_preset_id=context.task_input.options.prompt_preset_id,
-            summary_scope=context.task_input.options.summary_scope,
         )
-        emit("exporting", 97, "正在导出新的摘要结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, context.task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "新的摘要结果已写入本地目录")
-        logger.info(
-            "pipeline transcript rerun finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _run_from_local_media(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_local_media(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_local_media(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_input = context.task_input
         source_path = Path(str(task_input.source or "")).expanduser()
         if not source_path.exists() or not source_path.is_file():
@@ -586,41 +654,13 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "transcript",
             },
         )
-        pegasus_video = None
-        if is_video_file and self._settings.twelvelabs_summary_enabled:
-            pegasus_video = video_context_from_file(source_path)
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
-            prompt_preset_id=task_input.options.prompt_preset_id,
-            summary_scope=task_input.options.summary_scope,
-            pegasus_video=pegasus_video,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
+            source_path=source_path if is_video_file else None,
         )
-        emit("exporting", 97, "正在导出任务结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "结果文件已写入本地目录")
-        logger.info(
-            "pipeline local media run finish task_id=%s input_type=%s source=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            task_input.input_type.value,
-            source_path,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _prepare_local_audio_source(
         self,
