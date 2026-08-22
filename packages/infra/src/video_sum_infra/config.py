@@ -3,6 +3,7 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from video_sum_infra.llm import normalize_llm_reasoning_effort, normalize_llm_thinking_type
 from video_sum_infra.runtime import (
     default_cache_dir,
     default_data_dir,
@@ -537,6 +538,26 @@ def recommend_mindmap_concurrency() -> int:
     return 1
 
 
+def recommend_transcription_concurrency(
+    settings: "ServiceSettings", *, cuda_available: bool | None = None
+) -> int:
+    """Recommend concurrency for the download/ASR side of the pipeline."""
+
+    return recommend_task_concurrency(settings, cuda_available=cuda_available)
+
+
+def recommend_llm_concurrency(
+    settings: "ServiceSettings", *, cuda_available: bool | None = None
+) -> int:
+    """Recommend task-level concurrency for the LLM side of the pipeline.
+
+    Keep the initial recommendation aligned with the historical task queue;
+    users can now tune this independently from transcription concurrency.
+    """
+
+    return recommend_task_concurrency(settings, cuda_available=cuda_available)
+
+
 def normalize_knowledge_index_auto_rebuild(value: str | None) -> str:
     normalized = str(value or "disabled").strip().lower()
     if normalized in {"on_task_completed", "task_completed", "completed"}:
@@ -615,6 +636,8 @@ class ServiceSettings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_thinking_type: str = "enabled"
+    llm_reasoning_effort: str = "low"
     knowledge_llm_mode: str = "same_as_main"
     knowledge_llm_enabled: bool = False
     knowledge_llm_provider: str = "openai-compatible"
@@ -641,10 +664,18 @@ class ServiceSettings(BaseSettings):
     mindmap_user_prompt_template: str = DEFAULT_MINDMAP_USER_PROMPT_TEMPLATE
     summary_chunk_target_chars: int = 2200
     summary_chunk_overlap_segments: int = 2
+    # ``task_concurrency`` is retained as a compatibility alias for older
+    # clients/settings files. New code should use the two stage-specific
+    # values below.
     task_concurrency: int = 2
+    transcription_concurrency: int = 2
+    llm_concurrency: int = 2
     mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
-    summary_chunk_retry_count: int = 2
+    summary_chunk_retry_count: int = 5
+    # Persisted marker used to distinguish the one-time retry-default
+    # migration from a user who intentionally selected retry count 2.
+    settings_schema_version: int = 2
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 
@@ -668,6 +699,16 @@ class ServiceSettings(BaseSettings):
     @classmethod
     def _normalize_knowledge_llm_mode(cls, value: str | None) -> str:
         return normalize_knowledge_llm_mode(value)
+
+    @field_validator("llm_thinking_type", mode="before")
+    @classmethod
+    def _normalize_llm_thinking_type(cls, value: str | None) -> str:
+        return normalize_llm_thinking_type(value)
+
+    @field_validator("llm_reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_llm_reasoning_effort(cls, value: str | None) -> str:
+        return normalize_llm_reasoning_effort(value)
 
     @field_validator("knowledge_embedding_provider", mode="before")
     @classmethod
@@ -703,6 +744,8 @@ class ServiceSettings(BaseSettings):
         "summary_full_context_max_chars",
         "summary_chunk_overlap_segments",
         "task_concurrency",
+        "transcription_concurrency",
+        "llm_concurrency",
         "mindmap_concurrency",
         "summary_chunk_concurrency",
         "summary_chunk_retry_count",

@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type FloatingNoticeTone = "info" | "success" | "error";
+
+const DEFAULT_NOTICE_DURATION_MS = 5000;
+const NOTICE_EXIT_ANIMATION_MS = 180;
 
 export type FloatingNotice = {
   id: string;
@@ -20,24 +23,17 @@ function inferTone(message: string): FloatingNoticeTone {
   return "info";
 }
 
-function resolveAutoDismissDuration(message: string, tone: FloatingNoticeTone, durationMs?: number | null) {
+function resolveAutoDismissDuration(durationMs?: number | null) {
   if (durationMs !== undefined) {
     return durationMs;
   }
-  if (/^正在(刷新|导出|复制|重新生成|生成|提交|拉起)|^已发起/i.test(message)) {
-    return 3200;
-  }
-  if (/检测到.+(合集|分 ?P).*(请先|选择)/i.test(message)) {
-    return 2800;
-  }
-  if (/处理中|请先|检测到.+请先/i.test(message)) {
-    return null;
-  }
-  return tone === "error" ? 6500 : 4800;
+  return DEFAULT_NOTICE_DURATION_MS;
 }
 
 export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) {
   const [dismissedSignatures, setDismissedSignatures] = useState<Record<string, string>>({});
+  const [exitingSignatures, setExitingSignatures] = useState<Record<string, string>>({});
+  const exitTimersRef = useRef<Record<string, number>>({});
   const normalizedNotices = useMemo(() => (
     notices
       .filter((notice) => notice.message.trim())
@@ -47,11 +43,40 @@ export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) 
           ...notice,
           tone,
           signature: `${notice.id}:${notice.version ?? "stable"}:${notice.message}`,
-          autoDismissMs: resolveAutoDismissDuration(notice.message, tone, notice.durationMs),
+          autoDismissMs: resolveAutoDismissDuration(notice.durationMs),
         };
       })
   ), [notices]);
   const visibleNotices = normalizedNotices.filter((notice) => dismissedSignatures[notice.id] !== notice.signature);
+
+  const dismissNotice = useCallback((id: string, signature: string) => {
+    setExitingSignatures((current) => ({ ...current, [id]: signature }));
+    const previousTimer = exitTimersRef.current[id];
+    if (previousTimer) {
+      window.clearTimeout(previousTimer);
+    }
+    const timer = window.setTimeout(() => {
+      setDismissedSignatures((current) => ({ ...current, [id]: signature }));
+      setExitingSignatures((current) => {
+        if (current[id] !== signature) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      if (exitTimersRef.current[id] === timer) {
+        delete exitTimersRef.current[id];
+      }
+    }, NOTICE_EXIT_ANIMATION_MS);
+    exitTimersRef.current[id] = timer;
+  }, []);
+
+  useEffect(() => () => {
+    for (const timer of Object.values(exitTimersRef.current)) {
+      window.clearTimeout(timer);
+    }
+  }, []);
 
   useEffect(() => {
     if (!normalizedNotices.length) {
@@ -61,7 +86,7 @@ export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) 
     const timers = normalizedNotices
       .filter((notice) => notice.autoDismissMs != null && dismissedSignatures[notice.id] !== notice.signature)
       .map((notice) => window.setTimeout(() => {
-        setDismissedSignatures((current) => ({ ...current, [notice.id]: notice.signature }));
+        dismissNotice(notice.id, notice.signature);
       }, notice.autoDismissMs ?? 0));
 
     return () => {
@@ -69,7 +94,7 @@ export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) 
         window.clearTimeout(timer);
       }
     };
-  }, [dismissedSignatures, normalizedNotices]);
+  }, [dismissedSignatures, dismissNotice, normalizedNotices]);
 
   if (!visibleNotices.length) {
     return null;
@@ -79,7 +104,11 @@ export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) 
     <div className="floating-notice-stack" aria-live="polite" aria-atomic="true">
       {visibleNotices.map((notice) => {
         return (
-          <div className={`floating-notice-pill tone-${notice.tone}`} key={notice.signature} role="status">
+          <div
+            className={`floating-notice-pill tone-${notice.tone}${exitingSignatures[notice.id] === notice.signature ? " is-exiting" : ""}`}
+            key={notice.signature}
+            role="status"
+          >
             <span className="floating-notice-dot" aria-hidden="true" />
             <span className="floating-notice-copy">{notice.message}</span>
             <button
@@ -87,7 +116,7 @@ export function FloatingNoticeStack({ notices }: { notices: FloatingNotice[] }) 
               type="button"
               aria-label="关闭提示"
               onClick={() => {
-                setDismissedSignatures((current) => ({ ...current, [notice.id]: notice.signature }));
+                dismissNotice(notice.id, notice.signature);
               }}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">

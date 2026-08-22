@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Event
 
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
-from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineRunner
+from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineRunner, PipelineTranscription
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import VideoAssetRecord, VideoPageOptionResponse
 from video_sum_service.worker import TaskWorker
@@ -16,6 +16,14 @@ class FakePipelineRunner(PipelineRunner):
 
     def run(self, context: PipelineContext, on_event=None):  # type: ignore[override]
         return [], self._result
+
+
+class ResultPipelineRunner(PipelineRunner):
+    def __init__(self, results: dict[str, TaskResult]) -> None:
+        self._results = results
+
+    def run(self, context: PipelineContext, on_event=None):  # type: ignore[override]
+        return [], self._results[context.task_id]
 
 
 class FakeVisualPipelineRunner(FakePipelineRunner):
@@ -47,6 +55,52 @@ class BlockingPipelineRunner(PipelineRunner):
 
     def release(self, task_id: str) -> None:
         self._release_by_task.setdefault(task_id, Event()).set()
+
+
+class ProgressBlockingPipelineRunner(BlockingPipelineRunner):
+    def run(self, context: PipelineContext, on_event=None):  # type: ignore[override]
+        self.started.append(context.task_id)
+        if on_event is not None:
+            on_event(PipelineEvent(stage="transcribing", progress=42, message="正在转写"))
+        gate = self._release_by_task.setdefault(context.task_id, Event())
+        gate.wait(timeout=5)
+        return [], TaskResult(overview=context.task_id)
+
+
+class StagedBlockingPipelineRunner(PipelineRunner):
+    def __init__(self) -> None:
+        self.transcription_started: list[str] = []
+        self.summary_started: list[str] = []
+        self._transcription_release_by_task: dict[str, Event] = {}
+        self._summary_release_by_task: dict[str, Event] = {}
+
+    def supports_staged_execution(self) -> bool:
+        return True
+
+    def run_transcription(self, context: PipelineContext, on_event=None) -> PipelineTranscription:
+        task_id = context.task_id
+        self.transcription_started.append(task_id)
+        gate = self._transcription_release_by_task.setdefault(task_id, Event())
+        gate.wait(timeout=5)
+        return PipelineTranscription(
+            title=context.task_input.title or task_id,
+            transcript=f"转写-{task_id}",
+            segments=[],
+            task_dir=Path(f"C:/tmp/{task_id}"),
+        )
+
+    def run_summary(self, context: PipelineContext, transcription: PipelineTranscription, on_event=None) -> TaskResult:
+        task_id = context.task_id
+        self.summary_started.append(task_id)
+        gate = self._summary_release_by_task.setdefault(task_id, Event())
+        gate.wait(timeout=5)
+        return TaskResult(overview=task_id, transcript_text=transcription.transcript)
+
+    def release_transcription(self, task_id: str) -> None:
+        self._transcription_release_by_task.setdefault(task_id, Event()).set()
+
+    def release_summary(self, task_id: str) -> None:
+        self._summary_release_by_task.setdefault(task_id, Event()).set()
 
 
 class BlockingSummaryAndMindmapRunner(BlockingPipelineRunner):
@@ -323,6 +377,173 @@ def test_worker_stops_before_run_when_preflight_fails() -> None:
     assert runner.run_called is False
 
 
+def test_worker_snapshot_starts_idle_and_tracks_parallel_pending() -> None:
+    repository = create_repository()
+    records = [create_task(repository) for _ in range(3)]
+    runner = BlockingPipelineRunner()
+    worker = TaskWorker(repository, runner, auto_generate_mindmap=False, task_concurrency=2)
+
+    initial_batch = worker.snapshot()["batch"]
+    assert initial_batch == {
+        "completed_tasks": 0,
+        "total_tasks": 0,
+        "pending_tasks": 0,
+        "running_tasks": 0,
+        "concurrency": 2,
+        "transcription_concurrency": 2,
+        "llm_concurrency": 2,
+        "mode": "parallel",
+        "total_tokens": 0,
+        "runtime_seconds": 0.0,
+        "started_at": None,
+        "completed_at": None,
+        "state": "idle",
+        "visible": False,
+        "items": [],
+    }
+
+    for record in records:
+        worker.submit(record)
+
+    wait_for(lambda: len(runner.started) == 2)
+    batch = worker.snapshot()["batch"]
+    assert batch["completed_tasks"] == 0
+    assert batch["total_tasks"] == 3
+    assert batch["pending_tasks"] == 1
+    assert batch["running_tasks"] == 2
+    assert batch["concurrency"] == 2
+    assert batch["mode"] == "parallel"
+    assert batch["state"] == "active"
+    assert batch["visible"] is True
+
+    for record in records:
+        runner.release(record.task_id)
+    wait_for(lambda: all(repository.get_task(record.task_id).status == TaskStatus.COMPLETED for record in records))
+
+
+def test_worker_snapshot_counts_completed_summary_tasks_and_tokens() -> None:
+    repository = create_repository()
+    records = [create_task(repository) for _ in range(2)]
+    results = {
+        records[0].task_id: TaskResult(overview="一", llm_total_tokens=11),
+        records[1].task_id: TaskResult(overview="二", llm_total_tokens=22),
+    }
+    worker = TaskWorker(
+        repository,
+        ResultPipelineRunner(results),
+        auto_generate_mindmap=False,
+        task_concurrency=2,
+    )
+
+    for record in records:
+        worker.submit(record)
+
+    wait_for(lambda: worker.snapshot()["batch"]["completed_tasks"] == 2)
+    batch = worker.snapshot()["batch"]
+    assert batch["completed_tasks"] == 2
+    assert batch["total_tasks"] == 2
+    assert batch["pending_tasks"] == 0
+    assert batch["running_tasks"] == 0
+    assert batch["total_tokens"] == 33
+    assert batch["runtime_seconds"] >= 0
+    assert batch["started_at"] is not None
+    assert batch["completed_at"] is not None
+    assert batch["state"] == "completed"
+    assert batch["visible"] is True
+
+
+def test_worker_snapshot_counts_failed_summary_task_as_completed() -> None:
+    repository = create_repository()
+    record = create_task(repository)
+    worker = TaskWorker(repository, PreflightFailurePipelineRunner(), auto_generate_mindmap=False)
+
+    worker.submit(record)
+    wait_for(lambda: repository.get_task(record.task_id).status == TaskStatus.FAILED)
+    batch = worker.snapshot()["batch"]
+    assert batch["completed_tasks"] == 1
+    assert batch["total_tasks"] == 1
+    assert batch["pending_tasks"] == 0
+    assert batch["running_tasks"] == 0
+    assert batch["total_tokens"] == 0
+    assert batch["state"] == "completed"
+    items = {item["task_id"]: item for item in batch["items"]}
+    assert items[record.task_id]["status"] == TaskStatus.FAILED.value
+    assert items[record.task_id]["progress"] == 0
+
+
+def test_worker_snapshot_items_track_queued_running_and_completed_progress() -> None:
+    repository = create_repository()
+    records = [create_task(repository) for _ in range(2)]
+    runner = ProgressBlockingPipelineRunner()
+    worker = TaskWorker(repository, runner, auto_generate_mindmap=False, task_concurrency=1)
+
+    worker.submit(records[0])
+    worker.submit(records[1])
+    wait_for(
+        lambda: (
+            len(runner.started) == 1
+            and {item["task_id"]: item for item in worker.snapshot()["batch"]["items"]}[records[0].task_id]["status"]
+            == TaskStatus.RUNNING.value
+        )
+    )
+
+    items = {item["task_id"]: item for item in worker.snapshot()["batch"]["items"]}
+    assert items[records[0].task_id]["status"] == TaskStatus.RUNNING.value
+    assert items[records[0].task_id]["progress"] == 42
+    assert items[records[0].task_id]["message"] == "正在转写"
+    assert items[records[1].task_id]["status"] == TaskStatus.QUEUED.value
+    assert items[records[1].task_id]["progress"] == 0
+
+    runner.release(records[0].task_id)
+    wait_for(
+        lambda: (
+            len(runner.started) == 2
+            and {item["task_id"]: item for item in worker.snapshot()["batch"]["items"]}[records[0].task_id]["status"]
+            == TaskStatus.COMPLETED.value
+        )
+    )
+    items = {item["task_id"]: item for item in worker.snapshot()["batch"]["items"]}
+    assert items[records[0].task_id]["progress"] == 100
+    assert items[records[1].task_id]["status"] == TaskStatus.RUNNING.value
+    assert items[records[1].task_id]["progress"] == 42
+
+    runner.release(records[1].task_id)
+    wait_for(lambda: all(repository.get_task(record.task_id).status == TaskStatus.COMPLETED for record in records))
+    items = {item["task_id"]: item for item in worker.snapshot()["batch"]["items"]}
+    assert all(item["status"] == TaskStatus.COMPLETED.value for item in items.values())
+    assert all(item["progress"] == 100 for item in items.values())
+
+
+def test_worker_snapshot_resets_when_a_new_batch_is_submitted() -> None:
+    repository = create_repository()
+    first_record, second_record = create_task(repository), create_task(repository)
+    runner = BlockingPipelineRunner()
+    worker = TaskWorker(repository, runner, auto_generate_mindmap=False, task_concurrency=1)
+
+    worker.submit(first_record)
+    wait_for(lambda: len(runner.started) == 1)
+    runner.release(first_record.task_id)
+    wait_for(lambda: repository.get_task(first_record.task_id).status == TaskStatus.COMPLETED)
+    first_batch = worker.snapshot()["batch"]
+    assert first_batch["completed_tasks"] == 1
+    assert first_batch["total_tasks"] == 1
+
+    worker.submit(second_record)
+    wait_for(lambda: len(runner.started) == 2)
+    second_batch = worker.snapshot()["batch"]
+    assert second_batch["completed_tasks"] == 0
+    assert second_batch["total_tasks"] == 1
+    assert second_batch["pending_tasks"] == 0
+    assert second_batch["running_tasks"] == 1
+    assert second_batch["total_tokens"] == 0
+    assert second_batch["started_at"] != first_batch["started_at"]
+    assert second_batch["completed_at"] is None
+    assert second_batch["state"] == "active"
+
+    runner.release(second_record.task_id)
+    wait_for(lambda: repository.get_task(second_record.task_id).status == TaskStatus.COMPLETED)
+
+
 def test_worker_limits_summary_task_concurrency() -> None:
     repository = create_repository()
     records = [create_task(repository) for _ in range(3)]
@@ -351,6 +572,48 @@ def test_worker_limits_summary_task_concurrency() -> None:
     for task_id in runner.started:
         runner.release(task_id)
     wait_for(lambda: all(repository.get_task(record.task_id).status == TaskStatus.COMPLETED for record in records))
+
+
+def test_worker_releases_transcription_slot_before_llm_stage_finishes() -> None:
+    repository = create_repository()
+    records = [create_task(repository) for _ in range(2)]
+    runner = StagedBlockingPipelineRunner()
+    worker = TaskWorker(
+        repository,
+        runner,
+        auto_generate_mindmap=False,
+        transcription_concurrency=1,
+        llm_concurrency=1,
+    )
+
+    for record in records:
+        worker.submit(record)
+
+    first_task_id = records[0].task_id
+    second_task_id = records[1].task_id
+    wait_for(lambda: runner.transcription_started == [first_task_id])
+
+    # The first task's LLM stage is intentionally held. Releasing only its
+    # transcription must still allow the second task to start transcribing.
+    runner.release_transcription(first_task_id)
+    wait_for(lambda: runner.transcription_started == [first_task_id, second_task_id])
+    wait_for(lambda: runner.summary_started == [first_task_id])
+    assert repository.get_task(second_task_id).status == TaskStatus.RUNNING
+
+    runner.release_transcription(second_task_id)
+    runner.release_summary(first_task_id)
+    wait_for(lambda: runner.summary_started == [first_task_id, second_task_id])
+    runner.release_summary(second_task_id)
+    wait_for(
+        lambda: all(
+            repository.get_task(record.task_id).status == TaskStatus.COMPLETED
+            for record in records
+        )
+    )
+    batch = worker.snapshot()["batch"]
+    assert batch["transcription_concurrency"] == 1
+    assert batch["llm_concurrency"] == 1
+    assert batch["completed_tasks"] == 2
 
 
 def test_worker_uses_separate_summary_and_mindmap_pools() -> None:

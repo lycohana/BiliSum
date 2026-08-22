@@ -331,8 +331,14 @@
 
   .settings-tree-grid,
   .settings-model-summary-grid,
-  .settings-visual-note-presets {
+  .settings-visual-note-presets,
+  .settings-strategy-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-strategy-header {
+    flex-direction: column;
+    gap: 10px;
   }
 
   .settings-tree-panel {

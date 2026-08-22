@@ -29,6 +29,7 @@ from video_sum_infra.config import (
 )
 from video_sum_infra.llm import (
     ANTHROPIC_API_VERSION,
+    apply_openai_reasoning_settings,
     anthropic_messages_url,
     build_anthropic_messages_payload,
     extract_llm_message_content,
@@ -66,6 +67,7 @@ from video_sum_core.pipeline.base import (
     PipelineEvent,
     PipelineEventReporter,
     PipelineRunner,
+    PipelineTranscription,
 )
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
 
@@ -233,6 +235,8 @@ class PipelineSettings:
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_thinking_type: str = "enabled"
+    llm_reasoning_effort: str = "low"
     visual_evidence_enabled: bool = False
     visual_note_mode: str = "text"
     visual_multimodal_enabled: bool = False
@@ -270,7 +274,7 @@ class PipelineSettings:
     summary_chunk_target_chars: int = 2200
     summary_chunk_overlap_segments: int = 2
     summary_chunk_concurrency: int = 2
-    summary_chunk_retry_count: int = 2
+    summary_chunk_retry_count: int = 5
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 
@@ -282,6 +286,9 @@ class RealPipelineRunner(PipelineRunner):
 
     def cancel(self) -> None:
         self._cancelled = True
+
+    def supports_staged_execution(self) -> bool:
+        return True
 
     def preflight(
         self,
@@ -315,13 +322,104 @@ class RealPipelineRunner(PipelineRunner):
         context: PipelineContext,
         on_event: PipelineEventReporter | None = None,
     ) -> tuple[list[PipelineEvent], TaskResult]:
-        task_input = context.task_input
-
         events: list[PipelineEvent] = []
 
+        def record_event(event: PipelineEvent) -> None:
+            events.append(event)
+            if on_event is not None:
+                on_event(event)
+
+        task_input = context.task_input
+        logger.info(
+            "pipeline run start task_id=%s input_type=%s source=%s",
+            context.task_id,
+            task_input.input_type.value,
+            task_input.source,
+        )
+        transcription = self.run_transcription(context, on_event=record_event)
+        result = self.run_summary(context, transcription, on_event=record_event)
+        return events, result
+
+    def run_transcription(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None = None,
+    ) -> PipelineTranscription:
+        emit = self._build_stage_emitter(context, on_event)
+        task_input = context.task_input
+        if task_input.input_type is InputType.URL:
+            return self._transcribe_from_url(context, emit)
+        if task_input.input_type in {InputType.VIDEO_FILE, InputType.AUDIO_FILE}:
+            return self._transcribe_from_local_media(context, emit)
+        if task_input.input_type is InputType.TRANSCRIPT_TEXT:
+            return self._transcribe_from_transcript_text(context, emit)
+        raise UnsupportedInputError(
+            f"Current runner does not support input type '{task_input.input_type.value}'."
+        )
+
+    def run_summary(
+        self,
+        context: PipelineContext,
+        transcription: PipelineTranscription,
+        on_event: PipelineEventReporter | None = None,
+    ) -> TaskResult:
+        emit = self._build_stage_emitter(context, on_event)
+        task_input = context.task_input
+        pegasus_video = None
+        if transcription.source_path and self._settings.twelvelabs_summary_enabled:
+            pegasus_video = video_context_from_file(transcription.source_path)
+        summary = self._summarize(
+            transcription.transcript,
+            transcription.segments,
+            transcription.title,
+            emit,
+            source_kind=transcription.source_kind,
+            prompt_preset_id=task_input.options.prompt_preset_id,
+            summary_scope=task_input.options.summary_scope,
+            pegasus_video=pegasus_video,
+        )
+        emit("exporting", 97, "正在导出任务结果")
+        result = self._export_result(
+            transcription.task_dir,
+            transcription.title,
+            transcription.transcript,
+            transcription.segments,
+            summary,
+        )
+        emit(
+            "exporting",
+            98,
+            "纯文本知识笔记已写入，正在生成图文笔记",
+            {
+                "result": result.model_dump(mode="json"),
+                "result_scope": "knowledge_note",
+            },
+        )
+        result = self._build_inline_visual_note(
+            context.task_id,
+            task_input,
+            transcription.task_dir,
+            transcription.title,
+            result,
+            emit,
+        )
+        emit("exporting", 99, "结果文件已写入本地目录")
+        logger.info(
+            "pipeline summary stage finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
+            context.task_id,
+            len(transcription.segments),
+            len(transcription.transcript),
+            transcription.task_dir,
+        )
+        return result
+
+    def _build_stage_emitter(
+        self,
+        context: PipelineContext,
+        on_event: PipelineEventReporter | None,
+    ) -> Callable[[str, int, str, dict[str, object] | None], None]:
         def emit(stage: str, progress: int, message: str, payload: dict[str, object] | None = None) -> None:
             event = PipelineEvent(stage=stage, progress=progress, message=message, payload=payload or {})
-            events.append(event)
             logger.info(
                 "pipeline event task_id=%s stage=%s progress=%s message=%s payload=%s",
                 context.task_id,
@@ -333,30 +431,25 @@ class RealPipelineRunner(PipelineRunner):
             if on_event is not None:
                 on_event(event)
 
-        logger.info(
-            "pipeline run start task_id=%s input_type=%s source=%s",
-            context.task_id,
-            task_input.input_type.value,
-            task_input.source,
-        )
-
-        if task_input.input_type is InputType.URL:
-            result = self._run_from_url(context, emit)
-        elif task_input.input_type in {InputType.VIDEO_FILE, InputType.AUDIO_FILE}:
-            result = self._run_from_local_media(context, emit)
-        elif task_input.input_type is InputType.TRANSCRIPT_TEXT:
-            result = self._run_from_transcript_text(context, emit)
-        else:
-            raise UnsupportedInputError(
-                f"Current runner does not support input type '{task_input.input_type.value}'."
-            )
-        return events, result
+        return emit
 
     def _run_from_url(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_url(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_url(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_input = context.task_input
         emit("preparing", 8, "正在规范化视频链接")
         normalized = normalize_video_url(task_input.source)
@@ -464,41 +557,30 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "transcript",
             },
         )
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
-            prompt_preset_id=task_input.options.prompt_preset_id,
-            summary_scope=task_input.options.summary_scope,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
         )
-        emit("exporting", 97, "正在导出任务结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "结果文件已写入本地目录")
-        logger.info(
-            "pipeline url run finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _run_from_transcript_text(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_transcript_text(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_transcript_text(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_dir = ensure_directory(self._settings.tasks_dir / context.task_id)
         title, transcript, segments, source_kind = self._parse_transcript_payload(
             context.task_input.source,
@@ -517,42 +599,31 @@ class RealPipelineRunner(PipelineRunner):
             "已跳过重新转写，直接复用分 P 摘要素材" if is_aggregate_series else "已跳过重新转写，直接复用当前版本文本",
             {"transcript_chars": len(transcript), "segment_count": len(segments)},
         )
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
             source_kind=source_kind,
-            prompt_preset_id=context.task_input.options.prompt_preset_id,
-            summary_scope=context.task_input.options.summary_scope,
         )
-        emit("exporting", 97, "正在导出新的摘要结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, context.task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "新的摘要结果已写入本地目录")
-        logger.info(
-            "pipeline transcript rerun finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _run_from_local_media(
         self,
         context: PipelineContext,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
     ) -> TaskResult:
+        transcription = self._transcribe_from_local_media(context, emit)
+        return self.run_summary(
+            context,
+            transcription,
+            on_event=lambda event: emit(event.stage, event.progress, event.message, event.payload),
+        )
+
+    def _transcribe_from_local_media(
+        self,
+        context: PipelineContext,
+        emit: Callable[[str, int, str, dict[str, object] | None], None],
+    ) -> PipelineTranscription:
         task_input = context.task_input
         source_path = Path(str(task_input.source or "")).expanduser()
         if not source_path.exists() or not source_path.is_file():
@@ -586,41 +657,13 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "transcript",
             },
         )
-        pegasus_video = None
-        if is_video_file and self._settings.twelvelabs_summary_enabled:
-            pegasus_video = video_context_from_file(source_path)
-        summary = self._summarize(
-            transcript,
-            segments,
-            title,
-            emit,
-            prompt_preset_id=task_input.options.prompt_preset_id,
-            summary_scope=task_input.options.summary_scope,
-            pegasus_video=pegasus_video,
+        return PipelineTranscription(
+            title=title,
+            transcript=transcript,
+            segments=segments,
+            task_dir=task_dir,
+            source_path=source_path if is_video_file else None,
         )
-        emit("exporting", 97, "正在导出任务结果")
-        result = self._export_result(task_dir, title, transcript, segments, summary)
-        emit(
-            "exporting",
-            98,
-            "纯文本知识笔记已写入，正在生成图文笔记",
-            {
-                "result": result.model_dump(mode="json"),
-                "result_scope": "knowledge_note",
-            },
-        )
-        result = self._build_inline_visual_note(context.task_id, task_input, task_dir, title, result, emit)
-        emit("exporting", 99, "结果文件已写入本地目录")
-        logger.info(
-            "pipeline local media run finish task_id=%s input_type=%s source=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            task_input.input_type.value,
-            source_path,
-            len(segments),
-            len(transcript),
-            task_dir,
-        )
-        return result
 
     def _prepare_local_audio_source(
         self,
@@ -2509,7 +2552,7 @@ class RealPipelineRunner(PipelineRunner):
             len(aggregate_segments),
             len(merged_chapters),
         )
-        merged = self._request_llm_json(
+        merged = self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_llm_summary_payload(
                 title=title,
@@ -2566,7 +2609,7 @@ class RealPipelineRunner(PipelineRunner):
             len(transcript_context),
             len(segments),
         )
-        return self._request_llm_json(
+        return self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_llm_summary_payload(
                 title=title,
@@ -2602,7 +2645,7 @@ class RealPipelineRunner(PipelineRunner):
             len(transcript_excerpt),
             len(segments_excerpt),
         )
-        return self._request_llm_json(
+        return self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_aggregate_series_summary_payload(
                 title=title,
@@ -2663,6 +2706,60 @@ class RealPipelineRunner(PipelineRunner):
                 )
         raise VideoSumError(str(last_error) if last_error else f"Chunk {chunk_index} failed.")
 
+    def _request_llm_json_with_retries(
+        self,
+        *,
+        base_url: str,
+        payload: dict[str, object],
+        timeout: float = 180,
+        usage_stage: str = "llm",
+    ) -> dict[str, object]:
+        """Retry response-level failures for non-chunk LLM stages.
+
+        The low-level request retries transport failures, while chunk
+        summaries have their own outer retry loop. Full-context summaries and
+        follow-up stages do not, so an HTTP 200 response with an empty message
+        used to fail immediately. This wrapper keeps those stages consistent
+        with the user-configured retry count.
+        """
+        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
+        last_error: Exception | None = None
+        for attempt in range(retry_count + 1):
+            try:
+                return self._request_llm_json(
+                    base_url=base_url,
+                    payload=payload,
+                    timeout=timeout,
+                    retry_count=0,
+                    usage_stage=usage_stage,
+                )
+            except (LLMAuthenticationError, LLMConfigurationError):
+                raise
+            except httpx.TimeoutException as exc:
+                last_error = exc
+            except httpx.TransportError as exc:
+                last_error = exc
+            except VideoSumError as exc:
+                if "no readable message content" not in str(exc).lower():
+                    raise
+                last_error = exc
+
+            if attempt >= retry_count:
+                break
+            logger.warning(
+                "llm response retry model=%s stage=%s attempt=%d/%d error=%s",
+                self._settings.llm_model,
+                usage_stage,
+                attempt + 1,
+                retry_count,
+                last_error,
+            )
+            time.sleep(min(6.0, 1.5 * (attempt + 1)))
+
+        if last_error is not None:
+            raise last_error
+        raise VideoSumError("LLM request failed before receiving a response.")
+
     def _request_llm_json(
         self,
         base_url: str,
@@ -2674,6 +2771,17 @@ class RealPipelineRunner(PipelineRunner):
     ) -> dict[str, object]:
         payload = dict(payload)
         use_anthropic = is_anthropic_llm(self._settings.llm_provider, base_url)
+        if not use_anthropic:
+            payload["model"] = normalize_openai_compatible_model_name(
+                str(payload.get("model") or self._settings.llm_model or "")
+            )
+            payload = apply_openai_reasoning_settings(
+                payload,
+                thinking_type=self._settings.llm_thinking_type,
+                reasoning_effort=self._settings.llm_reasoning_effort,
+                provider=self._settings.llm_provider,
+                model=str(payload.get("model") or ""),
+            )
         payload["model"] = (
             str(payload.get("model") or "").strip()
             if use_anthropic
@@ -2877,12 +2985,37 @@ class RealPipelineRunner(PipelineRunner):
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
-        try:
-            self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)
-        except httpx.TimeoutException as exc:
-            raise VideoSumError("LLM API 检查超时，请稍后重试或检查 Base URL / 网络代理。") from exc
-        except httpx.TransportError as exc:
-            raise VideoSumError(f"LLM API 检查失败，请检查 Base URL / 网络代理：{exc}") from exc
+        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
+        last_error: VideoSumError | None = None
+        for attempt in range(retry_count + 1):
+            try:
+                # 预检的重试由这一层统一控制，这样空响应、无效响应和网络错误
+                # 都会遵守同一个可配置的重试次数，而不是只重试传输异常。
+                self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)
+                return
+            except (LLMAuthenticationError, LLMConfigurationError):
+                raise
+            except httpx.TimeoutException as exc:
+                last_error = VideoSumError("LLM API 检查超时，请稍后重试或检查 Base URL / 网络代理。")
+                last_error.__cause__ = exc
+            except httpx.TransportError as exc:
+                last_error = VideoSumError(f"LLM API 检查失败，请检查 Base URL / 网络代理：{exc}")
+                last_error.__cause__ = exc
+            except VideoSumError as exc:
+                last_error = exc
+
+            if attempt >= retry_count:
+                break
+            logger.warning(
+                "llm preflight failed, retrying attempt=%d/%d error=%s",
+                attempt + 1,
+                retry_count,
+                last_error,
+            )
+            time.sleep(min(1.5, 0.25 * (2 ** attempt)))
+
+        if last_error is not None:
+            raise last_error
 
     def _parse_llm_json_content(self, content: str) -> dict[str, object]:
         # 移除可能的 think 标签（某些模型如 MiniMax-M2.5 可能返回）
@@ -3310,7 +3443,7 @@ P 数索引：
             summary_json=summary_json,
             source_kind=source_kind,
         )
-        result = self._request_llm_json(base_url=base_url, payload=payload, usage_stage="knowledge_note")
+        result = self._request_llm_json_with_retries(base_url=base_url, payload=payload, usage_stage="knowledge_note")
         result.setdefault("knowledgeNoteMarkdown", "")
         if not str(result.get("knowledgeNoteMarkdown") or "").strip():
             raise VideoSumError("LLM returned empty knowledge note markdown.")
@@ -4135,6 +4268,13 @@ P 数索引：
             else:
                 request_url = f"{base_url}/chat/completions"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = apply_openai_reasoning_settings(
+                    payload,
+                    thinking_type=self._settings.llm_thinking_type,
+                    reasoning_effort=self._settings.llm_reasoning_effort,
+                    provider=self._settings.llm_provider,
+                    model=model,
+                )
                 payload["model"] = normalize_openai_compatible_model_name(model)
                 request_payload = payload
             last_error: Exception | None = None
@@ -4410,6 +4550,13 @@ P 数索引：
             request_payload = build_anthropic_messages_payload(openai_payload)
         else:
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            openai_payload = apply_openai_reasoning_settings(
+                openai_payload,
+                thinking_type=self._settings.llm_thinking_type,
+                reasoning_effort=self._settings.llm_reasoning_effort,
+                provider=self._settings.llm_provider,
+                model=model,
+            )
             request_url = f"{base_url}/chat/completions"
             request_payload = openai_payload
         # Compose step processes the full knowledge note + all observations — can take a while.
@@ -4678,7 +4825,7 @@ P 数索引：
             len(result.chapter_groups or []),
         )
         payload = self._build_llm_mindmap_payload(title, summary_json, knowledge_note_markdown)
-        llm_result = self._request_llm_json(
+        llm_result = self._request_llm_json_with_retries(
             base_url=base_url,
             payload=payload,
             usage_stage="mindmap",
@@ -4692,7 +4839,7 @@ P 数索引：
                     summary_json=summary_json,
                     knowledge_note_markdown=knowledge_note_markdown,
                 )
-                repair_result = self._request_llm_json(
+                repair_result = self._request_llm_json_with_retries(
                     base_url=base_url,
                     payload=repair_payload,
                     usage_stage="mindmap_repair",

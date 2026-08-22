@@ -14,10 +14,13 @@ from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
 from video_sum_infra.config import (
     ServiceSettings,
+    recommend_llm_concurrency,
     normalize_transcription_provider,
     recommend_mindmap_concurrency,
     recommend_task_concurrency,
+    recommend_transcription_concurrency,
 )
+from video_sum_infra.llm import apply_openai_reasoning_settings
 from video_sum_infra.runtime import default_data_dir
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
 
@@ -28,6 +31,43 @@ def test_task_input_defaults() -> None:
     assert task_input.options.language == "zh"
     assert "json" in task_input.options.export_formats
     assert task_input.options.summary_scope == "knowledge_note"
+
+
+def test_llm_reasoning_settings_have_compatible_defaults_and_normalize_invalid_values() -> None:
+    defaults = ServiceSettings(_env_file=None)
+    assert defaults.llm_thinking_type == "enabled"
+    assert defaults.llm_reasoning_effort == "low"
+
+    normalized = ServiceSettings(
+        _env_file=None,
+        llm_thinking_type="unsupported",
+        llm_reasoning_effort="medium",
+    )
+    assert normalized.llm_thinking_type == "enabled"
+    assert normalized.llm_reasoning_effort == "low"
+
+
+def test_llm_reasoning_controls_are_omitted_for_unknown_openai_compatible_models() -> None:
+    payload = {"model": "generic-model", "messages": []}
+
+    unchanged = apply_openai_reasoning_settings(
+        payload,
+        provider="openai-compatible",
+        model="generic-model",
+        thinking_type="enabled",
+        reasoning_effort="max",
+    )
+    assert unchanged == payload
+
+    mimo_payload = apply_openai_reasoning_settings(
+        payload,
+        provider="openai-compatible",
+        model="MiMo-V2.5-Pro",
+        thinking_type="disabled",
+        reasoning_effort="max",
+    )
+    assert mimo_payload["thinking"] == {"type": "disabled"}
+    assert mimo_payload["reasoning_effort"] == "max"
 
 
 def test_summarize_scope_summary_skips_knowledge_note(monkeypatch) -> None:
@@ -129,6 +169,8 @@ def test_recommend_task_concurrency_prefers_cloud_or_gpu_parallel_execution() ->
     settings = ServiceSettings(transcription_provider="siliconflow", runtime_channel="base", device_preference="cpu")
 
     assert recommend_task_concurrency(settings, cuda_available=False) == 2
+    assert recommend_transcription_concurrency(settings, cuda_available=False) == 2
+    assert recommend_llm_concurrency(settings, cuda_available=False) == 2
     assert recommend_mindmap_concurrency() == 1
 
 
@@ -164,6 +206,34 @@ def test_settings_manager_reports_persisted_file_state(tmp_path: Path) -> None:
     assert manager.has_persisted_settings is True
 
 
+def test_llm_settings_survive_manager_reload(tmp_path: Path) -> None:
+    """LLM endpoint fields and the secret must still be present after a fresh load."""
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    manager.save(
+        SettingsUpdatePayload(
+            llm_enabled=True,
+            llm_provider="openai-compatible",
+            llm_base_url="https://llm.example/v1",
+            llm_model="example-model",
+            llm_api_key="new-llm-key",
+        )
+    )
+
+    reloaded = SettingsManager(base_settings)
+    settings = reloaded.load()
+
+    assert settings.llm_enabled is True
+    assert settings.llm_provider == "openai-compatible"
+    assert settings.llm_base_url == "https://llm.example/v1"
+    assert settings.llm_model == "example-model"
+    assert settings.llm_api_key == "new-llm-key"
+
+
 def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Path) -> None:
     base_settings = ServiceSettings(
         data_dir=tmp_path / "data",
@@ -179,9 +249,76 @@ def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Pat
     persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
 
     assert loaded.task_concurrency == 1
+    assert loaded.transcription_concurrency == 1
+    assert loaded.llm_concurrency == 1
     assert loaded.mindmap_concurrency == 1
     assert persisted.task_concurrency == 1
+    assert persisted.transcription_concurrency == 1
+    assert persisted.llm_concurrency == 1
     assert persisted.mindmap_concurrency == 1
+
+
+def test_settings_manager_persists_independent_stage_concurrency(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+
+    saved = manager.save(
+        SettingsUpdatePayload(transcription_concurrency=3, llm_concurrency=1)
+    )
+
+    assert saved.transcription_concurrency == 3
+    assert saved.llm_concurrency == 1
+    assert saved.task_concurrency == 3
+
+    reloaded = SettingsManager(base_settings).load()
+    assert reloaded.transcription_concurrency == 3
+    assert reloaded.llm_concurrency == 1
+    assert reloaded.task_concurrency == 3
+
+
+def test_settings_manager_migrates_legacy_llm_retry_default(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text('{"summary_chunk_retry_count":2}', encoding="utf-8")
+
+    loaded = manager.load()
+
+    assert loaded.summary_chunk_retry_count == 5
+    persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
+    assert persisted.summary_chunk_retry_count == 5
+    assert persisted.settings_schema_version == 2
+
+
+def test_settings_manager_preserves_versioned_retry_count_two(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        '{"settings_schema_version":2,"summary_chunk_retry_count":2}',
+        encoding="utf-8",
+    )
+
+    loaded = manager.load()
+
+    assert loaded.summary_chunk_retry_count == 2
+    persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
+    assert persisted.summary_chunk_retry_count == 2
+    assert persisted.settings_schema_version == 2
 
 
 def test_settings_manager_migrates_missing_knowledge_note_prompt_fields(tmp_path: Path) -> None:

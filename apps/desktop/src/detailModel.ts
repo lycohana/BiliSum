@@ -180,6 +180,9 @@ export function describeUserFacingErrorMessage(rawMessage?: string | null): stri
   if (/not a valid json|未返回合法 json/.test(normalized)) {
     return "模型接口能连通，但没有按要求返回合法 JSON，所以无法继续生成摘要。建议更换模型，或先到设置页点击测试按钮检查。";
   }
+  if (/no readable message content|没有返回可读取的消息内容/.test(normalized)) {
+    return "模型接口已响应，但没有返回可读取的消息内容。系统会按设置重试；如果仍失败，请检查模型兼容性和响应格式。";
+  }
   if (/siliconflow asr authentication failed|asr 测试失败：认证失败/.test(normalized)) {
     return "语音识别 API Key 校验失败。请检查 SiliconFlow API Key 是否正确。";
   }

@@ -1548,6 +1548,7 @@ function SortableVideoCard({
         <VideoCard
           video={video}
           folderName={folderName}
+          showDragHandle
           canPinInFolder={canPinInFolder}
           onToggleFavorite={onToggleFavorite}
           onToggleGlobalPin={async (videoId, nextPinned) => {
