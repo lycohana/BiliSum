@@ -3,6 +3,7 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from video_sum_infra.llm import normalize_llm_reasoning_effort, normalize_llm_thinking_type
 from video_sum_infra.runtime import (
     default_cache_dir,
     default_data_dir,
@@ -635,6 +636,8 @@ class ServiceSettings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_thinking_type: str = "enabled"
+    llm_reasoning_effort: str = "low"
     knowledge_llm_mode: str = "same_as_main"
     knowledge_llm_enabled: bool = False
     knowledge_llm_provider: str = "openai-compatible"
@@ -693,6 +696,16 @@ class ServiceSettings(BaseSettings):
     @classmethod
     def _normalize_knowledge_llm_mode(cls, value: str | None) -> str:
         return normalize_knowledge_llm_mode(value)
+
+    @field_validator("llm_thinking_type", mode="before")
+    @classmethod
+    def _normalize_llm_thinking_type(cls, value: str | None) -> str:
+        return normalize_llm_thinking_type(value)
+
+    @field_validator("llm_reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_llm_reasoning_effort(cls, value: str | None) -> str:
+        return normalize_llm_reasoning_effort(value)
 
     @field_validator("knowledge_embedding_provider", mode="before")
     @classmethod

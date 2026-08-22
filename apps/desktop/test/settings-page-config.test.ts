@@ -95,6 +95,17 @@ run("LLM settings save verifies the persisted snapshot", () => {
   assert.ok(settingsPageSource.includes("保存并关闭"), "model dialog should label the action as save and close");
 });
 
+run("LLM reasoning controls are exposed with the requested defaults", () => {
+  assert.ok(settingsPageSource.includes('targetKey: "llm_thinking_type"'), "thinking mode should be searchable");
+  assert.ok(settingsPageSource.includes('targetKey: "llm_reasoning_effort"'), "reasoning effort should be searchable");
+  assert.ok(settingsPageSource.includes('value={form.llm_thinking_type || "enabled"}'), "thinking mode should default to enabled");
+  assert.ok(settingsPageSource.includes('value={form.llm_reasoning_effort || "low"}'), "reasoning effort should default to low");
+  assert.ok(settingsPageSource.includes('{"thinking":{"type":"enabled/disabled"}}'), "thinking request shape should be documented");
+  assert.ok(settingsPageSource.includes('{"reasoning_effort":"low/high/max"}'), "reasoning request shape should be documented");
+  assert.ok(settingsPageSource.includes('llm_thinking_type: form.llm_thinking_type || "enabled"'), "model test should use the selected thinking mode");
+  assert.ok(settingsPageSource.includes('llm_reasoning_effort: form.llm_reasoning_effort || "low"'), "model test should use the selected reasoning effort");
+});
+
 run("prompt inline toolbar can collapse prompt groups", () => {
   assert.ok(settingsPageSource.includes("已展开 {outerSectionsOpen.size} 项"), "toolbar should show expanded prompt group count");
   assert.ok(settingsPageSource.includes("collapseAllOuter"), "toolbar should collapse all prompt groups");

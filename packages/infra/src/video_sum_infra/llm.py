@@ -1,6 +1,29 @@
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 
+def normalize_llm_thinking_type(value: str | None, default: str = "enabled") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"enabled", "disabled"} else default
+
+
+def normalize_llm_reasoning_effort(value: str | None, default: str = "low") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"low", "high", "max"} else default
+
+
+def apply_openai_reasoning_settings(
+    payload: dict[str, object],
+    *,
+    thinking_type: str | None,
+    reasoning_effort: str | None,
+) -> dict[str, object]:
+    """Add the provider-neutral reasoning controls used by compatible APIs."""
+    next_payload = dict(payload)
+    next_payload["thinking"] = {"type": normalize_llm_thinking_type(thinking_type)}
+    next_payload["reasoning_effort"] = normalize_llm_reasoning_effort(reasoning_effort)
+    return next_payload
+
+
 def normalize_openai_compatible_model_name(model: str) -> str:
     normalized = str(model or "").strip()
     if normalized.lower().startswith("mimo-"):

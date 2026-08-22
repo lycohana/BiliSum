@@ -32,6 +32,20 @@ def test_task_input_defaults() -> None:
     assert task_input.options.summary_scope == "knowledge_note"
 
 
+def test_llm_reasoning_settings_have_compatible_defaults_and_normalize_invalid_values() -> None:
+    defaults = ServiceSettings(_env_file=None)
+    assert defaults.llm_thinking_type == "enabled"
+    assert defaults.llm_reasoning_effort == "low"
+
+    normalized = ServiceSettings(
+        _env_file=None,
+        llm_thinking_type="unsupported",
+        llm_reasoning_effort="medium",
+    )
+    assert normalized.llm_thinking_type == "enabled"
+    assert normalized.llm_reasoning_effort == "low"
+
+
 def test_summarize_scope_summary_skips_knowledge_note(monkeypatch) -> None:
     runner = RealPipelineRunner(
         PipelineSettings(

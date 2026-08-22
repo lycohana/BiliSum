@@ -500,6 +500,8 @@ export type ServiceSettings = {
   llm_api_key: string;
   llm_base_url: string;
   llm_model: string;
+  llm_thinking_type: "enabled" | "disabled" | string;
+  llm_reasoning_effort: "low" | "high" | "max" | string;
   llm_api_key_configured?: boolean;
   knowledge_llm_mode: string;
   knowledge_llm_enabled: boolean;

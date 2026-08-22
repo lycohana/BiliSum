@@ -143,6 +143,8 @@ def test_serialize_settings_includes_persisted_file_flag(monkeypatch, tmp_path: 
     payload = serialize_settings(current, environment_info={"cudaAvailable": False, "runtimeChannel": "base"})
 
     assert payload["settings_file_exists"] is False
+    assert payload["llm_thinking_type"] == current.llm_thinking_type == "enabled"
+    assert payload["llm_reasoning_effort"] == current.llm_reasoning_effort == "low"
     assert payload["task_concurrency"] == current.task_concurrency
     assert payload["transcription_concurrency"] == current.transcription_concurrency
     assert payload["llm_concurrency"] == current.llm_concurrency
@@ -2887,6 +2889,8 @@ def test_llm_connection_normalizes_mimo_model_and_requests_json_mode(monkeypatch
     assert response["model"] == "MiMo-V2.5-Pro"
     assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
     assert calls[0]["json"]["max_tokens"] == 512
+    assert calls[0]["json"]["thinking"] == {"type": "enabled"}
+    assert calls[0]["json"]["reasoning_effort"] == "low"
 
 
 def test_llm_connection_accepts_choice_text_response(monkeypatch, tmp_path: Path) -> None:

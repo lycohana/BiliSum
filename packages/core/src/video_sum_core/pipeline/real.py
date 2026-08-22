@@ -29,6 +29,7 @@ from video_sum_infra.config import (
 )
 from video_sum_infra.llm import (
     ANTHROPIC_API_VERSION,
+    apply_openai_reasoning_settings,
     anthropic_messages_url,
     build_anthropic_messages_payload,
     extract_llm_message_content,
@@ -234,6 +235,8 @@ class PipelineSettings:
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+    llm_thinking_type: str = "enabled"
+    llm_reasoning_effort: str = "low"
     visual_evidence_enabled: bool = False
     visual_note_mode: str = "text"
     visual_multimodal_enabled: bool = False
@@ -2768,6 +2771,12 @@ class RealPipelineRunner(PipelineRunner):
     ) -> dict[str, object]:
         payload = dict(payload)
         use_anthropic = is_anthropic_llm(self._settings.llm_provider, base_url)
+        if not use_anthropic:
+            payload = apply_openai_reasoning_settings(
+                payload,
+                thinking_type=self._settings.llm_thinking_type,
+                reasoning_effort=self._settings.llm_reasoning_effort,
+            )
         payload["model"] = (
             str(payload.get("model") or "").strip()
             if use_anthropic
@@ -4257,6 +4266,11 @@ P 数索引：
             else:
                 request_url = f"{base_url}/chat/completions"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                payload = apply_openai_reasoning_settings(
+                    payload,
+                    thinking_type=self._settings.llm_thinking_type,
+                    reasoning_effort=self._settings.llm_reasoning_effort,
+                )
                 payload["model"] = normalize_openai_compatible_model_name(model)
                 request_payload = payload
             last_error: Exception | None = None
@@ -4532,6 +4546,11 @@ P 数索引：
             request_payload = build_anthropic_messages_payload(openai_payload)
         else:
             headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            openai_payload = apply_openai_reasoning_settings(
+                openai_payload,
+                thinking_type=self._settings.llm_thinking_type,
+                reasoning_effort=self._settings.llm_reasoning_effort,
+            )
             request_url = f"{base_url}/chat/completions"
             request_payload = openai_payload
         # Compose step processes the full knowledge note + all observations — can take a while.

@@ -189,6 +189,8 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "generation", targetKey: "llm_base_url", title: "LLM API Base URL", description: "主摘要 LLM API 地址。", keywords: ["base url", "openai", "compatible", "api", "地址"] },
   { category: "generation", targetKey: "llm_api_key", title: "LLM API Key", description: "主摘要 LLM API 密钥。", keywords: ["key", "apikey", "api key", "密钥"] },
   { category: "generation", targetKey: "llm_model", title: "LLM 模型名称", description: "主摘要使用的模型名。", keywords: ["model", "模型", "gpt", "qwen", "mimo", "claude"] },
+  { category: "generation", targetKey: "llm_thinking_type", title: "LLM 思考模式", description: "控制兼容模型是否启用思考输出。", keywords: ["thinking", "思考", "enabled", "disabled"] },
+  { category: "generation", targetKey: "llm_reasoning_effort", title: "LLM 推理强度", description: "选择兼容模型的推理强度。", keywords: ["reasoning", "推理", "low", "high", "max"] },
   { category: "knowledge", targetKey: "knowledge_enabled", title: "启用知识库", description: "开启知识库索引和问答能力。", keywords: ["知识库", "knowledge", "rag", "索引", "问答"] },
   { category: "knowledge", targetKey: "knowledge_dependencies", title: "知识库依赖", description: "安装和检查知识库扩展依赖。", keywords: ["依赖", "安装", "runtime", "faiss", "向量"] },
   { category: "knowledge", targetKey: "knowledge_embedding_provider", title: "Embedding 模型来源", description: "选择向量模型的下载源：本地 HuggingFace（支持镜像）、本地 ModelScope 或硅基流动在线 API。", keywords: ["embedding", "bge", "向量", "huggingface", "modelscope", "siliconflow", "硅基流动"] },
@@ -1893,6 +1895,8 @@ export function SettingsPage({
         llm_provider: form.llm_provider,
         llm_base_url: form.llm_base_url,
         llm_model: form.llm_model,
+        llm_thinking_type: form.llm_thinking_type || "enabled",
+        llm_reasoning_effort: form.llm_reasoning_effort || "low",
         ...(form.llm_api_key.trim() && !isMaskedApiKey(form.llm_api_key) ? { llm_api_key: form.llm_api_key } : {}),
       };
     }
@@ -1904,6 +1908,8 @@ export function SettingsPage({
       llm_provider: form.visual_vlm_provider || form.llm_provider,
       llm_base_url: form.visual_evidence_base_url || form.llm_base_url,
       llm_model: form.visual_evidence_model || form.llm_model,
+      llm_thinking_type: form.llm_thinking_type || "enabled",
+      llm_reasoning_effort: form.llm_reasoning_effort || "low",
       ...(!visualApiKey || isMaskedApiKey(visualApiKey)
         ? mainApiKey && !isMaskedApiKey(mainApiKey)
           ? { llm_api_key: mainApiKey }
@@ -3059,11 +3065,13 @@ export function SettingsPage({
                   </header>
                   <div className="settings-model-summary-grid">
                     <article
-                      className={`settings-model-card settings-focus-target ${activeFocusTarget === "llm_base_url" || activeFocusTarget === "llm_api_key" || activeFocusTarget === "llm_model" ? "is-highlighted" : ""}`}
+                      className={`settings-model-card settings-focus-target ${activeFocusTarget === "llm_base_url" || activeFocusTarget === "llm_api_key" || activeFocusTarget === "llm_model" || activeFocusTarget === "llm_thinking_type" || activeFocusTarget === "llm_reasoning_effort" ? "is-highlighted" : ""}`}
                       ref={(node) => {
                         registerFocusTarget("llm_base_url")(node);
                         registerFocusTarget("llm_api_key")(node);
                         registerFocusTarget("llm_model")(node);
+                        registerFocusTarget("llm_thinking_type")(node);
+                        registerFocusTarget("llm_reasoning_effort")(node);
                       }}
                     >
                       <div className="settings-model-card-top">
@@ -4994,6 +5002,23 @@ export function SettingsPage({
                   <label className={`settings-input-group settings-focus-target ${activeFocusTarget === "llm_model" ? "is-highlighted" : ""}`}>
                     <span className="settings-input-label">模型名称</span>
                     <input className="settings-input-field" value={form.llm_model} onChange={(e) => updateForm({ ...form, llm_model: e.target.value })} placeholder="gpt-4o-mini / claude-3-haiku" />
+                  </label>
+                  <label className={`settings-input-group settings-focus-target ${activeFocusTarget === "llm_thinking_type" ? "is-highlighted" : ""}`}>
+                    <span className="settings-input-label">思考模式</span>
+                    <select className="settings-select-field" value={form.llm_thinking_type || "enabled"} onChange={(e) => updateForm({ ...form, llm_thinking_type: e.target.value })}>
+                      <option value="enabled">开启</option>
+                      <option value="disabled">关闭</option>
+                    </select>
+                    <span className="settings-input-caption">发送 {`{"thinking":{"type":"enabled/disabled"}}`}；默认开启。仅兼容该参数的模型生效。</span>
+                  </label>
+                  <label className={`settings-input-group settings-focus-target ${activeFocusTarget === "llm_reasoning_effort" ? "is-highlighted" : ""}`}>
+                    <span className="settings-input-label">推理强度</span>
+                    <select className="settings-select-field" value={form.llm_reasoning_effort || "low"} onChange={(e) => updateForm({ ...form, llm_reasoning_effort: e.target.value })}>
+                      <option value="low">Low</option>
+                      <option value="high">High</option>
+                      <option value="max">Max</option>
+                    </select>
+                    <span className="settings-input-caption">发送 {`{"reasoning_effort":"low/high/max"}`}；默认 Low。</span>
                   </label>
                   <div className={`settings-inline-alert ${llmReady ? "success" : "warning"}`}>
                     <strong>{llmReady ? "主摘要模型配置完整" : "主摘要模型仍需补全"}</strong>

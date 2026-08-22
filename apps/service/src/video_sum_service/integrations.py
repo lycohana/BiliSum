@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from video_sum_infra.config import ServiceSettings
 from video_sum_infra.llm import (
     ANTHROPIC_API_VERSION,
+    apply_openai_reasoning_settings,
     anthropic_messages_url,
     build_anthropic_messages_payload,
     extract_llm_message_content,
@@ -363,7 +364,11 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             "Content-Type": "application/json",
         }
         request_url = openai_chat_completions_url(base_url)
-        request_json = request_payload
+        request_json = apply_openai_reasoning_settings(
+            request_payload,
+            thinking_type=effective_settings.llm_thinking_type,
+            reasoning_effort=effective_settings.llm_reasoning_effort,
+        )
         request_json["model"] = normalize_openai_compatible_model_name(model)
     elif use_anthropic:
         headers = {
@@ -379,7 +384,11 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             "Content-Type": "application/json",
         }
         request_url = openai_chat_completions_url(base_url)
-        request_json = request_payload
+        request_json = apply_openai_reasoning_settings(
+            request_payload,
+            thinking_type=effective_settings.llm_thinking_type,
+            reasoning_effort=effective_settings.llm_reasoning_effort,
+        )
 
     probe_timeout = 120 if test_scope == "visual" else 30
     try:

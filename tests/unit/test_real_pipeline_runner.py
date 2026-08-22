@@ -838,6 +838,8 @@ def test_llm_json_request_normalizes_mimo_model(monkeypatch: pytest.MonkeyPatch,
             llm_api_key="test-key",
             llm_base_url="https://api.example.com/v1",
             llm_model="MiMo-V2.5-Pro",
+            llm_thinking_type="disabled",
+            llm_reasoning_effort="max",
         )
     )
     calls: list[dict[str, object]] = []
@@ -883,6 +885,8 @@ def test_llm_json_request_normalizes_mimo_model(monkeypatch: pytest.MonkeyPatch,
 
     assert result["overview"] == "ok"
     assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
+    assert calls[0]["json"]["thinking"] == {"type": "disabled"}
+    assert calls[0]["json"]["reasoning_effort"] == "max"
     assert result["llm_prompt_cache_hit_tokens"] == 6
     assert result["llm_prompt_cache_miss_tokens"] == 4
 
