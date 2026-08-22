@@ -644,7 +644,7 @@ class ServiceSettings(BaseSettings):
     task_concurrency: int = 2
     mindmap_concurrency: int = 1
     summary_chunk_concurrency: int = 2
-    summary_chunk_retry_count: int = 2
+    summary_chunk_retry_count: int = 5
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 

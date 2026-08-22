@@ -270,7 +270,7 @@ class PipelineSettings:
     summary_chunk_target_chars: int = 2200
     summary_chunk_overlap_segments: int = 2
     summary_chunk_concurrency: int = 2
-    summary_chunk_retry_count: int = 2
+    summary_chunk_retry_count: int = 5
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
 
@@ -2509,7 +2509,7 @@ class RealPipelineRunner(PipelineRunner):
             len(aggregate_segments),
             len(merged_chapters),
         )
-        merged = self._request_llm_json(
+        merged = self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_llm_summary_payload(
                 title=title,
@@ -2566,7 +2566,7 @@ class RealPipelineRunner(PipelineRunner):
             len(transcript_context),
             len(segments),
         )
-        return self._request_llm_json(
+        return self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_llm_summary_payload(
                 title=title,
@@ -2602,7 +2602,7 @@ class RealPipelineRunner(PipelineRunner):
             len(transcript_excerpt),
             len(segments_excerpt),
         )
-        return self._request_llm_json(
+        return self._request_llm_json_with_retries(
             base_url=base_url,
             payload=self._build_aggregate_series_summary_payload(
                 title=title,
@@ -2662,6 +2662,60 @@ class RealPipelineRunner(PipelineRunner):
                     exc,
                 )
         raise VideoSumError(str(last_error) if last_error else f"Chunk {chunk_index} failed.")
+
+    def _request_llm_json_with_retries(
+        self,
+        *,
+        base_url: str,
+        payload: dict[str, object],
+        timeout: float = 180,
+        usage_stage: str = "llm",
+    ) -> dict[str, object]:
+        """Retry response-level failures for non-chunk LLM stages.
+
+        The low-level request retries transport failures, while chunk
+        summaries have their own outer retry loop. Full-context summaries and
+        follow-up stages do not, so an HTTP 200 response with an empty message
+        used to fail immediately. This wrapper keeps those stages consistent
+        with the user-configured retry count.
+        """
+        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
+        last_error: Exception | None = None
+        for attempt in range(retry_count + 1):
+            try:
+                return self._request_llm_json(
+                    base_url=base_url,
+                    payload=payload,
+                    timeout=timeout,
+                    retry_count=0,
+                    usage_stage=usage_stage,
+                )
+            except (LLMAuthenticationError, LLMConfigurationError):
+                raise
+            except httpx.TimeoutException as exc:
+                last_error = exc
+            except httpx.TransportError as exc:
+                last_error = exc
+            except VideoSumError as exc:
+                if "no readable message content" not in str(exc).lower():
+                    raise
+                last_error = exc
+
+            if attempt >= retry_count:
+                break
+            logger.warning(
+                "llm response retry model=%s stage=%s attempt=%d/%d error=%s",
+                self._settings.llm_model,
+                usage_stage,
+                attempt + 1,
+                retry_count,
+                last_error,
+            )
+            time.sleep(min(6.0, 1.5 * (attempt + 1)))
+
+        if last_error is not None:
+            raise last_error
+        raise VideoSumError("LLM request failed before receiving a response.")
 
     def _request_llm_json(
         self,
@@ -2875,12 +2929,37 @@ class RealPipelineRunner(PipelineRunner):
             "enable_thinking": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
-        try:
-            self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)
-        except httpx.TimeoutException as exc:
-            raise VideoSumError("LLM API 检查超时，请稍后重试或检查 Base URL / 网络代理。") from exc
-        except httpx.TransportError as exc:
-            raise VideoSumError(f"LLM API 检查失败，请检查 Base URL / 网络代理：{exc}") from exc
+        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
+        last_error: VideoSumError | None = None
+        for attempt in range(retry_count + 1):
+            try:
+                # 预检的重试由这一层统一控制，这样空响应、无效响应和网络错误
+                # 都会遵守同一个可配置的重试次数，而不是只重试传输异常。
+                self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)
+                return
+            except (LLMAuthenticationError, LLMConfigurationError):
+                raise
+            except httpx.TimeoutException as exc:
+                last_error = VideoSumError("LLM API 检查超时，请稍后重试或检查 Base URL / 网络代理。")
+                last_error.__cause__ = exc
+            except httpx.TransportError as exc:
+                last_error = VideoSumError(f"LLM API 检查失败，请检查 Base URL / 网络代理：{exc}")
+                last_error.__cause__ = exc
+            except VideoSumError as exc:
+                last_error = exc
+
+            if attempt >= retry_count:
+                break
+            logger.warning(
+                "llm preflight failed, retrying attempt=%d/%d error=%s",
+                attempt + 1,
+                retry_count,
+                last_error,
+            )
+            time.sleep(min(1.5, 0.25 * (2 ** attempt)))
+
+        if last_error is not None:
+            raise last_error
 
     def _parse_llm_json_content(self, content: str) -> dict[str, object]:
         # 移除可能的 think 标签（某些模型如 MiniMax-M2.5 可能返回）
@@ -3311,7 +3390,7 @@ P 数索引：
             summary_json=summary_json,
             source_kind=source_kind,
         )
-        result = self._request_llm_json(base_url=base_url, payload=payload, usage_stage="knowledge_note")
+        result = self._request_llm_json_with_retries(base_url=base_url, payload=payload, usage_stage="knowledge_note")
         result.setdefault("knowledgeNoteMarkdown", "")
         if not str(result.get("knowledgeNoteMarkdown") or "").strip():
             raise VideoSumError("LLM returned empty knowledge note markdown.")
@@ -4682,7 +4761,7 @@ P 数索引：
             len(result.chapter_groups or []),
         )
         payload = self._build_llm_mindmap_payload(title, summary_json, knowledge_note_markdown)
-        llm_result = self._request_llm_json(
+        llm_result = self._request_llm_json_with_retries(
             base_url=base_url,
             payload=payload,
             usage_stage="mindmap",
@@ -4696,7 +4775,7 @@ P 数索引：
                     summary_json=summary_json,
                     knowledge_note_markdown=knowledge_note_markdown,
                 )
-                repair_result = self._request_llm_json(
+                repair_result = self._request_llm_json_with_retries(
                     base_url=base_url,
                     payload=repair_payload,
                     usage_stage="mindmap_repair",

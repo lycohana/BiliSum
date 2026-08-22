@@ -164,6 +164,34 @@ def test_settings_manager_reports_persisted_file_state(tmp_path: Path) -> None:
     assert manager.has_persisted_settings is True
 
 
+def test_llm_settings_survive_manager_reload(tmp_path: Path) -> None:
+    """LLM endpoint fields and the secret must still be present after a fresh load."""
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    manager.save(
+        SettingsUpdatePayload(
+            llm_enabled=True,
+            llm_provider="openai-compatible",
+            llm_base_url="https://llm.example/v1",
+            llm_model="example-model",
+            llm_api_key="new-llm-key",
+        )
+    )
+
+    reloaded = SettingsManager(base_settings)
+    settings = reloaded.load()
+
+    assert settings.llm_enabled is True
+    assert settings.llm_provider == "openai-compatible"
+    assert settings.llm_base_url == "https://llm.example/v1"
+    assert settings.llm_model == "example-model"
+    assert settings.llm_api_key == "new-llm-key"
+
+
 def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Path) -> None:
     base_settings = ServiceSettings(
         data_dir=tmp_path / "data",
@@ -182,6 +210,24 @@ def test_settings_manager_migrates_missing_task_concurrency_fields(tmp_path: Pat
     assert loaded.mindmap_concurrency == 1
     assert persisted.task_concurrency == 1
     assert persisted.mindmap_concurrency == 1
+
+
+def test_settings_manager_migrates_legacy_llm_retry_default(tmp_path: Path) -> None:
+    base_settings = ServiceSettings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        tasks_dir=tmp_path / "tasks",
+    )
+    manager = SettingsManager(base_settings)
+    settings_path = base_settings.data_dir / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text('{"summary_chunk_retry_count":2}', encoding="utf-8")
+
+    loaded = manager.load()
+
+    assert loaded.summary_chunk_retry_count == 5
+    persisted = ServiceSettings.model_validate_json(settings_path.read_text(encoding="utf-8"))
+    assert persisted.summary_chunk_retry_count == 5
 
 
 def test_settings_manager_migrates_missing_knowledge_note_prompt_fields(tmp_path: Path) -> None:

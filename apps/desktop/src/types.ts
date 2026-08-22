@@ -560,6 +560,72 @@ export type SystemInfo = {
   settings?: ServiceSettings;
   environment?: EnvironmentInfo;
   runtimeStartup?: RuntimeStartupInfo;
+  worker?: WorkerSnapshot | null;
+};
+
+export type WorkerQueueSnapshot = {
+  concurrency?: number;
+  pending?: number;
+  running?: number;
+  completed?: number;
+  total?: number;
+  completed_tasks?: number;
+  total_tasks?: number;
+  token_consumed?: number;
+  total_tokens?: number;
+  runtime_seconds?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  status?: string;
+  items?: WorkerQueueItem[];
+};
+
+export type WorkerQueueItem = {
+  task_id?: string;
+  title?: string | null;
+  progress?: number;
+  status?: string;
+  message?: string | null;
+};
+
+export type WorkerBatchSnapshot = WorkerQueueSnapshot & {
+  id?: string | null;
+  batch_id?: string | null;
+  state?: string;
+  visible?: boolean;
+  mode?: "parallel" | "serial" | string;
+  concurrency_mode?: "parallel" | "serial" | string;
+  remaining?: number;
+  running_tasks?: number;
+  pending_tasks?: number;
+};
+
+export type WorkerSnapshot = {
+  accept_new_work?: boolean;
+  shutdown_requested?: boolean;
+  dispatch_threads?: number;
+  job_threads?: number;
+  queues?: {
+    task?: WorkerQueueSnapshot;
+    mindmap?: WorkerQueueSnapshot;
+    visual?: WorkerQueueSnapshot;
+    [key: string]: WorkerQueueSnapshot | undefined;
+  };
+  task?: WorkerQueueSnapshot;
+  batch?: WorkerBatchSnapshot | null;
+  active_batch?: WorkerBatchSnapshot | null;
+  completion?: WorkerBatchSnapshot | null;
+  completed?: number;
+  completed_tasks?: number;
+  total?: number;
+  total_tasks?: number;
+  token_consumed?: number;
+  total_tokens?: number;
+  runtime_seconds?: number;
+  runtime?: number;
+  mode?: "parallel" | "serial" | string;
+  concurrency_mode?: "parallel" | "serial" | string;
+  has_active_tasks?: boolean;
 };
 
 export type RuntimeStartupInfo = {

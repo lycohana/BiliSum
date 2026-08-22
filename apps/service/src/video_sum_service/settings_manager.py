@@ -196,6 +196,12 @@ class SettingsManager:
             if stored.get("visual_vlm_prompt") == PREVIOUS_DEFAULT_VISUAL_VLM_PROMPT:
                 stored["visual_vlm_prompt"] = DEFAULT_VISUAL_VLM_PROMPT
             migrated = False
+            # 2 was the previous built-in retry default. Move that legacy
+            # default to 5 so existing installs get the safer preflight
+            # behavior while the setting remains user-editable afterwards.
+            if stored.get("summary_chunk_retry_count") == 2:
+                stored["summary_chunk_retry_count"] = 5
+                migrated = True
             candidate = ServiceSettings.model_validate({**self._base_settings.model_dump(), **stored})
             if "task_concurrency" not in stored:
                 stored["task_concurrency"] = recommend_task_concurrency(candidate)

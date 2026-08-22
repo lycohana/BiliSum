@@ -758,9 +758,76 @@ def test_preflight_llm_timeout_fails_quickly(monkeypatch: pytest.MonkeyPatch, tm
         raise httpx.ReadTimeout("slow preflight")
 
     monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
 
     with pytest.raises(VideoSumError, match="LLM API 检查超时"):
         runner._preflight_llm_availability()
+
+
+def test_preflight_llm_retries_unreadable_response_using_configured_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path,
+            llm_enabled=True,
+            llm_api_key="test-key",
+            llm_base_url="https://api.example.com/v1",
+            llm_model="test-model",
+            summary_chunk_retry_count=5,
+        )
+    )
+    calls = 0
+
+    def fake_request(**_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls <= 5:
+            raise VideoSumError("LLM returned no readable message content.")
+        return {}
+
+    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
+
+    runner._preflight_llm_availability()
+
+    assert calls == 6
+
+
+def test_non_chunk_llm_request_retries_unreadable_response_using_configured_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path,
+            llm_enabled=True,
+            llm_api_key="test-key",
+            llm_base_url="https://api.example.com/v1",
+            llm_model="test-model",
+            summary_chunk_retry_count=5,
+        )
+    )
+    calls = 0
+
+    def fake_request(**_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls <= 5:
+            raise VideoSumError("LLM returned no readable message content.")
+        return {"overview": "ok"}
+
+    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
+
+    result = runner._request_llm_json_with_retries(
+        base_url="https://api.example.com/v1",
+        payload={"model": "test-model", "messages": []},
+    )
+
+    assert result == {"overview": "ok"}
+    assert calls == 6
 
 
 def test_llm_json_request_normalizes_mimo_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

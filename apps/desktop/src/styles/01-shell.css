@@ -168,7 +168,7 @@
   padding: 16px;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-default);
-  background: var(--bg-elevated);
+  background: var(--bg-card);
   box-shadow: var(--shadow-xl);
   opacity: 0;
   pointer-events: none;
@@ -240,7 +240,381 @@
 
 [data-theme="dark"] .title-bar-status-popover {
   background: var(--bg-card);
-  border-color: var(--border-strong);
+  border-color: var(--border-default);
+}
+
+.title-bar-queue-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-right: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.title-bar-queue-trigger,
+.title-bar-queue-completion {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 13px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-soft) 84%, var(--bg-canvas) 16%);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.title-bar-queue-trigger {
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.title-bar-queue-trigger:hover,
+.title-bar-queue-wrap.is-open .title-bar-queue-trigger {
+  border-color: var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.title-bar-queue-trigger:active {
+  transform: scale(0.98);
+}
+
+.title-bar-queue-trigger strong,
+.title-bar-queue-completion strong {
+  min-width: 2.5em;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.title-bar-queue-trigger > span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.title-bar-queue-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--brand-500);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.title-bar-queue-completion {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success);
+  animation: titleBarQueueCompletionIn 300ms var(--ease-out, ease-out);
+}
+
+.title-bar-queue-completion-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex: 0 0 14px;
+}
+
+.title-bar-queue-completion > strong,
+.title-bar-queue-completion-label {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  line-height: 1;
+}
+
+.title-bar-queue-completion > strong {
+  justify-content: center;
+}
+
+.title-bar-queue-completion-label {
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.title-bar-queue-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1201;
+  width: min(326px, calc(100vw - 24px));
+  max-height: calc(100vh - var(--title-bar-height) - 20px);
+  overflow-y: auto;
+  padding: 13px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(12px);
+  scrollbar-width: thin;
+}
+
+.title-bar-queue-popover::before {
+  position: absolute;
+  top: -5px;
+  right: 19px;
+  width: 9px;
+  height: 9px;
+  border-top: 1px solid var(--border-default);
+  border-left: 1px solid var(--border-default);
+  background: var(--bg-card);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.title-bar-queue-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.title-bar-queue-popover-head strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.title-bar-queue-popover-head span {
+  color: var(--brand-500);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.title-bar-queue-carousel {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.title-bar-queue-carousel-viewport {
+  overflow: hidden;
+  border-radius: 9px;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.title-bar-queue-carousel-viewport:active {
+  cursor: grabbing;
+}
+
+.title-bar-queue-carousel-track {
+  display: flex;
+  width: 200%;
+  transition: transform 320ms cubic-bezier(.22, .8, .24, 1);
+  will-change: transform;
+}
+
+.title-bar-queue-page {
+  display: grid;
+  flex: 0 0 50%;
+  min-width: 0;
+  padding: 0 1px 1px;
+}
+
+.title-bar-queue-metrics,
+.title-bar-queue-resources {
+  display: grid;
+  gap: 6px;
+}
+
+.title-bar-queue-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.title-bar-queue-resources {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.title-bar-queue-metric,
+.title-bar-queue-resource {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 4px;
+  width: 100%;
+  height: 80px;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-subtle) 64%, transparent);
+  text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.title-bar-queue-metric > span,
+.title-bar-queue-resource > span {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-bar-queue-metric strong,
+.title-bar-queue-resource strong {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.title-bar-queue-metric small,
+.title-bar-queue-resource small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-bar-queue-page-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 18px;
+}
+
+.title-bar-queue-page-nav button {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.title-bar-queue-page-nav button::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-default);
+  transition: width 180ms ease, height 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.title-bar-queue-page-nav button.is-active {
+  background: transparent;
+}
+
+.title-bar-queue-page-nav button.is-active::before {
+  width: 6px;
+  height: 6px;
+  background: var(--brand-500);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-500) 14%, transparent);
+}
+
+.title-bar-queue-section {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.title-bar-queue-section-head,
+.title-bar-queue-task-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.title-bar-queue-section-head span:last-child,
+.title-bar-queue-task-top span:last-child {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.title-bar-queue-section p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.title-bar-queue-task {
+  display: grid;
+  gap: 5px;
+}
+
+.title-bar-queue-task-top span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-bar-queue-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--bg-subtle);
+}
+
+.title-bar-queue-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand-500);
+  transition: width 220ms ease;
+}
+
+.title-bar-queue-task.is-completed .title-bar-queue-progress {
+  background: color-mix(in srgb, var(--success) 18%, var(--bg-subtle));
+}
+
+.title-bar-queue-task.is-completed .title-bar-queue-progress i {
+  background: var(--success);
+}
+
+.title-bar-queue-task.is-failed .title-bar-queue-progress {
+  background: color-mix(in srgb, var(--danger) 22%, var(--bg-subtle));
+}
+
+.title-bar-queue-task.is-failed .title-bar-queue-progress i {
+  background: var(--danger);
+}
+
+@keyframes titleBarQueueCompletionIn {
+  from { opacity: 0; transform: translateY(-3px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-bar-queue-carousel-track,
+  .title-bar-queue-page-nav button,
+  .title-bar-queue-progress i,
+  .title-bar-queue-completion {
+    transition-duration: .01ms;
+    animation-duration: .01ms;
+  }
 }
 
 .title-bar-button {
