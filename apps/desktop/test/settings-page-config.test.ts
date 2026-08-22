@@ -79,6 +79,22 @@ run("prompt templates are validated before settings save", () => {
   assert.ok(settingsPageSource.includes("{mode}"), "frame planning help should list mode variable");
   assert.ok(settingsPageSource.includes("{timeline_hint}"), "VLM prompt help should list timeline_hint variable");
 });
+
+run("LLM settings save verifies the persisted snapshot", () => {
+  const saveStart = settingsPageSource.indexOf("async function save(event: FormEvent)");
+  const saveEnd = settingsPageSource.indexOf("async function installLocalAsr", saveStart);
+  const saveSource = settingsPageSource.slice(saveStart, saveEnd);
+
+  assert.ok(saveSource.includes("const currentForm = formRef.current"), "save should use the latest form ref");
+  assert.ok(saveSource.includes("nextSettings = await api.getSettings()"), "save should read settings back after PUT");
+  assert.ok(
+    saveSource.indexOf("onSettingsSaved(nextSettings, null)") < saveSource.indexOf("setIsDirty(false)"),
+    "parent snapshot should be updated before the form becomes clean",
+  );
+  assert.ok(settingsPageSource.includes("saveAndCloseGenerationModelDialog"), "model dialog should expose save-and-close behavior");
+  assert.ok(settingsPageSource.includes("保存并关闭"), "model dialog should label the action as save and close");
+});
+
 run("prompt inline toolbar can collapse prompt groups", () => {
   assert.ok(settingsPageSource.includes("已展开 {outerSectionsOpen.size} 项"), "toolbar should show expanded prompt group count");
   assert.ok(settingsPageSource.includes("collapseAllOuter"), "toolbar should collapse all prompt groups");
