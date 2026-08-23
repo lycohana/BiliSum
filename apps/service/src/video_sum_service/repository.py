@@ -1928,6 +1928,29 @@ class SqliteTaskRepository:
             cursor.execute("DELETE FROM video_collections WHERE collection_id = ?", (collection_id,))
         return video_ids
 
+    def list_video_collection_video_ids(
+        self,
+        collection_id: str,
+        *,
+        include_source_removed: bool = False,
+    ) -> list[str] | None:
+        """List the asset ids linked to a collection, including hidden history on request."""
+        where_clause = "collection_id = ?"
+        if not include_source_removed:
+            where_clause += " AND source_present = 1"
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            collection = cursor.execute(
+                "SELECT collection_id FROM video_collections WHERE collection_id = ?",
+                (collection_id,),
+            ).fetchone()
+            if collection is None:
+                return None
+            rows = cursor.execute(
+                f"SELECT video_id FROM video_collection_items WHERE {where_clause} AND video_id IS NOT NULL ORDER BY position ASC, bvid ASC",
+                (collection_id,),
+            ).fetchall()
+        return list(dict.fromkeys(str(row["video_id"]) for row in rows if row["video_id"]))
+
     def _next_collection_order(self, cursor: sqlite3.Cursor, folder_id: str | None) -> float:
         if not folder_id:
             return 0

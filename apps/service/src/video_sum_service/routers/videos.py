@@ -914,8 +914,14 @@ def delete_video_collection(
     if collection is None:
         raise HTTPException(status_code=404, detail="Collection not found.")
     mode = payload.mode if payload is not None else "detach"
-    video_ids = list(dict.fromkeys(item.video_id for item in collection.items if item.video_id))
     if mode == "delete_contents":
+        # The collection response intentionally hides members removed from the
+        # source. Destructive cleanup must still include those historical rows
+        # so their assets and task artifacts cannot become orphaned.
+        video_ids = task_store.list_video_collection_video_ids(
+            collection_id,
+            include_source_removed=True,
+        ) or []
         for video_id in video_ids:
             video = task_store.get_video_asset(video_id)
             if video is None:

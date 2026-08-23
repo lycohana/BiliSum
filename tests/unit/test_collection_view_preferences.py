@@ -10,6 +10,7 @@ from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.routers import videos as videos_router
 from video_sum_service.schemas import (
     VideoAssetRecord,
+    VideoCollectionDeleteRequest,
     VideoCollectionItemsOrderRequest,
     VideoCollectionTaskCreateRequest,
 )
@@ -219,6 +220,57 @@ def test_refresh_soft_removes_restores_members_and_cleans_stale_pending() -> Non
     assert restored_row["source_present"] == 1
     assert restored_row["removed_from_source_at"] is None
     assert restored_row["custom_position"] == 2
+
+
+def test_delete_collection_contents_cleans_source_removed_members() -> None:
+    repository, connection = create_repository()
+    historical = add_collection_video(repository, "BV-historical", "已移出合集")
+    current = add_collection_video(repository, "BV-current", "仍在合集")
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-delete-history",
+            "title": "删除历史成员",
+            "items": [
+                collection_item(1, "BV-historical"),
+                collection_item(2, "BV-current"),
+            ],
+        },
+        "https://example.com/season-delete-history",
+    )
+    repository.refresh_video_collection(
+        {
+            "collection_id": "season-delete-history",
+            "title": "删除历史成员",
+            "items": [collection_item(2, "BV-current")],
+        },
+        "https://example.com/season-delete-history",
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(task_repository=repository))
+    )
+
+    visible_collection = repository.get_video_collection("season-delete-history")
+    assert visible_collection is not None
+    assert [item.bvid for item in visible_collection.items] == ["BV-current"]
+    assert repository.list_video_collection_video_ids("season-delete-history") == [current.video_id]
+    assert repository.list_video_collection_video_ids(
+        "season-delete-history",
+        include_source_removed=True,
+    ) == [historical.video_id, current.video_id]
+
+    response = videos_router.delete_video_collection(
+        "season-delete-history",
+        request,
+        VideoCollectionDeleteRequest(mode="delete_contents"),
+    )
+
+    assert set(response["video_ids"]) == {historical.video_id, current.video_id}
+    assert repository.get_video_asset(historical.video_id) is None
+    assert repository.get_video_asset(current.video_id) is None
+    assert connection.execute(
+        "SELECT COUNT(*) AS count FROM video_collection_items WHERE collection_id = ?",
+        ("season-delete-history",),
+    ).fetchone()["count"] == 0
 
 
 def test_custom_order_is_independent_from_refreshed_source_order_and_new_items_append() -> None:
