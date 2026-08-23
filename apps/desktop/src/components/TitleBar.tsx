@@ -233,13 +233,10 @@ export function TitleBar({
   const hasConfigProblem = configHealth.checked && !configHealth.isConfigured;
   const runtimePending = serviceOnline && !runtimeReady;
   const statusPillText = hasConfigProblem ? "配置缺失" : hasNewVersion ? "有新版本" : runtimePending ? "运行环境准备中" : "运行状态";
-  const updateStatusText = hasNewVersion
-    ? `v${updateState.version || "-"}`
-    : updateState.status === "checking"
-      ? "检查中"
-      : updateState.status === "error"
-        ? "检查失败"
-        : "已是最新";
+  const runtimeEnvironmentText = runtimeDeviceLabel && runtimeDeviceLabel !== "-"
+    ? `${runtimeStatusText} · ${runtimeDeviceLabel}`
+    : runtimeStatusText;
+  const versionStatusText = hasNewVersion && updateState.version ? updateState.version : version || "-";
   const configStatusText = !configHealth.checked
     ? "检测中"
     : configHealth.hasBlockingIssues
@@ -475,7 +472,7 @@ export function TitleBar({
               </div>
               <div className={`sidebar-status-item ${runtimeReady ? "is-success" : serviceOnline ? "is-warning" : ""}`}>
                 <span>运行环境</span>
-                <strong>{runtimeStatusText}</strong>
+                <strong>{runtimeEnvironmentText}</strong>
               </div>
               <div className={`sidebar-status-item ${configHealth.hasBlockingIssues ? "is-danger" : !configHealth.isConfigured ? "is-warning" : "is-success"}`}>
                 <span>配置</span>
@@ -486,20 +483,8 @@ export function TitleBar({
                 type="button"
                 onClick={handleOpenUpdateDialog}
               >
-                <span>更新</span>
-                <strong>{updateStatusText}</strong>
-              </button>
-              <div className="sidebar-status-item">
-                <span>设备</span>
-                <strong>{runtimeDeviceLabel}</strong>
-              </div>
-              <button
-                className="sidebar-status-item sidebar-status-item-button"
-                type="button"
-                onClick={handleOpenUpdateDialog}
-              >
                 <span>版本</span>
-                <strong>{version || "-"}</strong>
+                <strong>{versionStatusText}</strong>
               </button>
             </div>
             {hasConfigProblem ? (

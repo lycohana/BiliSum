@@ -93,6 +93,15 @@ run("calls markdown and transcript export APIs", async () => {
   await api.reorderVideos({ video_ids: ["video-1"], folder_id: "__global__" });
   await api.moveVideoToFolder("video-1", { folder_id: "folder-1" });
   await api.setVideoPin("video-1", { global_pinned: true });
+  await api.updateVideoCollectionSettings("season/ 42", { view_sort_mode: "duration" });
+  await api.reorderVideoCollectionItems("season/ 42", ["BV002", "BV001"]);
+  await api.createVideoCollectionTasks("season/ 42", {
+    batch_id: "collection-batch-1",
+    ordered_video_ids: ["video-2", "video-1"],
+    visual_note_mode: "frame_insert",
+    prompt_preset_id: "general",
+    summary_scope: "summary",
+  });
 
   assert.equal(requests[2]?.url, "/api/v1/prompts/presets");
   assert.equal(requests[3]?.url, "/api/v1/prompts/match");
@@ -111,6 +120,21 @@ run("calls markdown and transcript export APIs", async () => {
   assert.deepEqual(JSON.parse(String(requests[9]?.options?.body)), { video_ids: ["video-1"], folder_id: "__global__" });
   assert.equal(requests[10]?.url, "/api/v1/videos/video-1/move");
   assert.equal(requests[11]?.url, "/api/v1/videos/video-1/pin");
+  assert.equal(requests[12]?.url, "/api/v1/videos/collections/season%2F%2042/settings");
+  assert.equal(requests[12]?.options?.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(requests[12]?.options?.body)), { view_sort_mode: "duration" });
+  assert.equal(requests[13]?.url, "/api/v1/videos/collections/season%2F%2042/items/order");
+  assert.equal(requests[13]?.options?.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(requests[13]?.options?.body)), { ordered_bvids: ["BV002", "BV001"] });
+  assert.equal(requests[14]?.url, "/api/v1/videos/collections/season%2F%2042/tasks/batch");
+  assert.equal(requests[14]?.options?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[14]?.options?.body)), {
+    batch_id: "collection-batch-1",
+    ordered_video_ids: ["video-2", "video-1"],
+    visual_note_mode: "frame_insert",
+    prompt_preset_id: "general",
+    summary_scope: "summary",
+  });
 
   globalThis.fetch = originalFetch;
   globalThis.window = originalWindow;

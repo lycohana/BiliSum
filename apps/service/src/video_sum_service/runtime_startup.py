@@ -149,7 +149,19 @@ def submit_task_or_queue(app_state: Any, repository: SqliteTaskRepository, recor
 
     task_worker = getattr(app_state, "task_worker", None)
     if runtime_worker_ready(app_state) and task_worker is not None:
-        task_worker.submit(record)
+        submit_result = task_worker.submit(record)
+        if submit_result == "rejected":
+            message = "后台任务队列正在关闭，暂时无法接收新任务。"
+            repository.update_status(record.task_id, TaskStatus.FAILED)
+            repository.update_error(record.task_id, "task_dispatch_rejected", message)
+            repository.append_event(
+                task_id=record.task_id,
+                stage="failed",
+                progress=0,
+                message=message,
+                payload={"dispatch_rejected": True},
+            )
+            raise RuntimeError(message)
         return
     queue_task_for_runtime_startup(repository, record)
 

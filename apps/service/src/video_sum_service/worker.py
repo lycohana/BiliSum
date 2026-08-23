@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Condition, Lock, Thread, current_thread
+from typing import Literal
 
 from video_sum_core.models.tasks import (
     InputType,
@@ -132,7 +133,7 @@ class TaskWorker:
         for thread in self._dispatch_threads:
             thread.start()
 
-    def submit(self, task: TaskRecord) -> None:
+    def submit(self, task: TaskRecord) -> Literal["accepted", "already_queued", "rejected"]:
         logger.info(
             "queue summary task task_id=%s video_id=%s input_type=%s source=%s",
             task.task_id,
@@ -140,8 +141,8 @@ class TaskWorker:
             task.task_input.input_type.value,
             task.task_input.source,
         )
-        enqueued = self._enqueue_summary(task)
-        if enqueued:
+        result = self._enqueue_summary(task)
+        if result == "accepted":
             self._repository.update_status(task.task_id, TaskStatus.QUEUED)
             self._repository.append_event(
                 task_id=task.task_id,
@@ -149,6 +150,7 @@ class TaskWorker:
                 progress=0,
                 message="任务已进入后台队列",
             )
+        return result
 
     def submit_mindmap(self, task_id: str, *, force: bool = False) -> None:
         logger.info("queue mindmap generation task_id=%s force=%s", task_id, force)
@@ -309,12 +311,12 @@ class TaskWorker:
             "running": len(state.running_ids),
         }
 
-    def _enqueue_summary(self, task: TaskRecord) -> bool:
+    def _enqueue_summary(self, task: TaskRecord) -> Literal["accepted", "already_queued", "rejected"]:
         job_id = self._task_state.job_id_for(task)
         with self._condition:
             if not self._accept_new_work:
                 logger.info("reject new summary job because worker is closed task_id=%s", job_id)
-                return False
+                return "rejected"
             if (
                 job_id in self._task_state.pending_ids
                 or job_id in self._task_state.running_ids
@@ -322,7 +324,7 @@ class TaskWorker:
                 or job_id in self._llm_state.running_ids
             ):
                 logger.info("skip duplicate summary job task_id=%s", job_id)
-                return False
+                return "already_queued"
 
             if self._summary_batch is None or (
                 not self._task_state.pending
@@ -347,7 +349,7 @@ class TaskWorker:
                 "message": "任务已进入后台队列",
             }
             self._condition.notify_all()
-            return True
+            return "accepted"
 
     def _enqueue_llm_locked(self, task_id: str) -> bool:
         """Move a successfully transcribed task into the LLM queue.

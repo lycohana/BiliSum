@@ -1382,7 +1382,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
       ? "加载失败"
       : contentState
         ? taskStatusLabel(selectedTaskStatus)
-        : "已准备";
+        : null;
   const heroStats: HeroStat[] = [
     { id: "progress", label: "最新运行", value: heroProgressSummary },
     {
@@ -2526,10 +2526,12 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
             <div className="detail-workspace-header">
               <h3 className="detail-workspace-label">Knowledge Workspace</h3>
               <div className="detail-workspace-meta">
-                <span className={`detail-workspace-signal ${contentState ? taskStatusClass(selectedTaskStatus) : "status-success"}`}>
-                  <span className="detail-workspace-signal-dot" />
-                  {workspaceStatusLabel}
-                </span>
+                {workspaceStatusLabel ? (
+                  <span className={`detail-workspace-signal ${contentState ? taskStatusClass(selectedTaskStatus) : "status-pending"}`}>
+                    <span className="detail-workspace-signal-dot" />
+                    {workspaceStatusLabel}
+                  </span>
+                ) : null}
                 {selectedTaskCode ? <span>任务 {selectedTaskCode}</span> : null}
                 {selectedTaskTokenCount != null ? (
                   <TokenUsageTooltip
@@ -3846,7 +3848,7 @@ function TaskStatePanel({
 function DetailTabIcon({ active, tab }: { active: boolean; tab: DetailTab }) {
   const className = `detail-tab-icon ${active ? "is-active" : ""}`;
   if (tab === "knowledge") {
-    return <IconBrainCircuit className={className} />;
+    return <IconKnowledgeCard className={className} />;
   }
   if (tab === "summary") {
     return <IconFileText className={className} />;
@@ -3995,6 +3997,15 @@ function IconCopyImage(props: SVGProps<SVGSVGElement>) {
       <path d="m6.5 16.5 3.4-3.4a1.3 1.3 0 0 1 1.84 0l1.26 1.26" />
       <path d="m12.5 15.5 1.4-1.4a1.3 1.3 0 0 1 1.84 0l.76.76" />
       <circle cx="11" cy="10.5" r="1.1" />
+    </svg>
+  );
+}
+
+function IconKnowledgeCard(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24" {...props}>
+      <rect x="4.5" y="3.5" width="15" height="17" rx="2.5" />
+      <path d="M8 9h8M8 12.5h8M8 16h5" />
     </svg>
   );
 }

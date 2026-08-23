@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
-from video_sum_core.models.tasks import InputType, TaskInput
+from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 
 from video_sum_service.context import LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
@@ -15,16 +15,21 @@ from video_sum_service.schemas import (
     AggregateSummaryRequest,
     ResummaryRequest,
     TaskDetailResponse,
+    TaskRecord,
     TaskSummaryResponse,
     VideoAssetDetailResponse,
     VideoAssetRecord,
     VideoAssetSummaryResponse,
+    VideoCollectionItemsOrderRequest,
     VideoCollectionItemsRequest,
     VideoCollectionDeleteRequest,
     VideoCollectionFavoriteRequest,
     VideoCollectionMoveRequest,
     VideoCollectionPinRequest,
     VideoCollectionSettingsRequest,
+    VideoCollectionTaskCreateRequest,
+    VideoCollectionTaskDispatchFailure,
+    VideoCollectionTaskCreateResponse,
     VideoCollectionResponse,
     VideoFolderCreateRequest,
     VideoFolderResponse,
@@ -324,6 +329,28 @@ def _create_video_task_record(
     prompt_preset_id: str | None = None,
     summary_scope: str | None = None,
 ):
+    record = _build_video_task_record(
+        video=video,
+        page_number=page_number,
+        visual_note_mode=visual_note_mode,
+        prompt_preset_id=prompt_preset_id,
+        summary_scope=summary_scope,
+    )
+    record = task_store.create_task_record(record)
+    submit_task_or_queue(app_state, task_store, record)
+    refreshed = task_store.get_task(record.task_id)
+    assert refreshed is not None
+    return refreshed
+
+
+def _build_video_task_record(
+    *,
+    video: VideoAssetRecord,
+    page_number: int | None = None,
+    visual_note_mode: str | None = None,
+    prompt_preset_id: str | None = None,
+    summary_scope: str | None = None,
+) -> TaskRecord:
     page = resolve_video_page(video, page_number)
     if video.pages and page_number is not None and page is None:
         raise HTTPException(status_code=400, detail="Selected page not found.")
@@ -350,16 +377,12 @@ def _create_video_task_record(
         task_input.options.prompt_preset_id = prompt_preset_id
     if summary_scope is not None:
         task_input.options.summary_scope = summary_scope
-    record = task_store.create_task(
-        task_input,
+    return TaskRecord(
+        task_input=task_input,
         video_id=video.video_id,
         page_number=page.page if page else None,
         page_title=title,
     )
-    submit_task_or_queue(app_state, task_store, record)
-    refreshed = task_store.get_task(record.task_id)
-    assert refreshed is not None
-    return refreshed
 
 
 def _create_resummary_task_record(
@@ -654,10 +677,186 @@ def update_video_collection_settings(
     request: Request,
 ) -> VideoCollectionResponse:
     task_store: SqliteTaskRepository = request.app.state.task_repository
-    updated = task_store.update_video_collection_settings(collection_id, payload.auto_check_on_open)
+    updated = task_store.update_video_collection_settings(
+        collection_id,
+        auto_check_on_open=payload.auto_check_on_open,
+        view_sort_mode=payload.view_sort_mode,
+        view_group_mode=payload.view_group_mode,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Collection not found.")
     return updated
+
+
+@router.patch("/collections/{collection_id}/items/order", response_model=VideoCollectionResponse)
+def reorder_video_collection_items(
+    collection_id: str,
+    payload: VideoCollectionItemsOrderRequest,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    try:
+        updated = task_store.reorder_video_collection_items(
+            collection_id,
+            payload.ordered_bvids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return updated
+
+
+@router.post(
+    "/collections/{collection_id}/tasks/batch",
+    response_model=VideoCollectionTaskCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_video_collection_tasks(
+    collection_id: str,
+    payload: VideoCollectionTaskCreateRequest,
+    request: Request,
+) -> VideoCollectionTaskCreateResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+
+    ordered_video_ids = [str(video_id).strip() for video_id in payload.ordered_video_ids]
+    if any(not video_id for video_id in ordered_video_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="ordered_video_ids must not contain empty values.",
+        )
+    if len(ordered_video_ids) != len(set(ordered_video_ids)):
+        raise HTTPException(
+            status_code=422,
+            detail="ordered_video_ids must not contain duplicates.",
+        )
+
+    collection_video_ids = {item.video_id for item in collection.items if item.video_id}
+    invalid_video_ids = [
+        video_id for video_id in ordered_video_ids if video_id not in collection_video_ids
+    ]
+    if invalid_video_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Every ordered_video_id must belong to the collection.",
+                "invalid_video_ids": invalid_video_ids,
+            },
+        )
+
+    videos: list[VideoAssetRecord] = []
+    for video_id in ordered_video_ids:
+        video = task_store.get_video_asset(video_id)
+        if video is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Collection item video asset is unavailable.",
+                    "invalid_video_ids": [video_id],
+                },
+            )
+        videos.append(video)
+
+    fingerprint_payload = {
+        "collection_id": collection_id,
+        "ordered_video_ids": ordered_video_ids,
+        "visual_note_mode": payload.visual_note_mode,
+        "prompt_preset_id": payload.prompt_preset_id,
+        "summary_scope": payload.summary_scope,
+    }
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    batch_id = str(payload.batch_id or "").strip() or f"auto-{request_fingerprint}"
+    prepared_records = [
+        _build_video_task_record(
+            video=video,
+            visual_note_mode=payload.visual_note_mode,
+            prompt_preset_id=payload.prompt_preset_id,
+            summary_scope=payload.summary_scope,
+        )
+        for video in videos
+    ]
+    try:
+        records, created, dispatch_completed = (
+            task_store.create_video_collection_task_batch(
+                collection_id=collection_id,
+                batch_id=batch_id,
+                request_fingerprint=request_fingerprint,
+                records=prepared_records,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    dispatch_failures: list[VideoCollectionTaskDispatchFailure] = []
+    if not dispatch_completed:
+        for record in records:
+            if record.status != TaskStatus.QUEUED:
+                continue
+            try:
+                submit_task_or_queue(request.app.state, task_store, record)
+            except Exception as exc:  # Persist the per-item outcome; do not hide prior successes.
+                current = task_store.get_task(record.task_id)
+                if current is not None and current.status == TaskStatus.QUEUED:
+                    task_store.update_status(record.task_id, TaskStatus.FAILED)
+                    task_store.update_error(
+                        record.task_id,
+                        "task_dispatch_failed",
+                        str(exc),
+                    )
+                failed = task_store.get_task(record.task_id)
+                dispatch_failures.append(
+                    VideoCollectionTaskDispatchFailure(
+                        task_id=record.task_id,
+                        video_id=record.video_id,
+                        error_code=(
+                            failed.error_code
+                            if failed is not None and failed.error_code
+                            else "task_dispatch_failed"
+                        ),
+                        error_message=(
+                            failed.error_message
+                            if failed is not None and failed.error_message
+                            else str(exc)
+                        ),
+                    )
+                )
+        task_store.mark_video_collection_task_batch_dispatched(
+            collection_id,
+            batch_id,
+        )
+
+    refreshed_records = [
+        refreshed
+        for record in records
+        if (refreshed := task_store.get_task(record.task_id)) is not None
+    ]
+    if dispatch_completed:
+        dispatch_failures = [
+            VideoCollectionTaskDispatchFailure(
+                task_id=record.task_id,
+                video_id=record.video_id,
+                error_code=record.error_code or "task_dispatch_failed",
+                error_message=record.error_message or "Task dispatch failed.",
+            )
+            for record in refreshed_records
+            if record.status == TaskStatus.FAILED and record.error_code
+        ]
+    return VideoCollectionTaskCreateResponse(
+        batch_id=batch_id,
+        replayed=not created,
+        created_tasks=[record.to_detail() for record in refreshed_records],
+        dispatch_failures=dispatch_failures,
+    )
 
 
 @router.post("/collections/{collection_id}/favorite", response_model=VideoCollectionResponse)

@@ -35,6 +35,25 @@
   .content-frame-settings {
     width: calc(100% - 32px);
   }
+
+  .collection-view-toolbar-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .collection-status-tabs,
+  .collection-view-controls {
+    width: 100%;
+  }
+
+  .collection-view-controls {
+    justify-content: flex-start;
+  }
+
+  .collection-search-control {
+    flex: 1 1 260px;
+  }
 }
 
 /* 移动端菜单按钮 */
@@ -233,6 +252,10 @@
     padding: 20px;
   }
 
+  .collection-detail-hero-copy {
+    grid-column: 1;
+  }
+
   .collection-detail-hero-cover {
     min-height: 0;
   }
@@ -240,6 +263,64 @@
   .collection-detail-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .collection-view-toolbar {
+    /* At this breakpoint the document body, rather than .content, owns the
+       scroll. Offset the fixed title bar once so the first toolbar row stays visible. */
+    top: var(--title-bar-height);
+    gap: 9px;
+    padding: 11px 12px 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .collection-view-toolbar.is-stuck {
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+
+  .collection-view-toolbar-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .collection-view-toolbar-heading span {
+    max-width: 100%;
+  }
+
+  .collection-status-tabs {
+    margin-inline: -3px;
+    padding: 0 3px 2px;
+  }
+
+  .collection-status-tabs button {
+    min-height: 38px;
+    padding-inline: 11px;
+  }
+
+  .collection-view-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .collection-view-controls label,
+  .collection-select-control,
+  .collection-view-controls .compact-button {
+    width: 100%;
+  }
+
+  .collection-search-control {
+    grid-column: 1 / -1;
+  }
+
+  .collection-view-controls select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .collection-view-summary {
+    gap: 4px 10px;
   }
 
   .collection-detail-toolbar-top {
@@ -255,8 +336,14 @@
   }
 
   .collection-selection-dock {
+    width: max-content;
     max-width: calc(100vw - 24px);
     padding: 6px;
+    border-radius: 18px;
+  }
+
+  .collection-queue-order {
+    border-left: 0;
   }
 
   .collection-detail-batch-actions {
@@ -358,6 +445,65 @@
 }
 
 @media (max-width: 640px) {
+  .collection-view-toolbar {
+    margin-inline: -4px;
+  }
+
+  .collection-view-controls label {
+    padding-left: 8px;
+  }
+
+  .collection-select-control {
+    padding-left: 8px;
+  }
+
+  .collection-view-controls .compact-button {
+    min-width: 0;
+    padding-inline: 9px;
+  }
+
+  .collection-view-summary > span {
+    flex-basis: 100%;
+  }
+
+  .collection-selection-dock {
+    left: 12px;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    justify-content: stretch;
+    width: auto;
+    max-width: none;
+    transform: none;
+    animation-name: collection-selection-dock-mobile-in;
+  }
+
+  .collection-selection-count,
+  .collection-queue-order {
+    min-height: 34px;
+  }
+
+  .collection-queue-order {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    padding-inline: 8px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .collection-queue-order .collection-toolbar-select {
+    width: 60%;
+    max-width: 60%;
+  }
+
+  .collection-selection-dock button.is-primary {
+    min-width: 112px;
+  }
+
+  .collection-detail-page.is-selection-mode {
+    padding-bottom: 172px;
+  }
+
   .grid-card {
     padding: 18px;
   }
@@ -485,6 +631,34 @@
 
   .detail-chapter-node-shell .detail-card-link {
     right: 0;
+  }
+
+}
+
+@media (min-width: 769px) and (max-width: 1200px) {
+  /* 合集头部保持紧凑的横向详情卡；普通视频详情仍按上面的断点切换。 */
+  .collection-detail-hero {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  }
+
+  .collection-detail-hero-copy {
+    grid-column: 2;
+  }
+
+  .collection-view-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(150px, 0.85fr)) auto auto;
+    align-items: stretch;
+  }
+
+  .collection-search-control,
+  .collection-select-control {
+    width: auto;
+  }
+
+  .collection-view-controls .compact-button {
+    width: auto;
+    justify-self: end;
   }
 }
 

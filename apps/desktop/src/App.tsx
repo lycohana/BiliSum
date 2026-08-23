@@ -30,7 +30,7 @@ import { LibraryPage } from "./pages/LibraryPage";
 import { CollectionDetailPage } from "./pages/CollectionDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VideoDetailPage } from "./pages/VideoDetailPage";
-import type { VideoAssetSummary, VideoCollection, VideoCollectionItem, VideoPageBatchOption, VideoProbeResult } from "./types";
+import type { CollectionGroupMode, CollectionSortMode, VideoAssetSummary, VideoCollection, VideoCollectionItem, VideoPageBatchOption, VideoProbeResult } from "./types";
 
 const PROMPT_PRESET_STORAGE_KEY = "bilisum.promptPresetId";
 
@@ -153,6 +153,7 @@ export function App() {
   // from putting the previous LLM configuration back into the UI.
   const refreshRequestIdRef = useRef(0);
   const settingsWriteVersionRef = useRef(0);
+  const collectionBatchRetryIdsRef = useRef(new Map<string, string>());
   const [homeTourOpen, setHomeTourOpen] = useState(() => !isHomeTourSeen());
 
   useEffect(() => {
@@ -714,6 +715,21 @@ export function App() {
     return collection;
   }
 
+  async function handleUpdateCollectionView(
+    collectionId: string,
+    payload: { view_sort_mode?: CollectionSortMode; view_group_mode?: CollectionGroupMode },
+  ) {
+    const collection = await api.updateVideoCollectionSettings(collectionId, payload);
+    mergeCollection(collection);
+    return collection;
+  }
+
+  async function handleReorderCollectionItems(collectionId: string, orderedBvids: string[]) {
+    const collection = await api.reorderVideoCollectionItems(collectionId, orderedBvids);
+    mergeCollection(collection);
+    return collection;
+  }
+
   async function handleToggleCollectionFavorite(collectionId: string, nextFavorite: boolean) {
     const collection = await api.setVideoCollectionFavorite(collectionId, { is_favorite: nextFavorite });
     mergeCollection(collection);
@@ -752,24 +768,31 @@ export function App() {
     return updated;
   }
 
-  async function handleSummarizeCollectionItems(_collectionId: string, videoIds: string[]) {
+  async function handleSummarizeCollectionItems(collectionId: string, videoIds: string[]) {
     if (!videoIds.length) return;
-    setSubmitStatus(`正在为 ${videoIds.length} 个合集视频创建摘要任务...`);
+    setSubmitStatus(`正在按指定顺序创建 ${videoIds.length} 个合集摘要任务...`);
     const taskPayload = await buildCreateTaskPayload(null, "合集视频");
-    const results = await Promise.allSettled(videoIds.map((videoId) => api.createVideoTask(videoId, taskPayload)));
-    const failed = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-    const createdCount = results.length - failed.length;
+    const batchKey = JSON.stringify({
+      collectionId,
+      videoIds,
+      visualNoteMode: taskPayload.visual_note_mode,
+      promptPresetId: taskPayload.prompt_preset_id,
+    });
+    const batchId = collectionBatchRetryIdsRef.current.get(batchKey) || crypto.randomUUID();
+    collectionBatchRetryIdsRef.current.set(batchKey, batchId);
+    const result = await api.createVideoCollectionTasks(collectionId, {
+      batch_id: batchId,
+      ordered_video_ids: [...videoIds],
+      visual_note_mode: taskPayload.visual_note_mode,
+      prompt_preset_id: taskPayload.prompt_preset_id,
+    });
+    collectionBatchRetryIdsRef.current.delete(batchKey);
+    const createdCount = result.created_tasks.length;
     await refreshLibrarySnapshot();
     setRefreshSeed((value) => value + 1);
-    if (failed.length > 0) {
-      const firstError = readableTaskCreationError(failed[0]?.reason);
-      if (createdCount === 0) {
-        throw new Error(`合集视频摘要任务创建失败：${firstError}`);
-      }
-      setSubmitStatus(`已创建 ${createdCount} 个合集视频摘要任务，${failed.length} 个失败：${firstError}`);
-      return;
-    }
-    setSubmitStatus(`已创建 ${createdCount} 个合集视频摘要任务`);
+    setSubmitStatus(result.dispatch_failures.length
+      ? `已创建 ${createdCount} 个任务，其中 ${result.dispatch_failures.length} 个未能启动`
+      : `已创建 ${createdCount} 个合集视频摘要任务`);
   }
 
   function openConfigAssist(issueKey?: string) {
@@ -1314,28 +1337,24 @@ export function App() {
             <span className="nav-icon" aria-hidden="true"><HomeIcon /></span>
             <span className="nav-copy">
               <strong>首页</strong>
-              <small>工作台总览</small>
             </span>
           </Link>
           <Link className={`nav-item ${location.pathname === "/library" ? "active" : ""}`} to="/library" aria-label="视频库" title="视频库" onClick={() => setMobileSidebarOpen(false)}>
             <span className="nav-icon" aria-hidden="true"><LibraryIcon /></span>
             <span className="nav-copy">
               <strong>视频库</strong>
-              <small>资产管理</small>
             </span>
           </Link>
           <Link className={`nav-item ${location.pathname === "/knowledge" ? "active" : ""}`} to="/knowledge" aria-label="知识库" title="知识库" onClick={() => setMobileSidebarOpen(false)}>
             <span className="nav-icon" aria-hidden="true"><KnowledgeIcon /></span>
             <span className="nav-copy">
               <strong>知识库</strong>
-              <small>检索与问答</small>
             </span>
           </Link>
           <Link className={`nav-item ${location.pathname.startsWith("/settings") ? "active" : ""}`} to="/settings" aria-label="设置" title="设置" onClick={() => setMobileSidebarOpen(false)}>
             <span className="nav-icon" aria-hidden="true"><SettingsIcon /></span>
             <span className="nav-copy">
               <strong>设置</strong>
-              <small>运行配置</small>
             </span>
           </Link>
         </nav>
@@ -1474,6 +1493,8 @@ export function App() {
                     onRefreshCollection={handleRefreshCollection}
                     onAddCollectionItems={handleAddCollectionItems}
                     onUpdateCollectionSettings={handleUpdateCollectionSettings}
+                    onUpdateCollectionView={handleUpdateCollectionView}
+                    onReorderCollectionItems={handleReorderCollectionItems}
                     onDeleteCollection={handleDeleteCollection}
                     onPromoteCollectionItem={handlePromoteCollectionItem}
                     onSummarizeCollectionItems={handleSummarizeCollectionItems}

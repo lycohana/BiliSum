@@ -120,6 +120,8 @@ class SqliteTaskRepository:
                     owner_name TEXT,
                     owner_face TEXT,
                     owner_url TEXT,
+                    view_sort_mode TEXT NOT NULL DEFAULT 'source',
+                    view_group_mode TEXT NOT NULL DEFAULT 'none',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -137,6 +139,18 @@ class SqliteTaskRepository:
             self._ensure_column(cursor, "video_collections", "folder_id", "TEXT")
             self._ensure_column(cursor, "video_collections", "folder_order", "REAL NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "video_collections", "folder_pinned", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(
+                cursor,
+                "video_collections",
+                "view_sort_mode",
+                "TEXT NOT NULL DEFAULT 'source'",
+            )
+            self._ensure_column(
+                cursor,
+                "video_collections",
+                "view_group_mode",
+                "TEXT NOT NULL DEFAULT 'none'",
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS video_collection_folder_memberships (
@@ -164,6 +178,12 @@ class SqliteTaskRepository:
                     duration REAL,
                     video_id TEXT,
                     is_promoted INTEGER NOT NULL DEFAULT 0,
+                    custom_position REAL,
+                    source_section_id TEXT,
+                    source_section_title TEXT,
+                    source_section_position INTEGER,
+                    source_present INTEGER NOT NULL DEFAULT 1,
+                    removed_from_source_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (collection_id, bvid),
@@ -172,6 +192,34 @@ class SqliteTaskRepository:
                 """
             )
             self._ensure_column(cursor, "video_collection_items", "is_promoted", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_collection_items", "custom_position", "REAL")
+            self._ensure_column(cursor, "video_collection_items", "source_section_id", "TEXT")
+            self._ensure_column(cursor, "video_collection_items", "source_section_title", "TEXT")
+            self._ensure_column(
+                cursor,
+                "video_collection_items",
+                "source_section_position",
+                "INTEGER",
+            )
+            self._ensure_column(
+                cursor,
+                "video_collection_items",
+                "source_present",
+                "INTEGER NOT NULL DEFAULT 1",
+            )
+            self._ensure_column(
+                cursor,
+                "video_collection_items",
+                "removed_from_source_at",
+                "TEXT",
+            )
+            cursor.execute(
+                """
+                UPDATE video_collection_items
+                SET custom_position = position
+                WHERE custom_position IS NULL
+                """
+            )
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO video_folder_memberships (video_id, folder_id, folder_order, folder_pinned, created_at, updated_at)
@@ -230,6 +278,21 @@ class SqliteTaskRepository:
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(task_id) REFERENCES tasks(task_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS video_collection_task_batches (
+                    collection_id TEXT NOT NULL,
+                    batch_id TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    task_ids_json TEXT NOT NULL DEFAULT '[]',
+                    dispatch_completed INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (collection_id, batch_id),
+                    FOREIGN KEY(collection_id) REFERENCES video_collections(collection_id)
                 )
                 """
             )
@@ -644,41 +707,104 @@ class SqliteTaskRepository:
             page_number=page_number,
             page_title=page_title,
         )
+        return self.create_task_record(record)
+
+    def create_task_record(self, record: TaskRecord) -> TaskRecord:
         payload = self._serialize_record(record)
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            self._insert_task_record(cursor, record, payload)
+        return record
+
+    def create_video_collection_task_batch(
+        self,
+        *,
+        collection_id: str,
+        batch_id: str,
+        request_fingerprint: str,
+        records: list[TaskRecord],
+    ) -> tuple[list[TaskRecord], bool, bool]:
+        """Atomically persist an idempotent collection task batch.
+
+        Returns ``(records, created, dispatch_completed)``. Reusing the same
+        batch id with a different request is rejected before any task is added.
+        """
+
+        now = datetime.now(timezone.utc).isoformat()
+        task_ids: list[str]
+        created = False
+        dispatch_completed = False
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            existing = cursor.execute(
+                """
+                SELECT request_fingerprint, task_ids_json, dispatch_completed
+                FROM video_collection_task_batches
+                WHERE collection_id = ? AND batch_id = ?
+                """,
+                (collection_id, batch_id),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["request_fingerprint"]) != request_fingerprint:
+                    raise ValueError(
+                        "Batch id is already associated with a different request."
+                    )
+                task_ids = [
+                    str(task_id)
+                    for task_id in json.loads(existing["task_ids_json"] or "[]")
+                ]
+                dispatch_completed = bool(existing["dispatch_completed"])
+            else:
+                serialized = [self._serialize_record(record) for record in records]
+                collection = cursor.execute(
+                    "SELECT collection_id FROM video_collections WHERE collection_id = ?",
+                    (collection_id,),
+                ).fetchone()
+                if collection is None:
+                    raise ValueError("Collection not found.")
+                task_ids = [record.task_id for record in records]
+                cursor.execute(
+                    """
+                    INSERT INTO video_collection_task_batches (
+                        collection_id, batch_id, request_fingerprint,
+                        task_ids_json, dispatch_completed, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 0, ?, ?)
+                    """,
+                    (
+                        collection_id,
+                        batch_id,
+                        request_fingerprint,
+                        json.dumps(task_ids, ensure_ascii=False),
+                        now,
+                        now,
+                    ),
+                )
+                for record, payload in zip(records, serialized, strict=True):
+                    self._insert_task_record(cursor, record, payload)
+                created = True
+
+        persisted = [self.get_task(task_id) for task_id in task_ids]
+        if any(record is None for record in persisted):
+            raise RuntimeError("Persisted collection task batch is incomplete.")
+        return (
+            [record for record in persisted if record is not None],
+            created,
+            dispatch_completed,
+        )
+
+    def mark_video_collection_task_batch_dispatched(
+        self,
+        collection_id: str,
+        batch_id: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock, sqlite_cursor(self._connection) as cursor:
             cursor.execute(
                 """
-                INSERT INTO tasks (
-                    task_id, video_id, status, task_input_json, page_number, page_title, result_json, error_code,
-                    error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                UPDATE video_collection_task_batches
+                SET dispatch_completed = 1, updated_at = ?
+                WHERE collection_id = ? AND batch_id = ?
                 """,
-                (
-                    payload["task_id"],
-                    payload["video_id"],
-                    payload["status"],
-                    payload["task_input_json"],
-                    payload["page_number"],
-                    payload["page_title"],
-                    payload["result_json"],
-                    payload["error_code"],
-                    payload["error_message"],
-                    payload["created_at"],
-                    payload["updated_at"],
-                ),
+                (now, collection_id, batch_id),
             )
-            if video_id:
-                cursor.execute(
-                    """
-                    UPDATE video_assets
-                    SET latest_task_id = ?, latest_status = ?, latest_stage = ?,
-                        latest_task_created_at = ?, latest_task_completed_at = NULL,
-                        latest_task_duration_seconds = NULL, latest_error_message = NULL, updated_at = ?
-                    WHERE video_id = ?
-                    """,
-                    (record.task_id, record.status.value, "queued", payload["created_at"], payload["updated_at"], video_id),
-                )
-        return record
 
     def list_tasks(self) -> list[TaskRecord]:
         with self._lock, sqlite_cursor(self._connection) as cursor:
@@ -1337,6 +1463,20 @@ class SqliteTaskRepository:
             is_favorite = int(current["is_favorite"] or 0) if current is not None else 0
             favorite_updated_at = current["favorite_updated_at"] if current is not None else None
             global_pinned = int(current["global_pinned"] or 0) if current is not None else 0
+            existing_item_rows = cursor.execute(
+                "SELECT bvid FROM video_collection_items WHERE collection_id = ?",
+                (collection_id,),
+            ).fetchall()
+            existing_item_bvids = {str(row["bvid"]) for row in existing_item_rows}
+            custom_position_row = cursor.execute(
+                """
+                SELECT MAX(custom_position) AS max_position
+                FROM video_collection_items
+                WHERE collection_id = ?
+                """,
+                (collection_id,),
+            ).fetchone()
+            next_custom_position = float(custom_position_row["max_position"] or 0) + 1
             cursor.execute(
                 """
                 INSERT INTO video_collections (
@@ -1390,8 +1530,12 @@ class SqliteTaskRepository:
                 cursor.execute(
                     """
                     INSERT INTO video_collection_items (
-                        collection_id, bvid, position, title, source_url, cover_url, duration, video_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        collection_id, bvid, position, custom_position, title, source_url,
+                        cover_url,
+                        duration, video_id, source_section_id, source_section_title,
+                        source_section_position, source_present, removed_from_source_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
                     ON CONFLICT(collection_id, bvid) DO UPDATE SET
                         position = excluded.position,
                         title = excluded.title,
@@ -1399,21 +1543,37 @@ class SqliteTaskRepository:
                         cover_url = excluded.cover_url,
                         duration = excluded.duration,
                         video_id = COALESCE(excluded.video_id, video_collection_items.video_id),
+                        source_section_id = excluded.source_section_id,
+                        source_section_title = excluded.source_section_title,
+                        source_section_position = excluded.source_section_position,
+                        source_present = 1,
+                        removed_from_source_at = NULL,
                         updated_at = excluded.updated_at
                     """,
                     (
                         collection_id,
                         bvid,
                         int(raw_item.get("position") or 0),
+                        (
+                            next_custom_position
+                            if bvid not in existing_item_bvids
+                            else None
+                        ),
                         str(raw_item.get("title") or bvid),
                         str(raw_item.get("source_url") or ""),
                         str(raw_item.get("cover_url") or ""),
                         raw_item.get("duration"),
                         asset["video_id"] if asset is not None else None,
+                        str(raw_item.get("source_section_id") or "").strip() or None,
+                        str(raw_item.get("source_section_title") or "").strip() or None,
+                        raw_item.get("source_section_position"),
                         now,
                         now,
                     ),
                 )
+                if bvid not in existing_item_bvids:
+                    existing_item_bvids.add(bvid)
+                    next_custom_position += 1
         return self.get_video_collection(collection_id) or VideoCollectionResponse(
             collection_id=collection_id,
             title=str(payload.get("title") or "Bilibili 合集"),
@@ -1438,15 +1598,49 @@ class SqliteTaskRepository:
             ).fetchone()
             if current is None:
                 raise ValueError("Collection not found.")
-            pending = json.loads(current["pending_items_json"] or "[]")
-            pending_by_bvid = {
-                str(item.get("bvid")): item
-                for item in pending
-                if isinstance(item, dict) and item.get("bvid")
-            }
+            # The latest source payload is authoritative for source membership.
+            # Keep historical rows, but hide missing members without touching
+            # their assets, tasks, summaries, or custom positions.
+            cursor.execute(
+                """
+                UPDATE video_collection_items
+                SET source_present = 0,
+                    removed_from_source_at = COALESCE(removed_from_source_at, ?),
+                    updated_at = ?
+                WHERE collection_id = ? AND source_present != 0
+                """,
+                (now, now, collection_id),
+            )
+            pending_by_bvid: dict[str, dict[str, object]] = {}
             for item in raw_items:
                 bvid = str(item.get("bvid") or "").strip()
-                if bvid and bvid not in existing_bvids:
+                if not bvid:
+                    continue
+                if bvid in existing_bvids:
+                    cursor.execute(
+                        """
+                        UPDATE video_collection_items
+                        SET position = ?, title = ?, source_url = ?, cover_url = ?, duration = ?,
+                            source_section_id = ?, source_section_title = ?,
+                            source_section_position = ?, source_present = 1,
+                            removed_from_source_at = NULL, updated_at = ?
+                        WHERE collection_id = ? AND bvid = ?
+                        """,
+                        (
+                            int(item.get("position") or 0),
+                            str(item.get("title") or bvid),
+                            str(item.get("source_url") or ""),
+                            str(item.get("cover_url") or ""),
+                            item.get("duration"),
+                            str(item.get("source_section_id") or "").strip() or None,
+                            str(item.get("source_section_title") or "").strip() or None,
+                            item.get("source_section_position"),
+                            now,
+                            collection_id,
+                            bvid,
+                        ),
+                    )
+                else:
                     pending_by_bvid[bvid] = item
             cursor.execute(
                 """
@@ -1488,6 +1682,15 @@ class SqliteTaskRepository:
             if collection is None:
                 return []
             pending = [item for item in json.loads(collection["pending_items_json"] or "[]") if isinstance(item, dict)]
+            custom_position_row = cursor.execute(
+                """
+                SELECT MAX(custom_position) AS max_position
+                FROM video_collection_items
+                WHERE collection_id = ?
+                """,
+                (collection_id,),
+            ).fetchone()
+            next_custom_position = float(custom_position_row["max_position"] or 0) + 1
             remaining: list[dict[str, object]] = []
             for item in pending:
                 bvid = str(item.get("bvid") or "").strip()
@@ -1503,22 +1706,32 @@ class SqliteTaskRepository:
                 cursor.execute(
                     """
                     INSERT OR IGNORE INTO video_collection_items (
-                        collection_id, bvid, position, title, source_url, cover_url, duration, video_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        collection_id, bvid, position, custom_position, title, source_url,
+                        cover_url,
+                        duration, video_id, source_section_id, source_section_title,
+                        source_section_position, source_present, removed_from_source_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
                     """,
                     (
                         collection_id,
                         bvid,
                         int(item.get("position") or 0),
+                        next_custom_position,
                         str(item.get("title") or bvid),
                         str(item.get("source_url") or ""),
                         str(item.get("cover_url") or ""),
                         item.get("duration"),
                         asset["video_id"] if asset is not None else None,
+                        str(item.get("source_section_id") or "").strip() or None,
+                        str(item.get("source_section_title") or "").strip() or None,
+                        item.get("source_section_position"),
                         now,
                         now,
                     ),
                 )
+                if cursor.rowcount:
+                    next_custom_position += 1
                 added.append(item)
             cursor.execute(
                 "UPDATE video_collections SET pending_items_json = ?, updated_at = ? WHERE collection_id = ?",
@@ -1526,15 +1739,89 @@ class SqliteTaskRepository:
             )
         return added
 
-    def update_video_collection_settings(self, collection_id: str, auto_check_on_open: bool) -> VideoCollectionResponse | None:
+    def update_video_collection_settings(
+        self,
+        collection_id: str,
+        *,
+        auto_check_on_open: bool | None = None,
+        view_sort_mode: str | None = None,
+        view_group_mode: str | None = None,
+    ) -> VideoCollectionResponse | None:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, sqlite_cursor(self._connection) as cursor:
-            cursor.execute(
-                "UPDATE video_collections SET auto_check_on_open = ?, updated_at = ? WHERE collection_id = ?",
-                (1 if auto_check_on_open else 0, now, collection_id),
-            )
-            if cursor.rowcount == 0:
+            collection = cursor.execute(
+                "SELECT collection_id FROM video_collections WHERE collection_id = ?",
+                (collection_id,),
+            ).fetchone()
+            if collection is None:
                 return None
+            updates: list[str] = []
+            values: list[object] = []
+            if auto_check_on_open is not None:
+                updates.append("auto_check_on_open = ?")
+                values.append(1 if auto_check_on_open else 0)
+            if view_sort_mode is not None:
+                updates.append("view_sort_mode = ?")
+                values.append(view_sort_mode)
+            if view_group_mode is not None:
+                updates.append("view_group_mode = ?")
+                values.append(view_group_mode)
+            if updates:
+                updates.append("updated_at = ?")
+                values.append(now)
+                values.append(collection_id)
+                cursor.execute(
+                    f"UPDATE video_collections SET {', '.join(updates)} WHERE collection_id = ?",
+                    tuple(values),
+                )
+        return self.get_video_collection(collection_id)
+
+    def reorder_video_collection_items(
+        self,
+        collection_id: str,
+        ordered_bvids: list[str],
+    ) -> VideoCollectionResponse | None:
+        normalized = [str(bvid).strip() for bvid in ordered_bvids]
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            collection = cursor.execute(
+                "SELECT collection_id FROM video_collections WHERE collection_id = ?",
+                (collection_id,),
+            ).fetchone()
+            if collection is None:
+                return None
+            if any(not bvid for bvid in normalized):
+                raise ValueError("ordered_bvids must not contain empty values.")
+            if len(normalized) != len(set(normalized)):
+                raise ValueError("ordered_bvids must not contain duplicates.")
+            rows = cursor.execute(
+                """
+                SELECT bvid
+                FROM video_collection_items
+                WHERE collection_id = ? AND source_present = 1
+                """,
+                (collection_id,),
+            ).fetchall()
+            current_bvids = {str(row["bvid"]) for row in rows}
+            if len(normalized) != len(current_bvids) or set(normalized) != current_bvids:
+                raise ValueError(
+                    "ordered_bvids must contain every current collection item exactly once."
+                )
+            cursor.executemany(
+                """
+                UPDATE video_collection_items
+                SET custom_position = ?, updated_at = ?
+                WHERE collection_id = ? AND bvid = ?
+                """,
+                [
+                    (float(index), now, collection_id, bvid)
+                    for index, bvid in enumerate(normalized, start=1)
+                ],
+            )
+            cursor.execute(
+                "UPDATE video_collections SET updated_at = ? WHERE collection_id = ?",
+                (now, collection_id),
+            )
         return self.get_video_collection(collection_id)
 
     def set_video_collection_favorite(self, collection_id: str, is_favorite: bool) -> VideoCollectionResponse | None:
@@ -1633,6 +1920,10 @@ class SqliteTaskRepository:
                     (now, *video_ids),
                 )
             cursor.execute("DELETE FROM video_collection_folder_memberships WHERE collection_id = ?", (collection_id,))
+            cursor.execute(
+                "DELETE FROM video_collection_task_batches WHERE collection_id = ?",
+                (collection_id,),
+            )
             cursor.execute("DELETE FROM video_collection_items WHERE collection_id = ?", (collection_id,))
             cursor.execute("DELETE FROM video_collections WHERE collection_id = ?", (collection_id,))
         return video_ids
@@ -1663,7 +1954,7 @@ class SqliteTaskRepository:
                 """
                 SELECT collection_id, title, source_url, cover_url, auto_check_on_open, last_checked_at, pending_items_json,
                        global_order, folder_id, folder_order, folder_pinned, global_pinned, is_favorite, favorite_updated_at,
-                       owner_mid, owner_name, owner_face, owner_url
+                       owner_mid, owner_name, owner_face, owner_url, view_sort_mode, view_group_mode
                 FROM video_collections WHERE collection_id = ?
                 """,
                 (collection_id,),
@@ -1672,8 +1963,12 @@ class SqliteTaskRepository:
                 return None
             items = cursor.execute(
                 """
-                SELECT collection_id, bvid, position, title, source_url, cover_url, duration, video_id
-                FROM video_collection_items WHERE collection_id = ? ORDER BY position ASC, bvid ASC
+                SELECT collection_id, bvid, position, custom_position, title, source_url,
+                       cover_url, duration, video_id, source_section_id, source_section_title,
+                       source_section_position
+                FROM video_collection_items
+                WHERE collection_id = ? AND source_present = 1
+                ORDER BY position ASC, bvid ASC
                 """,
                 (collection_id,),
             ).fetchall()
@@ -1683,14 +1978,28 @@ class SqliteTaskRepository:
             response_items.append(
                 VideoCollectionItemResponse(
                     position=int(row["position"] or 0),
+                    custom_position=(
+                        float(row["custom_position"])
+                        if row["custom_position"] is not None
+                        else None
+                    ),
                     bvid=str(row["bvid"]),
                     title=str(row["title"] or row["bvid"]),
                     source_url=str(row["source_url"] or ""),
                     cover_url=str(row["cover_url"] or ""),
                     duration=row["duration"],
+                    source_section_id=str(row["source_section_id"] or "") or None,
+                    source_section_title=str(row["source_section_title"] or "") or None,
+                    source_section_position=(
+                        int(row["source_section_position"])
+                        if row["source_section_position"] is not None
+                        else None
+                    ),
                     video_id=asset.video_id if asset else row["video_id"],
                     has_result=bool(asset and asset.latest_result is not None),
                     latest_status=asset.latest_status if asset else None,
+                    last_summary_at=asset.last_summary_at if asset else None,
+                    asset_updated_at=asset.updated_at if asset else None,
                     is_global_visible=bool(asset and asset.is_global_visible),
                 )
             )
@@ -1711,6 +2020,19 @@ class SqliteTaskRepository:
             ),
             default=None,
         )
+        view_sort_mode = str(collection["view_sort_mode"] or "source")
+        if view_sort_mode not in {
+            "source",
+            "source_desc",
+            "recent_summary",
+            "recent_update",
+            "duration",
+            "custom",
+        }:
+            view_sort_mode = "source"
+        view_group_mode = str(collection["view_group_mode"] or "none")
+        if view_group_mode not in {"none", "status", "source_section"}:
+            view_group_mode = "none"
         return VideoCollectionResponse(
             collection_id=str(collection["collection_id"]),
             title=str(collection["title"]),
@@ -1734,6 +2056,8 @@ class SqliteTaskRepository:
             unsummarized_count=max(0, len(response_items) - summarized_count),
             last_checked_at=datetime.fromisoformat(collection["last_checked_at"]) if collection["last_checked_at"] else None,
             auto_check_on_open=bool(collection["auto_check_on_open"]),
+            view_sort_mode=view_sort_mode,
+            view_group_mode=view_group_mode,
             items=response_items,
             new_items=pending_items,
         )
@@ -2578,6 +2902,53 @@ class SqliteTaskRepository:
             "created_at": record.created_at.isoformat(),
             "updated_at": record.updated_at.isoformat(),
         }
+
+    def _insert_task_record(
+        self,
+        cursor: sqlite3.Cursor,
+        record: TaskRecord,
+        payload: dict[str, str | None],
+    ) -> None:
+        cursor.execute(
+            """
+            INSERT INTO tasks (
+                task_id, video_id, status, task_input_json, page_number, page_title,
+                result_json, error_code, error_message, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload["task_id"],
+                payload["video_id"],
+                payload["status"],
+                payload["task_input_json"],
+                payload["page_number"],
+                payload["page_title"],
+                payload["result_json"],
+                payload["error_code"],
+                payload["error_message"],
+                payload["created_at"],
+                payload["updated_at"],
+            ),
+        )
+        if record.video_id:
+            cursor.execute(
+                """
+                UPDATE video_assets
+                SET latest_task_id = ?, latest_status = ?, latest_stage = ?,
+                    latest_task_created_at = ?, latest_task_completed_at = NULL,
+                    latest_task_duration_seconds = NULL,
+                    latest_error_message = NULL, updated_at = ?
+                WHERE video_id = ?
+                """,
+                (
+                    record.task_id,
+                    record.status.value,
+                    "queued",
+                    payload["created_at"],
+                    payload["updated_at"],
+                    record.video_id,
+                ),
+            )
 
     def _row_to_record(self, row: sqlite3.Row) -> TaskRecord:
         task_input = TaskInput.model_validate(json.loads(row["task_input_json"]))
