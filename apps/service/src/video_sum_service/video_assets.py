@@ -265,9 +265,14 @@ def fetch_bilibili_collection_payload(url: str) -> dict[str, object] | None:
     collection_referer = f"https://www.bilibili.com/video/{normalized.canonical_id}/"
     items: list[dict[str, object]] = []
     sections = season.get("sections") or []
-    for section in sections if isinstance(sections, list) else []:
+    for section_position, section in enumerate(
+        sections if isinstance(sections, list) else [],
+        start=1,
+    ):
         if not isinstance(section, dict):
             continue
+        section_id = str(section.get("id") or section.get("section_id") or "").strip()
+        section_title = str(section.get("title") or "").strip()
         episodes = section.get("episodes") or []
         for episode in episodes if isinstance(episodes, list) else []:
             if not isinstance(episode, dict):
@@ -297,6 +302,9 @@ def fetch_bilibili_collection_payload(url: str) -> dict[str, object] | None:
                         str(episode.get("cover") or ""),
                     ),
                     "duration": duration,
+                    "source_section_id": section_id or None,
+                    "source_section_title": section_title or None,
+                    "source_section_position": section_position,
                     "is_current": bvid.lower() == normalized.canonical_id.lower(),
                 }
             )

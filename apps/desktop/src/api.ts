@@ -38,6 +38,7 @@ import type {
   VideoProbeResult,
   VideoAssetSummary,
   VideoCollection,
+  VideoCollectionTaskCreateResponse,
   VideoTaskBatchRequest,
   VideoTaskBatchResponse,
 } from "./types";
@@ -275,9 +276,33 @@ export const api = {
   refreshVideoCollection(collectionId: string) {
     return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/refresh`, { method: "POST" });
   },
-  updateVideoCollectionSettings(collectionId: string, payload: { auto_check_on_open: boolean }) {
+  updateVideoCollectionSettings(collectionId: string, payload: {
+    auto_check_on_open?: boolean;
+    view_sort_mode?: import("./types").CollectionSortMode;
+    view_group_mode?: import("./types").CollectionGroupMode;
+  }) {
     return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/settings`, {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+  reorderVideoCollectionItems(collectionId: string, orderedBvids: string[]) {
+    return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/items/order`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ordered_bvids: orderedBvids }),
+    });
+  },
+  createVideoCollectionTasks(collectionId: string, payload: {
+    batch_id?: string;
+    ordered_video_ids: string[];
+    visual_note_mode?: string | null;
+    prompt_preset_id?: string | null;
+    summary_scope?: string | null;
+  }) {
+    return fetchJson<VideoCollectionTaskCreateResponse>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/tasks/batch`, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });

@@ -77,15 +77,9 @@ jobs:
 
       - name: Resolve Docker image repository
         id: image
-        env:
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
         run: |
-          if [ -n "${DOCKERHUB_REPOSITORY}" ]; then
-            repository="${DOCKERHUB_REPOSITORY}"
-          else
-            repository="${DOCKERHUB_USERNAME}/bilisum"
-          fi
+          # 固定发布到新的 Docker Hub 仓库，避免旧的仓库变量覆盖目标。
+          repository="lycohana/bilisum"
           echo "repository=$(printf '%s' "${repository}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx

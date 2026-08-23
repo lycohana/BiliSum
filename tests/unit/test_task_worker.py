@@ -662,7 +662,7 @@ def test_worker_close_for_new_work_preserves_existing_queue() -> None:
 
     worker.close_for_new_work()
     rejected_record = create_task(repository)
-    worker.submit(rejected_record)
+    assert worker.submit(rejected_record) == "rejected"
     time.sleep(0.1)
 
     runner.release(records[0].task_id)

@@ -9,3 +9,4 @@ import "./external-links.test.ts";
 import "./markdown-utils.test.ts";
 import "./video-player.test.ts";
 import "./library-model.test.ts";
+import "./collection-view-model.test.ts";

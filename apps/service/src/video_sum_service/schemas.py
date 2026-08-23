@@ -162,15 +162,21 @@ class VideoPageOptionResponse(BaseModel):
 
 class VideoCollectionItemResponse(BaseModel):
     position: int
+    custom_position: float | None = None
     bvid: str
     title: str
     source_url: str
     cover_url: str = ""
     duration: float | None = None
+    source_section_id: str | None = None
+    source_section_title: str | None = None
+    source_section_position: int | None = None
     is_current: bool = False
     video_id: str | None = None
     has_result: bool = False
     latest_status: TaskStatus | None = None
+    last_summary_at: datetime | None = None
+    asset_updated_at: datetime | None = None
     is_global_visible: bool = False
     is_new: bool = False
 
@@ -199,6 +205,15 @@ class VideoCollectionResponse(BaseModel):
     unsummarized_count: int = 0
     last_checked_at: datetime | None = None
     auto_check_on_open: bool = True
+    view_sort_mode: Literal[
+        "source",
+        "source_desc",
+        "recent_summary",
+        "recent_update",
+        "duration",
+        "custom",
+    ] = "source"
+    view_group_mode: Literal["none", "status", "source_section"] = "none"
     new_items: list[VideoCollectionItemResponse] = Field(default_factory=list)
 
 
@@ -322,7 +337,16 @@ class VideoLibraryResponse(BaseModel):
 
 
 class VideoCollectionSettingsRequest(BaseModel):
-    auto_check_on_open: bool
+    auto_check_on_open: bool | None = None
+    view_sort_mode: Literal[
+        "source",
+        "source_desc",
+        "recent_summary",
+        "recent_update",
+        "duration",
+        "custom",
+    ] | None = None
+    view_group_mode: Literal["none", "status", "source_section"] | None = None
 
 
 class VideoCollectionDeleteRequest(BaseModel):
@@ -345,6 +369,34 @@ class VideoCollectionPinRequest(BaseModel):
 
 class VideoCollectionItemsRequest(BaseModel):
     bvids: list[str] = Field(default_factory=list)
+
+
+class VideoCollectionItemsOrderRequest(BaseModel):
+    ordered_bvids: list[str] = Field(default_factory=list)
+
+
+class VideoCollectionTaskCreateRequest(BaseModel):
+    batch_id: str | None = Field(default=None, min_length=1, max_length=128)
+    ordered_video_ids: list[str] = Field(min_length=1)
+    visual_note_mode: str | None = None
+    prompt_preset_id: str | None = None
+    summary_scope: str | None = None
+
+
+class VideoCollectionTaskDispatchFailure(BaseModel):
+    task_id: str
+    video_id: str | None = None
+    error_code: str
+    error_message: str
+
+
+class VideoCollectionTaskCreateResponse(BaseModel):
+    batch_id: str
+    replayed: bool = False
+    created_tasks: list["TaskDetailResponse"] = Field(default_factory=list)
+    dispatch_failures: list[VideoCollectionTaskDispatchFailure] = Field(
+        default_factory=list
+    )
 
 
 class TaskSummaryResponse(BaseModel):

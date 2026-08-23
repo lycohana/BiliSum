@@ -140,6 +140,10 @@ export type VideoPageBatchOption = VideoPageOption & {
 
 export type VideoCollectionItem = {
   position: number;
+  custom_position?: number | null;
+  source_section_id?: string | null;
+  source_section_title?: string | null;
+  source_section_position?: number | null;
   bvid: string;
   title: string;
   source_url: string;
@@ -149,6 +153,8 @@ export type VideoCollectionItem = {
   video_id?: string | null;
   has_result?: boolean;
   latest_status?: TaskStatus | null;
+  last_summary_at?: string | null;
+  asset_updated_at?: string | null;
   is_global_visible?: boolean;
   is_new?: boolean;
 };
@@ -177,8 +183,14 @@ export type VideoCollection = {
   unsummarized_count?: number;
   last_checked_at?: string | null;
   auto_check_on_open?: boolean;
+  view_sort_mode?: CollectionSortMode;
+  view_group_mode?: CollectionGroupMode;
   new_items?: VideoCollectionItem[];
 };
+
+export type CollectionSortMode = "source" | "source_desc" | "recent_summary" | "recent_update" | "duration" | "custom";
+
+export type CollectionGroupMode = "none" | "status" | "source_section";
 
 export type VideoAssetDetail = VideoAssetSummary & {
   latest_result?: TaskResult | null;
@@ -268,6 +280,18 @@ export type VideoTaskBatchResponse = {
   created_tasks: TaskDetail[];
   skipped_pages: VideoTaskBatchPageResult[];
   conflict_pages: VideoTaskBatchPageResult[];
+};
+
+export type VideoCollectionTaskCreateResponse = {
+  batch_id: string;
+  replayed: boolean;
+  created_tasks: TaskDetail[];
+  dispatch_failures: Array<{
+    task_id: string;
+    video_id?: string | null;
+    error_code: string;
+    error_message: string;
+  }>;
 };
 
 export type TaskMindMapResponse = {
