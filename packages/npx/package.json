@@ -1,6 +1,6 @@
 {
   "name": "bilisum",
-  "version": "1.21.0-alpha.1",
+  "version": "1.21.0",
   "description": "BiliSum CLI: control the installed BiliSum app, or run standalone with its own runtime.",
   "bin": {
     "bilisum": "bin/bilisum.js"
