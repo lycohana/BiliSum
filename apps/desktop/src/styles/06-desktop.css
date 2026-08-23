@@ -2458,11 +2458,10 @@
   padding: 13px 14px 11px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-canvas) 91%, transparent);
+  background: color-mix(in srgb, var(--bg-canvas) 82%, transparent);
   box-shadow: 0 8px 24px color-mix(in srgb, #000 8%, transparent);
-  backdrop-filter: blur(14px) saturate(112%);
-  -webkit-backdrop-filter: blur(14px) saturate(112%);
-  isolation: isolate;
+  backdrop-filter: blur(22px) saturate(118%);
+  -webkit-backdrop-filter: blur(22px) saturate(118%);
   will-change: border-radius, box-shadow;
   transition:
     border-radius 220ms cubic-bezier(0.22, 1, 0.36, 1),
