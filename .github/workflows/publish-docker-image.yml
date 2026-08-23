@@ -101,12 +101,16 @@ jobs:
         run: |
           set -euo pipefail
           base="docker.io/${REPOSITORY}"
-          if [ "${PRERELEASE}" = "true" ]; then
-            # 预发布不覆盖 latest
-            echo "tags=${base}:${TAG} ${base}:${VERSION}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=${base}:${TAG} ${base}:${VERSION} ${base}:latest" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "tags<<EOF"
+            echo "${base}:${TAG}"
+            echo "${base}:${VERSION}"
+            if [ "${PRERELEASE}" != "true" ]; then
+              # 稳定版更新 latest；预发布不覆盖稳定版镜像。
+              echo "${base}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
