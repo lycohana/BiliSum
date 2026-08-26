@@ -369,6 +369,7 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             reasoning_effort=effective_settings.llm_reasoning_effort,
             provider=effective_settings.llm_provider,
             model=model,
+            base_url=base_url,
         )
         request_json["model"] = normalize_openai_compatible_model_name(model)
     elif use_anthropic:
@@ -391,6 +392,7 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             reasoning_effort=effective_settings.llm_reasoning_effort,
             provider=effective_settings.llm_provider,
             model=model,
+            base_url=base_url,
         )
 
     probe_timeout = 120 if test_scope == "visual" else 30

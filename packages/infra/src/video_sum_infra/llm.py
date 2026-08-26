@@ -18,6 +18,7 @@ def apply_openai_reasoning_settings(
     reasoning_effort: str | None,
     provider: str | None = None,
     model: str | None = None,
+    base_url: str | None = None,
 ) -> dict[str, object]:
     """Add reasoning controls only for model families known to accept them.
 
@@ -26,12 +27,26 @@ def apply_openai_reasoning_settings(
     arbitrary endpoint can turn an otherwise valid request into a 400. MiMo
     is the currently supported model family; unknown providers/models keep
     the original payload unchanged until their request schema is verified.
+
+    ``enable_thinking`` and ``chat_template_kwargs`` are legacy local-model
+    options. Gemini's strict OpenAI-compatible endpoint rejects these fields,
+    so they are removed at this boundary for Gemini requests while existing
+    non-Gemini compatibility behavior is preserved.
     """
     next_payload = dict(payload)
     normalized_provider = str(provider or "").strip().lower().replace("_", "-")
     normalized_model = normalize_openai_compatible_model_name(
         str(model or next_payload.get("model") or "")
     ).lower()
+    normalized_base_url = str(base_url or "").strip().lower()
+    normalized_model_for_match = normalized_model.removeprefix("models/")
+    is_gemini = (
+        normalized_model_for_match.startswith("gemini")
+        or "generativelanguage.googleapis.com" in normalized_base_url
+    )
+    if is_gemini:
+        next_payload.pop("enable_thinking", None)
+        next_payload.pop("chat_template_kwargs", None)
     supports_controls = (
         normalized_provider in {"mimo", "xiaomi-mimo"}
         or normalized_model.startswith(("mimo-", "mimo_"))

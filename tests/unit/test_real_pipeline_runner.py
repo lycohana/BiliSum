@@ -991,7 +991,7 @@ def test_llm_json_request_reads_openai_nested_cached_tokens(
     assert result["llm_prompt_cache_creation_tokens"] == 5
 
 
-def test_llm_summary_payload_disables_thinking_in_chat_template(tmp_path: Path) -> None:
+def test_llm_summary_payload_keeps_legacy_thinking_options_for_compatibility(tmp_path: Path) -> None:
     runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path, llm_model="test-model"))
 
     payload = runner._build_llm_summary_payload(
@@ -1003,6 +1003,64 @@ def test_llm_summary_payload_disables_thinking_in_chat_template(tmp_path: Path) 
     assert "response_format" not in payload  # 已移除：本地模型不支持 json_object 模式
     assert payload["enable_thinking"] is False
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_gemini_openai_compatible_request_omits_legacy_thinking_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path,
+            llm_enabled=True,
+            llm_api_key="test-key",
+            llm_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            llm_model="gemini-2.5-pro",
+        )
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": '{"overview":"ok"}'}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
+            calls.append({"url": url, "headers": headers, "json": json})
+            return FakeResponse()
+
+    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
+
+    result = runner._request_llm_json(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        payload={
+            "model": "gemini-2.5-pro",
+            "messages": [],
+            "enable_thinking": False,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+    )
+
+    assert result["overview"] == "ok"
+    sent_payload = calls[0]["json"]
+    assert isinstance(sent_payload, dict)
+    assert sent_payload["model"] == "gemini-2.5-pro"
+    assert "enable_thinking" not in sent_payload
+    assert "chat_template_kwargs" not in sent_payload
 
 
 def test_full_summary_context_uses_canonical_transcript_and_anchor_only_segments(
