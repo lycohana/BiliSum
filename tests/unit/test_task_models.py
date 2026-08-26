@@ -48,7 +48,12 @@ def test_llm_reasoning_settings_have_compatible_defaults_and_normalize_invalid_v
 
 
 def test_llm_reasoning_controls_are_omitted_for_unknown_openai_compatible_models() -> None:
-    payload = {"model": "generic-model", "messages": []}
+    payload = {
+        "model": "generic-model",
+        "messages": [],
+        "enable_thinking": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
 
     unchanged = apply_openai_reasoning_settings(
         payload,
@@ -66,6 +71,8 @@ def test_llm_reasoning_controls_are_omitted_for_unknown_openai_compatible_models
         thinking_type="disabled",
         reasoning_effort="max",
     )
+    assert mimo_payload["enable_thinking"] is False
+    assert mimo_payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert mimo_payload["thinking"] == {"type": "disabled"}
     assert mimo_payload["reasoning_effort"] == "max"
 

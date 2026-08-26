@@ -2781,6 +2781,7 @@ class RealPipelineRunner(PipelineRunner):
                 reasoning_effort=self._settings.llm_reasoning_effort,
                 provider=self._settings.llm_provider,
                 model=str(payload.get("model") or ""),
+                base_url=base_url,
             )
         payload["model"] = (
             str(payload.get("model") or "").strip()
@@ -4274,6 +4275,7 @@ P 数索引：
                     reasoning_effort=self._settings.llm_reasoning_effort,
                     provider=self._settings.llm_provider,
                     model=model,
+                    base_url=base_url,
                 )
                 payload["model"] = normalize_openai_compatible_model_name(model)
                 request_payload = payload
@@ -4556,6 +4558,7 @@ P 数索引：
                 reasoning_effort=self._settings.llm_reasoning_effort,
                 provider=self._settings.llm_provider,
                 model=model,
+                base_url=base_url,
             )
             request_url = f"{base_url}/chat/completions"
             request_payload = openai_payload

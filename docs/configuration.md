@@ -93,6 +93,8 @@ VIDEO_SUM_YTDLP_COOKIES_FILE=
 | `VIDEO_SUM_SUMMARY_CHUNK_CONCURRENCY` | `2` | 分块并发 |
 | `VIDEO_SUM_SUMMARY_CHUNK_RETRY_COUNT` | `2` | 分块重试 |
 
+Gemini 可通过 Google 的 OpenAI-compatible 端点使用：将 Provider 设为 `openai-compatible`，Base URL 填写 `https://generativelanguage.googleapis.com/v1beta/openai`，模型名填写实际 Gemini 模型（例如 `gemini-2.5-pro`）。发送到 Gemini 时不会携带本地模型专用的 `enable_thinking` 和 `chat_template_kwargs` 字段。
+
 ### 视觉模型 / 图文笔记
 
 | 变量 | 默认 | 说明 |
