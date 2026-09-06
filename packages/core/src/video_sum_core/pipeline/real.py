@@ -181,6 +181,75 @@ def _extract_json_object_text(value: str) -> str:
     return text
 
 
+def _parse_llm_response_json(response: httpx.Response) -> dict[str, object]:
+    """Parse an LLM response body, tolerating SSE/NDJSON framing.
+
+    Some OpenAI-compatible gateways (e.g. Ollama Cloud) always
+    return SSE chunks (``data: {...}`` lines plus a trailing ``data: [DONE]``)
+    even when the client did not request streaming. ``response.json()`` then
+    fails with ``Extra data``. This helper first tries the plain JSON path,
+    then falls back to concatenating the ``delta.content`` pieces from SSE
+    chunks into a single chat-completion-shaped body.
+    """
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            return payload
+    except ValueError:
+        pass
+
+    text = response.text
+    if not text.strip():
+        raise VideoSumError("LLM returned an empty response body.")
+
+    # Some gateways append a trailing ``data: [DONE]`` line to an otherwise
+    # plain JSON body (single object, not chunked). Try stripping that tail
+    # before falling back to full SSE chunk parsing.
+    done_marker = text.rfind("data: [DONE]")
+    if done_marker != -1:
+        candidate = text[:done_marker].strip()
+        if candidate.endswith("}"):
+            try:
+                payload = json.loads(candidate)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+    content_parts: list[str] = []
+    usage: dict[str, object] | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        choices = chunk.get("choices")
+        if isinstance(choices, list) and choices:
+            delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+            if isinstance(delta, dict):
+                piece = delta.get("content")
+                if isinstance(piece, str) and piece:
+                    content_parts.append(piece)
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+
+    if not content_parts:
+        raise VideoSumError("LLM returned an SSE body with no readable content.")
+
+    return {
+        "choices": [{"message": {"role": "assistant", "content": "".join(content_parts)}}],
+        "usage": usage or {},
+    }
+
+
 def _should_retry_llm_transport_error(error: Exception) -> bool:
     return isinstance(
         error,
@@ -2844,7 +2913,7 @@ class RealPipelineRunner(PipelineRunner):
                 ) from exc
             raise VideoSumError(f"LLM request failed with status {status_code}: {detail}") from exc
         logger.info("llm json response status=%s model=%s", response.status_code, self._settings.llm_model)
-        response_json = response.json()
+        response_json = _parse_llm_response_json(response)
         content = self._extract_llm_response_content(response_json)
         parsed = self._parse_llm_json_content(content)
         usage_payload = response_json.get("usage")
