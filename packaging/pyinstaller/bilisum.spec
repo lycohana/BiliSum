@@ -104,6 +104,9 @@ if BIN_DIR.exists():
 # 简化元数据复制，移除非必要的包元数据
 datas += copy_metadata("pydantic")
 datas += copy_metadata("pydantic-settings")
+# AppInfo reads the application distribution version in installed/frozen builds.
+# The copy in runtime/base is not on the frozen service's import path.
+datas += copy_metadata("video-sum-service")
 # probe_script.py is read at runtime by detect_environment() — not imported
 datas += [(str(ROOT / "apps" / "service" / "src" / "video_sum_service" / "probe_script.py"), "video_sum_service")]
 

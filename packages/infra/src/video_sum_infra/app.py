@@ -16,10 +16,11 @@ class AppInfo:
 
 def _resolve_version() -> str:
     version_file = Path(__file__).resolve().parents[4] / "VERSION"
+    frozen = bool(getattr(sys, "frozen", False))
 
     # In local development, prefer the workspace VERSION file so the UI reflects
     # the checked-out repo version immediately without reinstalling packages.
-    if version_file.exists() and not _is_running_from_installed_dist():
+    if not frozen and version_file.exists() and not _is_running_from_installed_dist():
         return version_file.read_text(encoding="utf-8").strip()
 
     for distribution_name in ("video-sum-service", "video-sum-infra"):
@@ -28,7 +29,7 @@ def _resolve_version() -> str:
         except metadata.PackageNotFoundError:
             continue
 
-    if version_file.exists():
+    if not frozen and version_file.exists():
         return version_file.read_text(encoding="utf-8").strip()
     return "0.0.0"
 

@@ -179,6 +179,14 @@ jobs:
           VIDEO_SUM_FFMPEG_DIR: ${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}
         run: npm run package:win
 
+      - name: Validate packaged backend version and cold startup
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          $backend = Join-Path $env:GITHUB_WORKSPACE "dist/desktop/win-unpacked/resources/backend/BiliSum/BiliSum.exe"
+          python packaging/desktop/validate_frozen_backend.py --backend "$backend" --version "$env:RELEASE_VERSION"
+
       - name: Collect release assets
         shell: pwsh
         env:
@@ -310,6 +318,18 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm --prefix apps/desktop run package:mac -- --${{ matrix.arch }}
+
+      - name: Validate packaged backend version and cold startup
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          backend="$(find "$GITHUB_WORKSPACE/dist" -type f -path '*/Contents/Resources/backend/BiliSum/BiliSum' -print -quit)"
+          if [ -z "$backend" ]; then
+            echo "Packaged backend was not found under the app bundle." >&2
+            exit 1
+          fi
+          python packaging/desktop/validate_frozen_backend.py --backend "$backend" --version "$RELEASE_VERSION"
 
       - name: Collect macOS release assets
         env:
