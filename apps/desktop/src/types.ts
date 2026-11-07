@@ -1,4 +1,4 @@
-export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "paused";
 export type PageAggregateStatus = "not_started" | "in_progress" | "completed" | "failed";
 
 export type TimelineItem = {
@@ -98,6 +98,7 @@ export type VideoAssetSummary = {
   folder_order: number;
   global_pinned: boolean;
   folder_pinned: boolean;
+  is_global_visible?: boolean;
   pages: VideoPageOption[];
   created_at: string;
   updated_at: string;
@@ -156,6 +157,14 @@ export type VideoCollectionItem = {
   last_summary_at?: string | null;
   asset_updated_at?: string | null;
   is_global_visible?: boolean;
+  is_favorite?: boolean;
+  favorite_updated_at?: string | null;
+  folder_id?: string | null;
+  folder_ids?: string[];
+  global_order?: number;
+  folder_order?: number;
+  global_pinned?: boolean;
+  folder_pinned?: boolean;
   is_new?: boolean;
 };
 
@@ -163,6 +172,8 @@ export type VideoCollection = {
   collection_id: string;
   title: string;
   cover_url: string;
+  source_cover_url?: string;
+  custom_cover_url?: string;
   global_order: number;
   folder_order?: number;
   folder_id?: string | null;
@@ -233,6 +244,7 @@ export type PromptMatchResult = {
 };
 
 export type TaskSummary = {
+  scheduled_at?: string | null;
   task_id: string;
   video_id?: string | null;
   status: TaskStatus;
@@ -268,6 +280,7 @@ export type VideoTaskBatchPageResult = {
 };
 
 export type VideoTaskBatchRequest = {
+  scheduled_at?: string | null;
   page_numbers: number[];
   confirm?: boolean;
   prompt_preset_id?: string | null;
@@ -718,6 +731,60 @@ export type StorageOverview = {
     cacheCandidateCount: number;
     cacheCandidateBytes: number;
   };
+};
+
+export type MigrationExternalKey = "data" | "cache" | "tasks" | "output";
+export type MigrationItemKey = "app-root" | MigrationExternalKey;
+
+export type StorageMigrationPreview = {
+  sourceRoot: string;
+  targetRoot: string;
+  environmentManaged: boolean;
+  items: Array<{
+    key: MigrationItemKey;
+    label: string;
+    path: string;
+    exists: boolean;
+    sizeBytes: number;
+    selected: boolean;
+    required: boolean;
+    carriedByRoot: boolean;
+    selectable: boolean;
+    reason: string | null;
+    errorDetails: string | null;
+    destinationPath: string | null;
+    copySourceKey: MigrationItemKey | null;
+    includedInLabel: string | null;
+  }>;
+  requiredBytes: number;
+  availableBytes: number | null;
+  blockers: string[];
+  canMigrate: boolean;
+  warnings: string[];
+  excludedPaths: string[];
+};
+
+export type StorageMigrationProgress = {
+  phase: "preparing" | "copying" | "verifying" | "switching" | "starting" | "rollback" | "complete" | "failed";
+  message: string;
+  copiedBytes: number;
+  totalBytes: number;
+};
+
+export type StorageMigrationResult = {
+  success: boolean;
+  sourceRoot: string;
+  targetRoot: string;
+  error: string | null;
+  rolledBack: boolean;
+  serviceRestored: boolean;
+};
+
+export type StorageMigrationCleanupResult = {
+  deletedFiles: number;
+  skippedFiles: number;
+  removedDirectories: number;
+  retainedPaths: string[];
 };
 
 export type KnowledgeTagRecord = {

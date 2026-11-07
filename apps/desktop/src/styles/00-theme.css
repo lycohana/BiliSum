@@ -24,6 +24,9 @@
 
   --bg-accent: rgba(251, 114, 153, 0.06);
   --bg-accent-strong: rgba(251, 114, 153, 0.1);
+  --update-text: var(--brand-800);
+  --update-bg: color-mix(in srgb, var(--bg-card) 92%, var(--brand-500) 8%);
+  --update-hover-bg: color-mix(in srgb, var(--bg-card) 86%, var(--brand-500) 14%);
   --bg-info: rgba(86, 126, 255, 0.06);
   --bg-success: rgba(34, 168, 102, 0.06);
   --bg-warning: rgba(213, 137, 24, 0.06);
@@ -121,6 +124,9 @@
 
   --bg-accent: rgba(251, 114, 153, 0.1);
   --bg-accent-strong: rgba(251, 114, 153, 0.16);
+  --update-text: var(--brand-300);
+  --update-bg: color-mix(in srgb, var(--bg-card) 86%, var(--brand-500) 14%);
+  --update-hover-bg: color-mix(in srgb, var(--bg-card) 80%, var(--brand-500) 20%);
   --bg-info: rgba(86, 126, 255, 0.1);
   --bg-success: rgba(34, 168, 102, 0.1);
   --bg-warning: rgba(213, 137, 24, 0.1);

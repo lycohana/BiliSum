@@ -51,6 +51,7 @@ export function taskStatusLabel(status?: TaskStatus | null) {
     running: "处理中",
     completed: "已完成",
     failed: "失败",
+    paused: "转写已保存，等待续跑",
     cancelled: "已取消",
   };
   return (status && labels[status]) || "未开始";

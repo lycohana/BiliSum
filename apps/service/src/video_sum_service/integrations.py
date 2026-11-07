@@ -413,11 +413,13 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
             detail=f"LLM 测试失败：{detail}",
         )
 
-    try:
-        body = response.json()
-    except ValueError:
-        body = None
+    from video_sum_core.llm_response import parse_llm_response_json
+    from video_sum_core.errors import VideoSumError
 
+    try:
+        body = parse_llm_response_json(response)
+    except (ValueError, VideoSumError) as exc:
+        raise HTTPException(status_code=502, detail=f"LLM 测试失败：无法读取响应：{exc}") from exc
     preview = extract_llm_message_content(body)
     if not preview:
         raise HTTPException(status_code=502, detail="LLM 测试失败：接口已连通，但没有返回可读取的消息内容。")

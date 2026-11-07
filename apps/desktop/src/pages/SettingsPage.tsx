@@ -19,7 +19,7 @@ import { api } from "../api";
 import { SearchIcon } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { DependencyTree } from "../components/DependencyTree";
-import type { EnvironmentInfo, PromptPreset, PromptPresetCreateRequest, RuntimeStatus, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageOverview, TaskSummary } from "../types";
+import type { EnvironmentInfo, MigrationExternalKey, PromptPreset, PromptPresetCreateRequest, RuntimeStatus, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageMigrationPreview, StorageMigrationProgress, StorageOverview, TaskSummary } from "../types";
 
 import { formatDateTime, taskStatusLabel } from "../utils";
 import { buildKnowledgeDependencyTree, buildAsrDependencyTree } from "../utils/dependencyTreeBuilder";
@@ -166,6 +166,7 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "files", targetKey: "cache_dir", title: "缓存目录", description: "临时缓存文件保存位置。", keywords: ["cache", "缓存", "临时文件"] },
   { category: "files", targetKey: "tasks_dir", title: "任务目录", description: "任务历史和结果文件位置。", keywords: ["task", "tasks", "任务", "历史"] },
   { category: "files", targetKey: "output_dir", title: "输出目录", description: "Markdown / Obsidian 导出目录。", keywords: ["output", "导出", "obsidian", "markdown", "笔记"] },
+  { category: "files", targetKey: "storage_migration", title: "迁移存储位置", description: "迁移托管 Python 运行环境和应用数据到其他磁盘。", keywords: ["迁移", "移动", "C盘", "磁盘", "运行环境", "存储"] },
   { category: "files", targetKey: "storage_cleanup", title: "空间清理", description: "查看占用并清理缓存和孤儿任务。", keywords: ["清理", "空间", "缓存", "孤儿", "storage"] },
   { category: "transcription", targetKey: "transcription_provider", title: "转写方式", description: "选择云端 ASR 或本地 ASR。", keywords: ["asr", "转写", "语音识别", "whisper", "本地"] },
   { category: "transcription", targetKey: "siliconflow_asr_base_url", title: "SiliconFlow Base URL", description: "云端转写 API 地址。", keywords: ["siliconflow", "base url", "api", "硅基流动"] },
@@ -423,6 +424,13 @@ export function SettingsPage({
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageCleaning, setStorageCleaning] = useState(false);
   const [storageStatus, setStorageStatus] = useState("");
+  const [storageMigrationTarget, setStorageMigrationTarget] = useState("");
+  const [storageMigrationPreview, setStorageMigrationPreview] = useState<StorageMigrationPreview | null>(null);
+  const [storageMigrationSelection, setStorageMigrationSelection] = useState<MigrationExternalKey[]>(["data", "cache", "tasks"]);
+  const [storageMigrationProgress, setStorageMigrationProgress] = useState<StorageMigrationProgress | null>(null);
+  const [storageMigrationBusy, setStorageMigrationBusy] = useState(false);
+  const [storageMigrationStatus, setStorageMigrationStatus] = useState("");
+  const [storageMigrationCleanupPending, setStorageMigrationCleanupPending] = useState(false);
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("overview");
   const [pendingFocusTarget, setPendingFocusTarget] = useState<string | null>(null);
   const [activeFocusTarget, setActiveFocusTarget] = useState<string | null>(null);
@@ -488,7 +496,9 @@ export function SettingsPage({
   }
 
   function startNewPreset() {
-    setPresetForm(emptyPresetForm());
+    const base = promptPresets.find((preset) => preset.id === "general");
+    setPresetForm({ ...emptyPresetForm(), system_prompt: base?.system_prompt || "",
+      user_prompt_template: base?.user_prompt_template || "" });
     setShowNewPresetForm(true);
     setPresetStatus("");
   }
@@ -514,6 +524,7 @@ export function SettingsPage({
     setActiveCategory("prompts");
     setPresetsSectionOpen(true);
     setShowNewPresetForm(false);
+    if (presetId === "__new__") startNewPreset();
     setPresetDeleteConfirm(null);
     setSettingsSearchQuery("");
     setPresetStatus(targetPreset ? `已定位到「${targetPreset.name}」` : "已打开 Prompt 预设库");
@@ -537,7 +548,8 @@ export function SettingsPage({
     if (!presetForm.name.trim() || !presetForm.system_prompt.trim() || !presetForm.user_prompt_template.trim()) return;
     setPresetSaveBusy(true);
     setPresetStatus("保存中...");
-    api.createPromptPreset(presetForm).then(() => {
+    api.createPromptPreset(presetForm).then((created) => {
+      window.localStorage.setItem("bilisum.promptPresetId", created.id);
       setPresetStatus("保存成功");
       setShowNewPresetForm(false);
       setExpandedPresetIds(new Set());
@@ -1002,6 +1014,151 @@ export function SettingsPage({
     }
   }
 
+  async function refreshStorageMigrationPreview(
+    targetRoot = storageMigrationTarget,
+    selectedExternalKeys?: MigrationExternalKey[],
+  ) {
+    if (!window.desktop?.fileManager || !targetRoot.trim()) {
+      setStorageMigrationStatus("请选择新的存储目录。 ");
+      return;
+    }
+    try {
+      setStorageMigrationBusy(true);
+      setStorageMigrationStatus("");
+      const preview = await window.desktop.fileManager.previewMigration({
+        targetRoot,
+        selectedExternalKeys,
+      });
+      setStorageMigrationPreview(preview);
+      if (!selectedExternalKeys) {
+        setStorageMigrationSelection(preview.items
+          .filter((item) => item.selectable && item.selected)
+          .map((item) => item.key as MigrationExternalKey));
+      }
+    } catch (error) {
+      setStorageMigrationPreview(null);
+      setStorageMigrationStatus(error instanceof Error ? error.message : "读取迁移预览失败。 ");
+    } finally {
+      setStorageMigrationBusy(false);
+    }
+  }
+
+  async function chooseStorageMigrationTarget() {
+    if (!window.desktop?.dialog) {
+      setStorageMigrationStatus("当前环境不支持选择迁移目录。 ");
+      return;
+    }
+    try {
+      const selected = await window.desktop.dialog.pickDirectory(
+        storageMigrationTarget || undefined,
+        "选择新的 BiliSum 存储目录",
+      );
+      if (!selected) return;
+      setStorageMigrationTarget(selected);
+      setStorageMigrationPreview(null);
+      setStorageMigrationSelection(["data", "cache", "tasks"]);
+      await refreshStorageMigrationPreview(selected);
+    } catch (error) {
+      setStorageMigrationStatus(error instanceof Error ? error.message : "选择迁移目录失败。 ");
+    }
+  }
+
+  async function toggleStorageMigrationLocation(key: MigrationExternalKey, checked: boolean) {
+    const nextSelection = checked
+      ? Array.from(new Set([...storageMigrationSelection, key]))
+      : storageMigrationSelection.filter((item) => item !== key);
+    setStorageMigrationSelection(nextSelection);
+    await refreshStorageMigrationPreview(storageMigrationTarget, nextSelection);
+  }
+
+  async function cleanupMigratedStorage(confirmFirst = true) {
+    if (!window.desktop?.fileManager || !storageMigrationCleanupPending) return;
+    if (confirmFirst && !window.confirm("将只清理仍与新位置校验一致的已迁移文件；有变化或仍包含其他文件的旧目录会保留。继续清理吗？")) {
+      return;
+    }
+    try {
+      setStorageMigrationBusy(true);
+      const result = await window.desktop.fileManager.cleanupMigratedSource();
+      setStorageMigrationCleanupPending(false);
+      setStorageMigrationStatus(
+        `旧位置清理完成：删除 ${result.deletedFiles} 个已迁移文件，移除 ${result.removedDirectories} 个空目录，保留 ${result.skippedFiles} 个已变化或无法校验的文件。`,
+      );
+      await refreshStorageOverview();
+    } catch (error) {
+      setStorageMigrationStatus(error instanceof Error ? error.message : "清理旧位置失败；旧文件仍保留。 ");
+    } finally {
+      setStorageMigrationBusy(false);
+    }
+  }
+
+  async function keepMigratedStorageSource() {
+    if (!window.desktop?.fileManager || !storageMigrationCleanupPending) return;
+    try {
+      await window.desktop.fileManager.keepMigratedSource();
+      setStorageMigrationCleanupPending(false);
+      setStorageMigrationStatus("已保留旧位置的文件副本。 ");
+    } catch (error) {
+      setStorageMigrationStatus(error instanceof Error ? error.message : "无法记录旧副本保留状态。 ");
+    }
+  }
+
+  async function startStorageMigration() {
+    if (!window.desktop?.fileManager || !storageMigrationPreview?.canMigrate || storageMigrationBusy) return;
+    if (isDirty) {
+      setStorageMigrationStatus("请先保存当前设置再迁移；预览读取的是服务端已保存的目录配置。 ");
+      return;
+    }
+    const selectedExternalKeys = storageMigrationPreview.items
+      .filter((item) => item.selectable && item.selected)
+      .map((item) => item.key as MigrationExternalKey);
+    const confirmed = window.confirm(
+      `将 BiliSum 托管运行时和应用数据迁移到：\n${storageMigrationPreview.targetRoot}\n\n本次预计复制 ${formatStorageSize(storageMigrationPreview.requiredBytes)}。迁移期间服务会停止；旧位置暂不删除。继续吗？`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setStorageMigrationBusy(true);
+      setStorageMigrationStatus("");
+      setStorageMigrationProgress({
+        phase: "preparing",
+        message: "正在复核迁移条件…",
+        copiedBytes: 0,
+        totalBytes: storageMigrationPreview.requiredBytes,
+      });
+      const result = await window.desktop.fileManager.startMigration({
+        targetRoot: storageMigrationPreview.targetRoot,
+        selectedExternalKeys,
+      });
+      if (!result.success) {
+        setStorageMigrationCleanupPending(false);
+        setStorageMigrationStatus(
+          `${result.error || "存储迁移失败。"}${result.serviceRestored ? "\n旧位置服务已重新启动，源文件保持不变。" : "\n旧位置已恢复，但服务未能自动启动；可稍后从桌面端重试启动。"}`,
+        );
+        onRefresh();
+        return;
+      }
+
+      setStorageMigrationTarget(result.targetRoot);
+      setStorageMigrationCleanupPending(true);
+      setStorageMigrationStatus("迁移完成，新位置的服务和托管运行环境已通过启动验证；旧文件仍完整保留。 ");
+      onRefresh();
+      await refreshStorageOverview();
+
+      const cleanOldCopy = window.confirm(
+        `新位置已通过启动验证。是否现在清理旧位置中已迁移且未发生变化的文件？\n\n旧位置：${result.sourceRoot}\n新位置：${result.targetRoot}\n\n未迁移、已变化或仍非空的内容会保留。`,
+      );
+      if (cleanOldCopy) {
+        await cleanupMigratedStorage(false);
+      } else {
+        setStorageMigrationStatus("旧位置副本已保留。你可以之后再清理，或明确选择继续保留。 ");
+      }
+    } catch (error) {
+      setStorageMigrationStatus(error instanceof Error ? error.message : "存储迁移失败；源文件保持不变。 ");
+    } finally {
+      setStorageMigrationBusy(false);
+    }
+  }
+
   async function refreshTaskList() {
     try {
       setTaskListLoading(true);
@@ -1148,6 +1305,13 @@ export function SettingsPage({
     }, 100);
     return () => window.clearTimeout(timer);
   }, [activeCategory, refreshStorageOverview]);
+
+  useEffect(() => {
+    if (!window.desktop?.fileManager) return;
+    const fileManager = window.desktop.fileManager;
+    void fileManager.hasPendingMigrationCleanup().then(setStorageMigrationCleanupPending).catch(() => undefined);
+    return fileManager.onMigrationProgress(setStorageMigrationProgress);
+  }, []);
 
   useEffect(() => {
     if (!focusIssueRequest || !form) {
@@ -1298,6 +1462,9 @@ export function SettingsPage({
   const cleanupReady = Boolean(serviceOnline && storageOverview?.cleanup.serviceAvailable);
   const cleanupTargetBytes = (storageOverview?.cleanup.orphanTaskBytes || 0) + (storageOverview?.cleanup.cacheCandidateBytes || 0);
   const cleanupTargetCount = (storageOverview?.cleanup.orphanTaskCount || 0) + (storageOverview?.cleanup.cacheCandidateCount || 0);
+  const storageMigrationPercent = storageMigrationProgress?.totalBytes
+    ? Math.max(0, Math.min(100, Math.round((storageMigrationProgress.copiedBytes / storageMigrationProgress.totalBytes) * 100)))
+    : storageMigrationProgress?.phase === "complete" ? 100 : 0;
 
   function handleConfigIssueClick(issueKey: string) {
     const target = resolveIssueTarget(issueKey);
@@ -2575,6 +2742,7 @@ export function SettingsPage({
               <header className="settings-category-header">
                 <h2>输出与文件</h2>
                 <p>管理导出位置、应用数据目录和本地空间占用。</p>
+                <button className="secondary-button" type="button" onClick={() => setPendingFocusTarget("storage_migration")}>迁移运行环境与数据</button>
               </header>
               <div className="settings-form-group">
                 <label className="settings-input-group" ref={registerFocusTarget("data_dir") as (node: HTMLLabelElement | null) => void}>
@@ -2597,6 +2765,143 @@ export function SettingsPage({
                   <input className="settings-input-field" value={String(form.output_dir)} onChange={(e) => updateForm({ ...form, output_dir: e.target.value })} />
                   <span className="settings-input-caption">手动导出的 Markdown / Obsidian 笔记会写入这里。</span>
                 </label>
+              </div>
+            </section>
+          )}
+
+          {(activeCategory === "files" || activeCategory === "runtime") && (
+            <section className="settings-category-section">
+              <header className="settings-category-header">
+                <h2 ref={registerFocusTarget("storage_migration") as (node: HTMLHeadingElement | null) => void}>迁移存储位置</h2>
+                <p>迁移 BiliSum 托管运行时和应用数据，不会移动桌面应用本体。迁移验证前，旧位置中的文件不会被删除。</p>
+              </header>
+
+              <div className="settings-storage-panel">
+                <div className="settings-storage-card-head">
+                  <div>
+                    <span className="settings-update-label">新存储根目录</span>
+                    <strong>{storageMigrationTarget || "尚未选择"}</strong>
+                  </div>
+                  <button className="secondary-button" type="button" disabled={storageMigrationBusy} onClick={() => void chooseStorageMigrationTarget()}>
+                    选择目标目录
+                  </button>
+                </div>
+                {storageMigrationPreview ? (
+                  <>
+                    <div className="settings-storage-meta">
+                      <span>当前根目录：{storageMigrationPreview.sourceRoot}</span>
+                      <span>预计复制 {formatStorageSize(storageMigrationPreview.requiredBytes)}</span>
+                      <span>
+                        目标盘可用 {storageMigrationPreview.availableBytes === null
+                          ? "无法读取"
+                          : formatStorageSize(storageMigrationPreview.availableBytes)}
+                      </span>
+                    </div>
+                    <div className="settings-storage-grid settings-migration-grid">
+                      {storageMigrationPreview.items.map((item) => (
+                        item.key === "app-root" ? (
+                          <article key={item.key} className="settings-storage-card">
+                            <div className="settings-storage-card-head">
+                              <div>
+                                <span className="settings-update-label">必需迁移单元</span>
+                                <strong>{item.label} · {formatStorageSize(item.sizeBytes)}</strong>
+                              </div>
+                              <span className="helper-chip">始终迁移</span>
+                            </div>
+                            <p className="settings-storage-path">{item.path}</p>
+                            {item.reason ? <p className="settings-input-caption">{item.reason}</p> : null}
+                            {item.errorDetails ? <details className="settings-migration-details"><summary>查看目录详情</summary><p>{item.errorDetails}</p></details> : null}
+                          </article>
+                        ) : (
+                          <article key={item.key} className="settings-storage-card">
+                            <div className="settings-storage-card-head">
+                              <div>
+                                <span className="settings-update-label">{item.label}</span>
+                                <strong>{item.includedInLabel ? "空间已计入上级目录" : item.selected ? formatStorageSize(item.sizeBytes) : "保留原位置"}</strong>
+                              </div>
+                              <input
+                                type="checkbox"
+                                aria-label={`迁移${item.label}`}
+                                checked={item.selected}
+                                disabled={!item.selectable || storageMigrationBusy}
+                                onChange={(event) => void toggleStorageMigrationLocation(item.key as MigrationExternalKey, event.target.checked)}
+                              />
+                            </div>
+                            <p className="settings-storage-path">{item.path}</p>
+                            <div className="settings-storage-meta">
+                              <span>{item.includedInLabel ? `随${item.includedInLabel}迁移，不重复复制` : item.selected ? "已选择迁移" : "此目录不参与复制和旧文件清理"}</span>
+                              {!item.exists ? <span>目录当前不存在</span> : null}
+                            </div>
+                            {item.destinationPath ? <p className="settings-storage-path">迁移到：{item.destinationPath}</p> : null}
+                            {item.reason ? <p className="settings-input-caption">{item.reason}</p> : null}
+                            {item.errorDetails ? <details className="settings-migration-details" onClick={(event) => event.stopPropagation()}><summary>查看目录详情</summary><p>{item.errorDetails}</p></details> : null}
+                          </article>
+                        )
+                      ))}
+                    </div>
+                    {storageMigrationPreview.warnings?.length ? (
+                      <div className="settings-migration-notes" role="note">
+                        {storageMigrationPreview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                      </div>
+                    ) : null}
+                    {storageMigrationPreview.environmentManaged ? (
+                      <div className="settings-update-next-step">
+                        <strong>由启动环境变量控制</strong>
+                        <span>检测到 VIDEO_SUM_APP_DATA_ROOT，迁移位置由启动环境决定，不能从设置页更改。</span>
+                      </div>
+                    ) : null}
+                    {storageMigrationPreview.blockers.length > 0 ? (
+                      <div className="settings-update-next-step">
+                        <strong>暂时不能迁移</strong>
+                        <ul className="settings-migration-blockers">{storageMigrationPreview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                {isDirty ? <p className="settings-input-caption">请先保存当前设置；迁移预览使用服务端已保存的目录路径。</p> : null}
+
+                {storageMigrationProgress ? (
+                  <div className="settings-storage-panel">
+                    <strong>{storageMigrationProgress.message}</strong>
+                    {(storageMigrationProgress.phase === "copying" || storageMigrationProgress.phase === "verifying") ? (
+                      <progress value={storageMigrationPercent} max={100} aria-label="存储迁移进度" />
+                    ) : null}
+                    <div className="settings-storage-meta">
+                      <span>{storageMigrationProgress.phase === "copying" ? `${storageMigrationPercent}%` : ({ preparing: "准备迁移", verifying: "文件校验", switching: "切换存储位置", starting: "验证服务启动", rollback: "恢复旧位置", complete: "迁移完成", failed: "迁移失败" } as const)[storageMigrationProgress.phase]}</span>
+                      <span>已复制 {formatStorageSize(storageMigrationProgress.copiedBytes)}</span>
+                    </div>
+                  </div>
+                ) : null}
+
+                {storageMigrationStatus ? <p className="settings-input-caption">{storageMigrationStatus}</p> : null}
+                <div className="settings-update-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!storageMigrationTarget || storageMigrationBusy}
+                    onClick={() => void refreshStorageMigrationPreview(storageMigrationTarget, storageMigrationSelection)}
+                  >
+                    {storageMigrationBusy ? "处理中…" : "刷新迁移预览"}
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!storageMigrationPreview?.canMigrate || storageMigrationBusy || storageMigrationCleanupPending || isDirty}
+                    onClick={() => void startStorageMigration()}
+                  >
+                    {storageMigrationBusy ? "迁移中…" : "开始迁移"}
+                  </button>
+                  {storageMigrationCleanupPending ? (
+                    <>
+                      <button className="secondary-button danger-button" type="button" disabled={storageMigrationBusy} onClick={() => void cleanupMigratedStorage()}>
+                        清理已迁移的旧文件
+                      </button>
+                      <button className="secondary-button" type="button" disabled={storageMigrationBusy} onClick={() => void keepMigratedStorageSource()}>
+                        保留旧副本
+                      </button>
+                    </>
+                  ) : null}
+                </div>
               </div>
             </section>
           )}

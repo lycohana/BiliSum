@@ -58,7 +58,7 @@ export const COLLECTION_QUEUE_ORDER_LABELS: Record<CollectionQueueOrder, string>
 export function getCollectionItemStatus(item: VideoCollectionItem): CollectionItemStatus {
   if (item.has_result) return "completed";
   if (item.latest_status === "queued" || item.latest_status === "running") return "processing";
-  if (item.latest_status === "failed" || item.latest_status === "cancelled") return "failed";
+  if (item.latest_status === "failed" || item.latest_status === "cancelled" || item.latest_status === "paused") return "failed";
   return "pending";
 }
 

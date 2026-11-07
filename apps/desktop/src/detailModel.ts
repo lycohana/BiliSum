@@ -114,7 +114,7 @@ export function derivePageAggregateStatus(tasks: TaskSummary[]): PageAggregateSt
   if (tasks.some((task) => task.status === "completed")) {
     return "completed";
   }
-  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled")) {
+  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled" || task.status === "paused")) {
     return "failed";
   }
   return "not_started";
@@ -525,7 +525,7 @@ export function describeTaskContentState(task?: Pick<TaskDetail, "status" | "res
       description: "可以先查看顶部任务药丸中的实时进度，结果生成后这里会自动可用。",
     };
   }
-  if (task.status === "failed" || task.status === "cancelled") {
+  if (task.status === "failed" || task.status === "cancelled" || task.status === "paused") {
     return {
       tone: "failed",
       title: "当前任务未生成可用结果",
@@ -585,7 +585,7 @@ export function describeMindMapWorkspace(
       actionEnabled: false,
     };
   }
-  if (task.status === "failed" || task.status === "cancelled") {
+  if (task.status === "failed" || task.status === "cancelled" || task.status === "paused") {
     return {
       tone: "failed",
       title: "当前任务暂时无法生成导图",

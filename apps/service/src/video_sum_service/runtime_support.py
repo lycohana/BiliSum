@@ -35,6 +35,7 @@ from video_sum_infra.runtime import (
     _move_preserved_runtime_extensions,
     activate_runtime_pythonpath,
     bootstrap_managed_runtime,
+    bundled_root,
     ffmpeg_location,
     is_frozen,
     managed_runtime_dir,
@@ -266,6 +267,9 @@ def windows_hidden_subprocess_kwargs() -> dict[str, object]:
 
 def runtime_subprocess_env(runtime_channel: str) -> dict[str, str]:
     env = dict(os.environ)
+    for key in list(env):
+        if key.startswith("UV_"):
+            env.pop(key, None)
     for key in (
         "PYTHONHOME",
         "PYTHONPATH",
@@ -951,6 +955,36 @@ def ensure_torch_family_compatible(
     return result
 
 
+def bundled_uv_executable() -> Path | None:
+    candidate = bundled_root() / "bin" / ("uv.exe" if sys.platform == "win32" else "uv")
+    return candidate if candidate.is_file() else None
+
+
+def run_package_install(command, python_executable, runtime_channel, timeout, runner):
+    """Prefer the installer shipped with BiliSum, retaining pip as a fallback."""
+    uv = bundled_uv_executable()
+    session_id = _runner_install_session_id(runner)
+    if uv is not None:
+        args = command[command.index("install") + 1:]
+        args = [arg for arg in args if arg != "--disable-pip-version-check"]
+        if "--upgrade-strategy" in args:
+            index = args.index("--upgrade-strategy")
+            del args[index:index + 2]
+        cache_dir = settings_manager.current.cache_dir / "uv"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        uv_command = [str(uv), "--no-config", "--no-python-downloads", "--cache-dir", str(cache_dir),
+                      "pip", "install", "--python", str(python_executable), "--link-mode", "copy", *args]
+        if session_id:
+            append_install_log(session_id, "[uv] 正在解析、下载并安装依赖；缓存位于配置的缓存目录。")
+        try:
+            return runner(uv_command, runtime_channel=runtime_channel, timeout=timeout)
+        except (OSError, subprocess.CalledProcessError):
+            logger.warning("bundled uv install failed; falling back to pip", exc_info=True)
+            if session_id:
+                append_install_log(session_id, "[uv] 本次安装未成功，正在回退到 pip。")
+    return runner(command, runtime_channel=runtime_channel, timeout=timeout)
+
+
 def pip_install_with_fallbacks(
     python_executable: Path,
     runtime_channel: str,
@@ -991,7 +1025,7 @@ def pip_install_with_fallbacks(
         command.extend(packages)
 
         try:
-            result = runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            result = run_package_install(command, python_executable, runtime_channel, timeout, runner)
             cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
             repair_result = ensure_torch_family_compatible(
                 python_executable,
@@ -1136,7 +1170,7 @@ def torch_install_with_fallbacks(
             index_url,
         ])
         try:
-            result = runner(command, runtime_channel=runtime_channel, timeout=timeout)
+            result = run_package_install(command, python_executable, runtime_channel, timeout, runner)
             cleanup_invalid_runtime_distributions(runtime_channel, session_id=session_id)
             return result
         except subprocess.CalledProcessError as exc:
@@ -2176,9 +2210,21 @@ def replace_task_worker(app_state, next_worker: TaskWorker) -> TaskWorker:
     from video_sum_service.worker import TaskWorker
 
     previous_worker = getattr(app_state, "task_worker", None)
+    pending_ids: set[str] = set()
+    if isinstance(previous_worker, TaskWorker):
+        with previous_worker._condition:
+            for state in (previous_worker._task_state, previous_worker._llm_state):
+                pending_ids.update(state.pending_ids)
+                state.clear_pending()
     app_state.task_worker = next_worker
     if isinstance(previous_worker, TaskWorker):
         previous_worker.shutdown(wait=False, cancel_pending=True)
+    repository = getattr(app_state, "task_repository", None)
+    if repository is not None:
+        for task_id in pending_ids:
+            record = repository.get_task(task_id)
+            if record is not None:
+                next_worker.submit(record)
     return next_worker
 
 

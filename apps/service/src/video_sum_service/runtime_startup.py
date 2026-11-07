@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from video_sum_core.models.tasks import TaskStatus
 from video_sum_infra.config import ServiceSettings
+from video_sum_infra.runtime import bootstrap_managed_runtime, is_frozen
 from video_sum_service.context import logger
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.runtime_support import build_worker, detect_environment, replace_task_worker
@@ -61,6 +62,9 @@ def get_runtime_startup_state(app_state: Any) -> dict[str, object]:
 
 
 def runtime_worker_ready(app_state: Any) -> bool:
+    settings_update = getattr(app_state, "settings_update_event", None)
+    if settings_update is not None and not settings_update.is_set():
+        return False
     state = getattr(app_state, "runtime_startup", None)
     if not isinstance(state, dict):
         return getattr(app_state, "task_worker", None) is not None
@@ -253,6 +257,11 @@ def start_runtime_startup(
             # potentially slow first environment probe after an update.
             with app_state.runtime_startup_lock:
                 app_state.runtime_startup["message"] = "正在检测运行环境（首次可能较慢，需导入 torch 等依赖）..."
+            # A fresh installation has no managed interpreter yet. Seed it
+            # before the probe (which otherwise reports missing Python and
+            # prevents build_worker from ever reaching its bootstrap step).
+            if is_frozen():
+                bootstrap_managed_runtime(current_settings.runtime_channel)
             environment = detect_environment(current_settings.runtime_channel)
             if not environment.get("runtimeReady"):
                 raise RuntimeError(str(environment.get("runtimeError") or "Runtime environment is not ready."))

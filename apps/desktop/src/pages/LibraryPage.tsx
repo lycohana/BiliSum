@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   closestCenter,
   DndContext,
@@ -41,6 +41,12 @@ import {
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { CollectionCard, CollectionListItem } from "../components/CollectionCard";
 import { VideoCard } from "../components/VideoCard";
+import {
+  VideoContextMenu,
+  flattenVideoContextMenuFolders,
+  resolveVideoContextMenuPosition,
+  type VideoContextMenuFolder,
+} from "../components/VideoContextMenu";
 import {
   buildFolderTree,
   canReorderLibraryView,
@@ -137,11 +143,6 @@ type CollectionActionMenu = {
   submenuSide: "left" | "right";
 } | null;
 
-type FolderMenuItem = {
-  folder: VideoFolder;
-  depth: number;
-};
-
 export function LibraryPage({
   snapshot,
   filteredVideos,
@@ -169,9 +170,10 @@ export function LibraryPage({
   onDeleteCollection,
   onUpdateLibraryPreferences,
 }: LibraryPageProps) {
+  const location = useLocation();
   const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(1);
-  const [activeScope, setActiveScope] = useState<LibraryScope>("all");
+  const [activeScope, setActiveScope] = useState<LibraryScope>(() => resolveLibraryNavigationScope(location.state, snapshot.folders));
   const [viewMode, setViewMode] = useState<LibraryViewMode>(() => loadLibraryViewMode());
   const [activeVideoDragId, setActiveVideoDragId] = useState<string | null>(null);
   const [optimisticVideoOrder, setOptimisticVideoOrder] = useState<OptimisticVideoOrder>(null);
@@ -206,7 +208,7 @@ export function LibraryPage({
   const folders = useMemo(() => sortFolders(snapshot.folders), [snapshot.folders]);
   const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.folder_id, folder])), [folders]);
   const folderTreeData = useMemo(() => buildFolderTree(folders), [folders]);
-  const folderMenuItems = useMemo(() => flattenFolderMenuItems(folderTreeData), [folderTreeData]);
+  const folderMenuItems = useMemo(() => flattenVideoContextMenuFolders(folderTreeData), [folderTreeData]);
   const directVideoCounts = useMemo(() => countDirectVideosByFolder(snapshot.videos), [snapshot.videos]);
   const directLibraryCounts = useMemo(() => {
     const counts = new Map(directVideoCounts);
@@ -504,7 +506,7 @@ export function LibraryPage({
     event.stopPropagation();
     setVideoDeleteConfirmId(null);
     setVideoActionBusy(false);
-    setVideoActionMenu({ videoId, ...resolveContextMenuPosition(event.clientX, event.clientY) });
+    setVideoActionMenu({ videoId, ...resolveVideoContextMenuPosition(event.clientX, event.clientY) });
   }
 
   function openCollectionActions(event: MouseEvent, collectionId: string) {
@@ -512,7 +514,7 @@ export function LibraryPage({
     event.stopPropagation();
     setVideoActionMenu(null);
     setVideoActionBusy(false);
-    setCollectionActionMenu({ collectionId, ...resolveContextMenuPosition(event.clientX, event.clientY) });
+    setCollectionActionMenu({ collectionId, ...resolveVideoContextMenuPosition(event.clientX, event.clientY) });
   }
 
   async function runVideoAction(action: () => Promise<void>, successMessage?: string) {
@@ -977,7 +979,7 @@ export function LibraryPage({
           y={videoActionMenu.y}
           submenuSide={videoActionMenu.submenuSide}
           folders={folderMenuItems}
-          currentFolderName={getFolderLabel(videoMenuVideo)}
+          headingMeta={getFolderLabel(videoMenuVideo)}
           canPinInFolder={getVideoFolderIds(videoMenuVideo).length > 0}
           busy={videoActionBusy}
           deleteConfirmOpen={videoDeleteConfirmId === videoMenuVideo.video_id}
@@ -1002,12 +1004,6 @@ export function LibraryPage({
             }
             closeVideoActions();
           }}
-          onMove={(folderId) => runVideoAction(
-            async () => {
-              await onMoveVideo(videoMenuVideo.video_id, folderId);
-            },
-            folderId ? "已移动到分组" : "已移到未归档",
-          )}
           onSetFolders={(folderIds) => runVideoAction(
             async () => {
               await onMoveVideo(videoMenuVideo.video_id, undefined, folderIds);
@@ -1133,146 +1129,6 @@ function ScopeButton({
   );
 }
 
-function VideoContextMenu({
-  video,
-  x,
-  y,
-  submenuSide,
-  folders,
-  currentFolderName,
-  canPinInFolder,
-  busy,
-  deleteConfirmOpen,
-  onOpenDetail,
-  onRevealFolder,
-  onMove,
-  onSetFolders,
-  onToggleFavorite,
-  onToggleGlobalPin,
-  onToggleFolderPin,
-  onRequestDelete,
-  onCancelDelete,
-  onDelete,
-}: {
-  video: VideoAssetSummary;
-  x: number;
-  y: number;
-  submenuSide: "left" | "right";
-  folders: FolderMenuItem[];
-  currentFolderName: string;
-  canPinInFolder: boolean;
-  busy: boolean;
-  deleteConfirmOpen: boolean;
-  onOpenDetail(): void;
-  onRevealFolder(): void;
-  onMove(folderId: string | null): void;
-  onSetFolders(folderIds: string[]): void;
-  onToggleFavorite(): void;
-  onToggleGlobalPin(): void;
-  onToggleFolderPin(): void;
-  onRequestDelete(): void;
-  onCancelDelete(): void;
-  onDelete(): void;
-}) {
-  const selectedFolderIds = getVideoFolderIds(video);
-  return (
-    <div
-      className={`library-video-context-menu ${deleteConfirmOpen ? "is-expanded" : ""} ${submenuSide === "left" ? "is-submenu-left" : ""}`}
-      style={{ left: x, top: y }}
-      role="menu"
-      aria-label={`${video.title} 的操作菜单`}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }}
-    >
-      <div className="library-video-menu-heading">
-        <strong>{video.title}</strong>
-        <span>{currentFolderName}</span>
-      </div>
-      <button type="button" role="menuitem" disabled={busy} onClick={onOpenDetail}>
-        <ExternalLinkIcon />
-        <span>打开详情</span>
-      </button>
-      <button type="button" role="menuitem" disabled={busy} onClick={onRevealFolder}>
-        <ArrowRightIcon />
-        <span>跳到所在分组</span>
-      </button>
-      <div className="library-video-menu-group">
-        <button className="library-video-submenu-trigger" type="button" role="menuitem" disabled={busy}>
-          <FolderIcon />
-          <span>设置分组</span>
-        </button>
-        <div className="library-video-submenu" role="menu" aria-label="设置分组">
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={selectedFolderIds.length === 0}
-            disabled={busy || selectedFolderIds.length === 0}
-            className={selectedFolderIds.length === 0 ? "is-current" : ""}
-            onClick={() => onSetFolders([])}
-          >
-            <span className="library-video-menu-check" aria-hidden="true">{selectedFolderIds.length === 0 ? "✓" : ""}</span>
-            <span>未归档</span>
-          </button>
-          <div className="library-video-folder-options">
-            {folders.map(({ folder, depth }) => {
-              const selected = selectedFolderIds.includes(folder.folder_id);
-              const nextFolderIds = selected
-                ? selectedFolderIds.filter((folderId) => folderId !== folder.folder_id)
-                : [...selectedFolderIds, folder.folder_id];
-              return (
-                <button
-                  key={folder.folder_id}
-                  type="button"
-                  role="menuitemcheckbox"
-                  aria-checked={selected}
-                  disabled={busy}
-                  className={selected ? "is-current" : ""}
-                  style={{ paddingLeft: 10 + depth * 14 }}
-                  onClick={() => onSetFolders(nextFolderIds)}
-                >
-                  <span className="library-video-menu-check" aria-hidden="true">{selected ? "✓" : ""}</span>
-                  <span>{folder.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-      <div className="library-video-menu-divider" />
-      <button type="button" role="menuitem" disabled={busy} onClick={onToggleFavorite}>
-        <StarIcon />
-        <span>{video.is_favorite ? "取消收藏" : "收藏"}</span>
-      </button>
-      <button type="button" role="menuitem" disabled={busy} onClick={onToggleGlobalPin}>
-        <PinIcon />
-        <span>{video.global_pinned ? "取消全局置顶" : "全局置顶"}</span>
-      </button>
-      <button type="button" role="menuitem" disabled={busy || !canPinInFolder} onClick={onToggleFolderPin}>
-        <PinIcon />
-        <span>{video.folder_pinned ? "取消文件夹置顶" : "文件夹置顶"}</span>
-      </button>
-      {deleteConfirmOpen ? (
-        <div className="library-video-delete-confirm">
-          <p>删除后会移除视频文件与任务记录。</p>
-          <div>
-            <button type="button" disabled={busy} onClick={onCancelDelete}>取消</button>
-            <button className="is-danger" type="button" disabled={busy} onClick={onDelete}>删除</button>
-          </div>
-        </div>
-      ) : (
-        <button className="is-danger" type="button" role="menuitem" disabled={busy} onClick={onRequestDelete}>
-          <TrashIcon />
-          <span>删除视频</span>
-        </button>
-      )}
-    </div>
-  );
-}
-
 function CollectionContextMenu({
   collection,
   x,
@@ -1298,7 +1154,7 @@ function CollectionContextMenu({
   x: number;
   y: number;
   submenuSide: "left" | "right";
-  folders: FolderMenuItem[];
+  folders: VideoContextMenuFolder[];
   currentFolderName: string;
   canPinInFolder: boolean;
   busy: boolean;
@@ -1377,26 +1233,11 @@ function CollectionContextMenu({
   );
 }
 
-function flattenFolderMenuItems(nodes: LibraryFolderTreeNode[], depth = 0): FolderMenuItem[] {
-  return nodes.flatMap((node) => [
-    { folder: node.folder, depth },
-    ...flattenFolderMenuItems(node.children, depth + 1),
-  ]);
-}
-
-function resolveContextMenuPosition(clientX: number, clientY: number) {
-  const menuWidth = 292;
-  const submenuWidth = 248;
-  const menuHeight = 560;
-  const margin = 12;
-  const viewportWidth = globalThis.window?.innerWidth || 1280;
-  const viewportHeight = globalThis.window?.innerHeight || 720;
-  const submenuSide: "left" | "right" = clientX + menuWidth + submenuWidth + margin <= viewportWidth ? "right" : "left";
-  return {
-    x: Math.max(margin, Math.min(clientX, viewportWidth - menuWidth - margin)),
-    y: Math.max(margin, Math.min(clientY, viewportHeight - menuHeight - margin)),
-    submenuSide,
-  };
+function resolveLibraryNavigationScope(state: unknown, folders: VideoFolder[]): LibraryScope {
+  if (!state || typeof state !== "object" || !("scope" in state) || typeof state.scope !== "string") return "all";
+  const scope = state.scope.trim();
+  if (scope === "unfiled" || scope === "favorite" || scope === "all") return scope;
+  return folders.some((folder) => folder.folder_id === scope) ? scope : "all";
 }
 
 function VideoListItem({

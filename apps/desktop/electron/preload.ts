@@ -141,6 +141,60 @@ export type StorageCleanupResult = {
   reclaimedBytes: number;
 };
 
+export type MigrationExternalKey = "data" | "cache" | "tasks" | "output";
+export type MigrationItemKey = "app-root" | MigrationExternalKey;
+
+export type StorageMigrationPreview = {
+  sourceRoot: string;
+  targetRoot: string;
+  environmentManaged: boolean;
+  items: Array<{
+    key: MigrationItemKey;
+    label: string;
+    path: string;
+    exists: boolean;
+    sizeBytes: number;
+    selected: boolean;
+    required: boolean;
+    carriedByRoot: boolean;
+    selectable: boolean;
+    reason: string | null;
+    errorDetails: string | null;
+    destinationPath: string | null;
+    copySourceKey: MigrationItemKey | null;
+    includedInLabel: string | null;
+  }>;
+  requiredBytes: number;
+  availableBytes: number | null;
+  blockers: string[];
+  canMigrate: boolean;
+  warnings: string[];
+  excludedPaths: string[];
+};
+
+export type StorageMigrationProgress = {
+  phase: "preparing" | "copying" | "verifying" | "switching" | "starting" | "rollback" | "complete" | "failed";
+  message: string;
+  copiedBytes: number;
+  totalBytes: number;
+};
+
+export type StorageMigrationResult = {
+  success: boolean;
+  sourceRoot: string;
+  targetRoot: string;
+  error: string | null;
+  rolledBack: boolean;
+  serviceRestored: boolean;
+};
+
+export type StorageMigrationCleanupResult = {
+  deletedFiles: number;
+  skippedFiles: number;
+  removedDirectories: number;
+  retainedPaths: string[];
+};
+
 export type BilibiliCookieExportResult = {
   cookiesFile: string;
   cookieCount: number;
@@ -200,8 +254,8 @@ const desktop = {
     openPath: (targetPath: string) => ipcRenderer.invoke("desktop:shell:open-path", targetPath) as Promise<string>,
   },
   dialog: {
-    pickDirectory: (defaultPath?: string) =>
-      ipcRenderer.invoke("desktop:dialog:pick-directory", defaultPath) as Promise<string | null>,
+    pickDirectory: (defaultPath?: string, title?: string) =>
+      ipcRenderer.invoke("desktop:dialog:pick-directory", defaultPath, title) as Promise<string | null>,
   },
   logs: {
     getServiceLogPath: () => ipcRenderer.invoke("desktop:logs:get-service-log-path") as Promise<string>,
@@ -245,6 +299,19 @@ const desktop = {
       ipcRenderer.invoke("desktop:file-manager:get-storage-overview", input) as Promise<StorageOverview>,
     cleanupOrphans: (input: { taskIds: string[] }) =>
       ipcRenderer.invoke("desktop:file-manager:cleanup-orphans", input) as Promise<StorageCleanupResult>,
+    previewMigration: (input: { targetRoot: string; selectedExternalKeys?: MigrationExternalKey[] }) =>
+      ipcRenderer.invoke("desktop:file-manager:preview-migration", input) as Promise<StorageMigrationPreview>,
+    startMigration: (input: { targetRoot: string; selectedExternalKeys: MigrationExternalKey[] }) =>
+      ipcRenderer.invoke("desktop:file-manager:start-migration", input) as Promise<StorageMigrationResult>,
+    cleanupMigratedSource: () =>
+      ipcRenderer.invoke("desktop:file-manager:cleanup-migrated-source") as Promise<StorageMigrationCleanupResult>,
+    keepMigratedSource: () => ipcRenderer.invoke("desktop:file-manager:keep-migrated-source") as Promise<boolean>,
+    hasPendingMigrationCleanup: () => ipcRenderer.invoke("desktop:file-manager:has-pending-migration-cleanup") as Promise<boolean>,
+    onMigrationProgress: (listener: (progress: StorageMigrationProgress) => void) => {
+      const wrapped = (_event: unknown, payload: StorageMigrationProgress) => listener(payload);
+      ipcRenderer.on("desktop:file-manager:migration-progress", wrapped);
+      return () => ipcRenderer.removeListener("desktop:file-manager:migration-progress", wrapped);
+    },
     openDirectory: (kind: StorageLocationKind) =>
       ipcRenderer.invoke("desktop:file-manager:open-directory", kind) as Promise<string>,
   },

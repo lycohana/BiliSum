@@ -357,7 +357,7 @@ def test_worker_preserves_transcript_result_when_summary_phase_fails() -> None:
 
     refreshed = repository.get_task(record.task_id)
     assert refreshed is not None
-    assert refreshed.status == TaskStatus.FAILED
+    assert refreshed.status == TaskStatus.PAUSED
     assert refreshed.result is not None
     assert refreshed.result.transcript_text == "[00:00] 测试转写"
     assert refreshed.result.artifacts["summary_path"] == "C:/tmp/summary.json"

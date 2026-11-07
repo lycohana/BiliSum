@@ -10,6 +10,10 @@ class LLMAuthenticationError(VideoSumError):
     """Raised when the upstream LLM provider rejects the supplied credentials."""
 
 
+class LLMTransientError(VideoSumError):
+    """A retryable upstream rate limit or server failure."""
+
+
 class TranscriptionConfigurationError(VideoSumError):
     """Raised when transcription provider settings are incomplete or invalid."""
 

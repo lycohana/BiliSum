@@ -89,26 +89,46 @@ def _clear_knowledge_service_cache(app_state) -> None:
             delattr(app_state, key)
 
 
-def _rebuild_worker_after_save(
+def _perform_worker_rebuild_after_save(
     app_state,
     current_settings: "ServiceSettings",
     active_runtime_channel: str,
+    update_event=None,
 ) -> None:
     """Rebuild task worker in background after settings save."""
     environment = detect_environment(active_runtime_channel)
-    replace_task_worker(
-        app_state,
-        build_worker(
+    next_worker = build_worker(
             app_state.task_repository,
             current_settings,
             environment_info=environment,
-        ),
-    )
+        )
+    if update_event is not None and getattr(app_state, "settings_update_event", None) is not update_event:
+        next_worker.shutdown(wait=False)
+        update_event.set()
+        return
+    replace_task_worker(app_state, next_worker)
     mark_runtime_worker_ready(
         app_state,
         environment,
         "Runtime worker refreshed after settings update.",
     )
+    if update_event is not None:
+        update_event.set()
+    for record in app_state.task_repository.list_recoverable_tasks():
+        if record.status == TaskStatus.QUEUED:
+            next_worker.submit(record)
+
+
+def _rebuild_worker_after_save(app_state, current_settings, active_runtime_channel, update_event=None):
+    try:
+        _perform_worker_rebuild_after_save(app_state, current_settings, active_runtime_channel, update_event)
+    except Exception as exc:
+        logger.exception("Failed to apply saved settings to the task worker")
+        if update_event is not None and getattr(app_state, "settings_update_event", None) is update_event:
+            state = getattr(app_state, "runtime_startup", None)
+            if isinstance(state, dict):
+                state.update(status="error", message=f"设置已保存，但运行环境更新失败：{exc}")
+            update_event.set()
 
 
 def _load_cached_environment_snapshot(runtime_channel: str) -> dict[str, object]:
@@ -414,11 +434,16 @@ def update_settings(payload: SettingsUpdatePayload, request: Request, background
     # build_worker() re-runs bootstrap_managed_runtime / prepend_runtime_path /
     # activate_runtime_pythonpath for the active channel, so the process-level
     # runtime environment stays in sync even for channel-unchanged saves.
+    from threading import Event
+
+    update_event = Event()
+    request.app.state.settings_update_event = update_event
     background_tasks.add_task(
         _rebuild_worker_after_save,
         request.app.state,
         current_settings,
         active_runtime_channel,
+        update_event,
     )
     # Serialize with a fast environment snapshot (use cached probe if available).
     environment_snapshot = _load_cached_environment_snapshot(active_runtime_channel)

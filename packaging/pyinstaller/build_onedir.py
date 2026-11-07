@@ -26,6 +26,15 @@ def executable_name(name: str) -> str:
     return f"{name}.exe" if IS_WINDOWS else name
 
 
+def bundle_uv() -> None:
+    source = shutil.which("uv")
+    if not source:
+        raise RuntimeError("uv is required to package the bundled dependency installer.")
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, BIN_DIR / executable_name("uv"))
+    run([str(BIN_DIR / executable_name("uv")), "--version"])
+
+
 def venv_python_candidates(venv_dir: Path) -> list[Path]:
     return [
         venv_dir / "Scripts" / "python.exe",
@@ -52,6 +61,9 @@ def run(command: list[str], cwd: Path | None = None) -> None:
 
 
 def remove_tree(target: Path, retries: int = 6, delay: float = 0.5) -> None:
+    resolved = target.resolve()
+    if not resolved.is_relative_to(BUILD_ROOT.resolve()) or resolved == BUILD_ROOT.resolve():
+        raise ValueError(f"Refusing to remove a directory outside the packaging build area: {resolved}")
     if not target.exists():
         return
     last_error: OSError | None = None
@@ -421,7 +433,7 @@ def copy_ffmpeg_binaries() -> None:
 
     for name in (executable_name("ffmpeg"), executable_name("ffprobe")):
         source = source_dir / name
-        if source.exists():
+        if source.exists() and source.resolve() != (BIN_DIR / name).resolve():
             shutil.copy2(source, BIN_DIR / name)
     copy_macos_ffmpeg_libraries(source_dir)
 
@@ -565,6 +577,8 @@ def resolve_ffmpeg_source_dir() -> Path | None:
             checked_dirs.append(candidate_dir)
             if ffmpeg_dir_is_usable(candidate_dir):
                 return candidate_dir
+    if ffmpeg_dir_is_usable(BIN_DIR):
+        return BIN_DIR
     return None
 
 
@@ -604,7 +618,7 @@ def executable_runs(executable: Path) -> bool:
 def install_build_dependencies() -> None:
     python_exe = build_python()
     run([str(python_exe), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-    run([str(python_exe), "-m", "pip", "install", "--upgrade", "pyinstaller"])
+    run([str(python_exe), "-m", "pip", "install", "--upgrade", "pyinstaller", "tzdata"])
     run(
         [
             str(python_exe),
@@ -685,6 +699,7 @@ def main() -> int:
     create_build_venv()
     install_build_dependencies()
     create_runtime_seed()
+    bundle_uv()
     copy_ffmpeg_binaries()
     run([str(build_python()), "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_PATH)])
     return 0

@@ -458,9 +458,19 @@ def test_repository_tracks_collection_membership_and_pending_refresh_items() -> 
     repository.add_pending_video_collection_items("season-1", ["BV-new"])
     assert repository.get_video_collection("season-1").item_count == 3
 
-    repository.promote_video_collection_item("season-1", internal.video_id)
+    promoted = repository.promote_video_collection_item("season-1", internal.video_id)
+    assert promoted is not None and promoted.is_global_visible is True
     repository.initialize_video_collection_visibility("season-1")
     assert len(repository.list_video_assets()) == 1
+
+    removed_from_library = repository.remove_video_collection_item_from_library("season-1", internal.video_id)
+    assert removed_from_library is not None and removed_from_library.is_global_visible is False
+    retained_collection = repository.get_video_collection("season-1")
+    assert retained_collection is not None
+    retained_item = next(item for item in retained_collection.items if item.video_id == internal.video_id)
+    assert retained_item.video_id == internal.video_id
+    assert retained_item.is_global_visible is False
+    assert repository.get_video_asset(internal.video_id) is not None
 
 
 def test_repository_reorders_mixed_outer_library_items() -> None:

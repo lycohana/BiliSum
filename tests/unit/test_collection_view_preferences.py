@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -50,6 +51,176 @@ def collection_item(position: int, bvid: str, title: str | None = None) -> dict[
         "source_section_title": "第一章",
         "source_section_position": 1,
     }
+
+
+def test_collection_items_include_library_action_metadata() -> None:
+    repository, _connection = create_repository()
+    asset = add_collection_video(repository, "BV-actions", "右键菜单视频")
+    folder = repository.create_video_folder("合集分组")
+    assert folder is not None
+    assert repository.set_video_folders(asset.video_id, [folder.folder_id]) is not None
+    assert repository.set_video_favorite(asset.video_id, True) is not None
+    assert repository.set_video_pin(asset.video_id, global_pinned=True, folder_pinned=True) is not None
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-actions",
+            "title": "右键菜单合集",
+            "items": [collection_item(1, "BV-actions")],
+        },
+        "https://example.com/season-actions",
+    )
+
+    collection = repository.get_video_collection("season-actions")
+
+    assert collection is not None
+    assert len(collection.items) == 1
+    item = collection.items[0]
+    assert item.video_id == asset.video_id
+    assert item.is_favorite is True
+    assert item.folder_id == folder.folder_id
+    assert item.folder_ids == [folder.folder_id]
+    assert item.global_pinned is True
+    assert item.folder_pinned is True
+
+
+def test_collection_custom_cover_overrides_source_and_survives_refresh() -> None:
+    repository, _connection = create_repository()
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-cover",
+            "title": "封面测试",
+            "cover_url": "/media/covers/source-old.jpg",
+            "items": [],
+        },
+        "https://example.com/season-cover",
+    )
+
+    customized = repository.set_video_collection_custom_cover(
+        "season-cover",
+        "/media/covers/collection-custom-test.png",
+    )
+    assert customized is not None
+    assert customized.source_cover_url == "/media/covers/source-old.jpg"
+    assert customized.custom_cover_url == "/media/covers/collection-custom-test.png"
+    assert customized.cover_url == "/media/covers/collection-custom-test.png"
+
+    refreshed = repository.refresh_video_collection(
+        {
+            "collection_id": "season-cover",
+            "title": "封面测试",
+            "cover_url": "/media/covers/source-new.jpg",
+            "items": [],
+        },
+        "https://example.com/season-cover",
+    )
+    assert refreshed.source_cover_url == "/media/covers/source-new.jpg"
+    assert refreshed.cover_url == "/media/covers/collection-custom-test.png"
+
+    restored = repository.set_video_collection_custom_cover("season-cover", None)
+    assert restored is not None
+    assert restored.custom_cover_url == ""
+    assert restored.cover_url == "/media/covers/source-new.jpg"
+
+
+def test_collection_cover_upload_and_reset_manage_cached_file(tmp_path, monkeypatch) -> None:
+    repository, _connection = create_repository()
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-cover-upload",
+            "title": "上传封面测试",
+            "cover_url": "/media/covers/source.jpg",
+            "items": [],
+        },
+        "https://example.com/season-cover-upload",
+    )
+    monkeypatch.setattr(videos_router, "COVER_CACHE_DIR", tmp_path)
+    png_payload = b"\x89PNG\r\n\x1a\n" + b"cover-payload"
+
+    class UploadRequest:
+        headers = {
+            "content-type": "image/png",
+            "content-length": str(len(png_payload)),
+        }
+        app = SimpleNamespace(state=SimpleNamespace(task_repository=repository))
+
+        async def stream(self):
+            yield png_payload
+
+    uploaded = asyncio.run(
+        videos_router.upload_video_collection_cover(
+            "season-cover-upload",
+            UploadRequest(),
+        )
+    )
+    assert uploaded.custom_cover_url.startswith("/media/covers/collection-custom-")
+    uploaded_path = tmp_path / uploaded.custom_cover_url.rsplit("/", 1)[-1]
+    assert uploaded_path.read_bytes() == png_payload
+
+    replacement = asyncio.run(
+        videos_router.upload_video_collection_cover(
+            "season-cover-upload",
+            UploadRequest(),
+        )
+    )
+    replacement_path = tmp_path / replacement.custom_cover_url.rsplit("/", 1)[-1]
+    assert replacement_path.read_bytes() == png_payload
+    assert replacement_path != uploaded_path
+    assert not uploaded_path.exists()
+
+    reset = videos_router.reset_video_collection_cover(
+        "season-cover-upload",
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(task_repository=repository))),
+    )
+    assert reset.custom_cover_url == ""
+    assert reset.cover_url == "/media/covers/source.jpg"
+    assert not replacement_path.exists()
+
+    uploaded_again = asyncio.run(
+        videos_router.upload_video_collection_cover(
+            "season-cover-upload",
+            UploadRequest(),
+        )
+    )
+    uploaded_again_path = tmp_path / uploaded_again.custom_cover_url.rsplit("/", 1)[-1]
+    response = videos_router.delete_video_collection(
+        "season-cover-upload",
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(task_repository=repository))),
+        VideoCollectionDeleteRequest(mode="detach"),
+    )
+    assert response["deleted"] is True
+    assert not uploaded_again_path.exists()
+
+
+def test_remove_collection_item_from_library_keeps_asset_and_membership() -> None:
+    repository, _connection = create_repository()
+    asset = add_collection_video(repository, "BV-outer-only", "仅删除外层视频")
+    repository.upsert_video_collection(
+        {
+            "collection_id": "season-outer-only",
+            "title": "外层删除测试",
+            "items": [collection_item(1, "BV-outer-only")],
+        },
+        "https://example.com/season-outer-only",
+    )
+    promoted = repository.promote_video_collection_item("season-outer-only", asset.video_id)
+    assert promoted is not None and promoted.is_global_visible is True
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(task_repository=repository))
+    )
+
+    response = videos_router.remove_video_collection_item_from_library(
+        "season-outer-only",
+        asset.video_id,
+        request,
+    )
+
+    assert response.video_id == asset.video_id
+    assert response.is_global_visible is False
+    assert repository.get_video_asset(asset.video_id) is not None
+    collection = repository.get_video_collection("season-outer-only")
+    assert collection is not None
+    assert collection.items[0].video_id == asset.video_id
+    assert collection.items[0].is_global_visible is False
 
 
 def test_old_collection_database_migrates_with_safe_view_defaults() -> None:
@@ -120,7 +291,7 @@ def test_old_collection_database_migrates_with_safe_view_defaults() -> None:
     item_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(video_collection_items)")
     }
-    assert {"view_sort_mode", "view_group_mode"} <= collection_columns
+    assert {"view_sort_mode", "view_group_mode", "custom_cover_url"} <= collection_columns
     assert {
         "custom_position",
         "source_section_id",

@@ -24,4 +24,7 @@ def run() -> None:
     ensure_directory(settings.data_dir)
     ensure_directory(settings.cache_dir)
     ensure_directory(settings.tasks_dir)
-    uvicorn_run(app, host=settings.host, port=settings.port, access_log=False)
+    # Windowed PyInstaller executables have no stdout/stderr. Uvicorn's
+    # default color formatter calls stdout.isatty(), which crashes before the
+    # service starts. Keep the file logging already configured above.
+    uvicorn_run(app, host=settings.host, port=settings.port, access_log=False, log_config=None)

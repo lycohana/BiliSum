@@ -7,6 +7,8 @@ import { LinkIcon, LocalVideoIcon } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { VideoCard } from "../components/VideoCard";
 import { CollectionCard } from "../components/CollectionCard";
+import { TaskScheduleControl } from "../components/TaskScheduleControl";
+import { parseTaskSchedule } from "../taskSchedule";
 import type { PromptPreset, VideoAssetSummary, VideoCollection } from "../types";
 import { formatDuration } from "../utils";
 
@@ -16,7 +18,7 @@ type HomePageProps = {
   probeUrl: string;
   setProbeUrl(value: string): void;
   submitStatus: string;
-  onProbe(event: FormEvent): Promise<void>;
+  onProbe(event: FormEvent, scheduledAt?: string | null): Promise<void>;
   onImportLocalVideo(): Promise<void>;
   onImportLocalFiles(files: File[]): Promise<void>;
   onImportLocalPaths(paths: string[]): Promise<void>;
@@ -162,6 +164,22 @@ export function HomePage({
   const [isDragActive, setIsDragActive] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [batchUploading, setBatchUploading] = useState(false);
+  const [scheduledStart, setScheduledStart] = useState("");
+  const [scheduleError, setScheduleError] = useState("");
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    let scheduledAt: string | null = null;
+    if (submitter instanceof HTMLButtonElement && submitter.name === "schedule-start") {
+      try { scheduledAt = parseTaskSchedule(scheduledStart); }
+      catch (error) { setScheduleError(error instanceof Error ? error.message : "请选择未来的开始时间。"); return; }
+    }
+    setScheduledStart("");
+    setScheduleError("");
+    setPreferenceMenuOpen(false);
+    await onProbe(event, scheduledAt);
+  }
 
   useEffect(() => {
     window.localStorage.setItem(SUMMARY_PREFERENCE_STORAGE_KEY, JSON.stringify(summaryPreference));
@@ -479,7 +497,7 @@ export function HomePage({
       <FloatingNoticeStack notices={[{ id: "home-submit-status", message: submitStatus }]} />
       <div className="section">
         <h2 className="section-title">开始总结</h2>
-        <form className="task-form" onSubmit={onProbe} onPaste={handlePaste}>
+        <form className="task-form" onSubmit={handleSubmit} onPaste={handlePaste}>
           <div className="task-form-row">
             <label className="input-row input-row-hero" style={{ flex: 1 }}>
               <div
@@ -639,7 +657,10 @@ export function HomePage({
                     {selectedPrompt?.description ? (
                       <span className="home-prompt-description">{selectedPrompt.description}</span>
                     ) : null}
+                    <button className="home-prompt-custom-button" type="button" onClick={() => onEditPromptPreset("__new__")}>自定义提示词 / 新建预设</button>
                   </div>
+                  <div className="summary-preference-divider" />
+                  <TaskScheduleControl value={scheduledStart} error={scheduleError} onChange={(value) => { setScheduledStart(value); setScheduleError(""); }} />
                 </div>
               ) : null}
             </div>

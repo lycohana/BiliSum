@@ -164,15 +164,7 @@ if (-not $python312) {
 
 Write-Host "Using Python 3.12:" $python312
 
-# Clean electron-builder caches that are safe to rebuild, but keep locally extracted
-# rcedit binaries so packaging does not depend on GitHub availability.
-$cacheDir = "$env:LOCALAPPDATA\electron-builder\Cache"
-if (Test-Path $cacheDir) {
-    Write-Host "Cleaning selected electron-builder cache directories under: $cacheDir"
-    Get-ChildItem -Path $cacheDir -Force |
-        Where-Object { $_.Name -ne "winCodeSign" } |
-        Remove-Item -Recurse -Force
-}
+# Reuse the existing tool caches; they may also be used by other projects.
 
 # Create a dummy winCodeSign directory with a fake version file to prevent electron-builder from downloading
 # This avoids the symlink creation issue on Windows
@@ -203,8 +195,12 @@ try {
     }
 
     if (-not $SkipPrebuild) {
+        npm run typecheck
+        if ($LASTEXITCODE -ne 0) { throw "Desktop type checking failed." }
         npm run build:renderer
+        if ($LASTEXITCODE -ne 0) { throw "Renderer build failed." }
         & $python312 (Join-Path $repoRoot "packaging\pyinstaller\build_onedir.py")
+        if ($LASTEXITCODE -ne 0) { throw "Backend build failed." }
 
         $backendExe = Join-Path $repoRoot "dist\BiliSum\BiliSum.exe"
         if (-not (Test-Path $backendExe)) {
@@ -234,6 +230,7 @@ try {
     }
 
     npm run build:electron
+    if ($LASTEXITCODE -ne 0) { throw "Electron build failed." }
     
     if (-not (Test-Path $rceditPatchScript)) {
         throw "electron-builder patch script was not found: $rceditPatchScript"

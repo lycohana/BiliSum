@@ -3170,47 +3170,6 @@
   color: var(--text-primary);
 }
 
-.collection-detail-context-menu {
-  position: fixed;
-  z-index: 100;
-  width: 220px;
-  min-width: 190px;
-  padding: 5px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--surface-elevated);
-  box-shadow: var(--shadow-lg);
-}
-
-.collection-detail-context-menu button {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-primary);
-  white-space: nowrap;
-  text-align: left;
-  cursor: pointer;
-}
-
-.collection-detail-context-menu button:hover,
-.collection-detail-context-menu button:focus-visible {
-  background: var(--bg-hover);
-  outline: none;
-}
-
-.collection-detail-context-menu span {
-  display: block;
-  padding: 8px 10px;
-  color: var(--text-tertiary);
-  font-size: 0.78rem;
-}
-
 [data-theme="dark"] .collection-detail-hero,
 [data-theme="dark"] .collection-detail-bucket,
 [data-theme="dark"] .collection-detail-new-notice {

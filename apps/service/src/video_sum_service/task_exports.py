@@ -25,6 +25,7 @@ def export_task_markdown(
     target: Literal["markdown", "obsidian"] = "obsidian",
     include_transcript: bool = False,
     output_dir: str | None = None,
+    persist_artifact: bool = True,
 ) -> TaskMarkdownExportResponse:
     normalized_target = str(target or "obsidian").strip().lower()
     if normalized_target not in {"markdown", "obsidian"}:
@@ -102,7 +103,8 @@ def export_task_markdown(
             }
         }
     )
-    repository.save_result(task_id, refreshed_result)
+    if persist_artifact:
+        repository.save_result(task_id, refreshed_result)
     return TaskMarkdownExportResponse(
         task_id=task_id,
         target_format=normalized_target,

@@ -182,72 +182,10 @@ def _extract_json_object_text(value: str) -> str:
 
 
 def _parse_llm_response_json(response: httpx.Response) -> dict[str, object]:
-    """Parse an LLM response body, tolerating SSE/NDJSON framing.
+    """Keep the upstream parser entry point while sharing gateway handling."""
+    from video_sum_core.llm_response import parse_llm_response_json
 
-    Some OpenAI-compatible gateways (e.g. Ollama Cloud) always
-    return SSE chunks (``data: {...}`` lines plus a trailing ``data: [DONE]``)
-    even when the client did not request streaming. ``response.json()`` then
-    fails with ``Extra data``. This helper first tries the plain JSON path,
-    then falls back to concatenating the ``delta.content`` pieces from SSE
-    chunks into a single chat-completion-shaped body.
-    """
-    try:
-        payload = response.json()
-        if isinstance(payload, dict):
-            return payload
-    except ValueError:
-        pass
-
-    text = response.text
-    if not text.strip():
-        raise VideoSumError("LLM returned an empty response body.")
-
-    # Some gateways append a trailing ``data: [DONE]`` line to an otherwise
-    # plain JSON body (single object, not chunked). Try stripping that tail
-    # before falling back to full SSE chunk parsing.
-    done_marker = text.rfind("data: [DONE]")
-    if done_marker != -1:
-        candidate = text[:done_marker].strip()
-        if candidate.endswith("}"):
-            try:
-                payload = json.loads(candidate)
-                if isinstance(payload, dict):
-                    return payload
-            except json.JSONDecodeError:
-                pass
-
-    content_parts: list[str] = []
-    usage: dict[str, object] | None = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[len("data:") :].strip()
-        if not data or data == "[DONE]":
-            continue
-        try:
-            chunk = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(chunk, dict):
-            continue
-        choices = chunk.get("choices")
-        if isinstance(choices, list) and choices:
-            delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
-            if isinstance(delta, dict):
-                piece = delta.get("content")
-                if isinstance(piece, str) and piece:
-                    content_parts.append(piece)
-        if isinstance(chunk.get("usage"), dict):
-            usage = chunk["usage"]
-
-    if not content_parts:
-        raise VideoSumError("LLM returned an SSE body with no readable content.")
-
-    return {
-        "choices": [{"message": {"role": "assistant", "content": "".join(content_parts)}}],
-        "usage": usage or {},
-    }
+    return parse_llm_response_json(response)
 
 
 def _should_retry_llm_transport_error(error: Exception) -> bool:
@@ -2791,6 +2729,8 @@ class RealPipelineRunner(PipelineRunner):
         used to fail immediately. This wrapper keeps those stages consistent
         with the user-configured retry count.
         """
+        from video_sum_core.errors import LLMTransientError
+
         retry_count = max(0, int(self._settings.summary_chunk_retry_count))
         last_error: Exception | None = None
         for attempt in range(retry_count + 1):
@@ -2808,6 +2748,8 @@ class RealPipelineRunner(PipelineRunner):
                 last_error = exc
             except httpx.TransportError as exc:
                 last_error = exc
+            except LLMTransientError as exc:
+                last_error = exc
             except VideoSumError as exc:
                 if "no readable message content" not in str(exc).lower():
                     raise
@@ -2823,7 +2765,7 @@ class RealPipelineRunner(PipelineRunner):
                 retry_count,
                 last_error,
             )
-            time.sleep(min(6.0, 1.5 * (attempt + 1)))
+            time.sleep(min(30.0, 1.5 * (2 ** attempt)))
 
         if last_error is not None:
             raise last_error
@@ -2879,6 +2821,9 @@ class RealPipelineRunner(PipelineRunner):
             try:
                 with httpx.Client(timeout=timeout, follow_redirects=True) as client:
                     response = client.post(request_url, headers=headers, json=request_payload)
+                if (response.status_code == 429 or response.status_code >= 500) and attempt < transport_retry_count:
+                    time.sleep(min(30.0, 1.5 * (2 ** attempt)))
+                    continue
                 break
             except Exception as exc:
                 last_error = exc
@@ -2911,6 +2856,10 @@ class RealPipelineRunner(PipelineRunner):
                 raise LLMAuthenticationError(
                     f"LLM API Key 无效、已过期，或当前模型/接口无权限访问（HTTP {status_code}: {detail}）。"
                 ) from exc
+            if status_code == 429 or status_code >= 500:
+                from video_sum_core.errors import LLMTransientError
+
+                raise LLMTransientError(f"LLM request failed with status {status_code}: {detail}") from exc
             raise VideoSumError(f"LLM request failed with status {status_code}: {detail}") from exc
         logger.info("llm json response status=%s model=%s", response.status_code, self._settings.llm_model)
         response_json = _parse_llm_response_json(response)

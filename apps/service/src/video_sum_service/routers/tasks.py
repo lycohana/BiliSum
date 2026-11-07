@@ -1,8 +1,13 @@
 import asyncio
 import json
+import shutil
+import tempfile
+import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from video_sum_core.models.tasks import InputType, TaskStatus
 from video_sum_core.utils import normalize_video_url
@@ -37,6 +42,24 @@ from video_sum_service.task_exports import (
 from video_sum_service.video_assets import probe_video_asset
 
 router = APIRouter(prefix="/api/v1/tasks")
+
+
+@router.post("/{task_id}/resume", response_model=TaskDetailResponse)
+def resume_task(task_id: str, request: Request) -> TaskDetailResponse:
+    store = request.app.state.task_repository
+    record = store.get_task(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Task not found.")
+    if record.status not in {TaskStatus.PAUSED, TaskStatus.FAILED}:
+        raise HTTPException(status_code=409, detail="仅暂停或失败任务可以续跑。")
+    if record.result is None or not record.result.transcript_text.strip():
+        raise HTTPException(status_code=400, detail="当前任务没有已保存的转写。")
+    update_event = getattr(request.app.state, "settings_update_event", None)
+    if update_event is not None and not update_event.wait(timeout=30):
+        raise HTTPException(status_code=503, detail="设置仍在生效，请稍后再次点击仅重跑 LLM。转写已保留。")
+    store.update_error(task_id, None, None)
+    submit_task_or_queue(request.app.state, store, record)
+    return store.get_task(task_id).to_detail()
 
 
 @router.post("", response_model=TaskDetailResponse, status_code=status.HTTP_201_CREATED)
@@ -309,6 +332,33 @@ def export_task_markdown(request: Request, task_id: str, body: TaskMarkdownExpor
     )
 
 
+@router.get("/{task_id}/exports/download")
+def download_task_markdown(request: Request, task_id: str, target: str = "markdown", include_transcript: bool = False):
+    directory = Path(tempfile.mkdtemp(prefix="bilisum-export-"))
+    try:
+        exported = export_task_markdown_artifact(
+            request.app.state.task_repository, settings_manager.current, task_id,
+            target=target, include_transcript=include_transcript,
+            output_dir=str(directory), persist_artifact=False,
+        )
+        markdown = Path(exported.path)
+        files = [file for file in directory.rglob("*") if file.is_file()]
+        if len(files) > 1:
+            result = directory / f"{markdown.stem}.zip"
+            with zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as archive:
+                for file in files:
+                    archive.write(file, file.relative_to(directory).as_posix())
+            media_type = "application/zip"
+        else:
+            result = markdown
+            media_type = "text/markdown; charset=utf-8"
+        return FileResponse(result, filename=result.name, media_type=media_type,
+                            background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True))
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+
 @router.post("/{task_id}/exports/transcript", response_model=TaskMarkdownExportResponse)
 def export_task_transcript(
     request: Request,
@@ -343,7 +393,7 @@ async def stream_task_events(request: Request, task_id: str, after: str | None =
     async def event_generator():
         last_seen = after
         idle_ticks = 0
-        terminal_statuses = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        terminal_statuses = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED}
 
         while True:
             if await request.is_disconnected():

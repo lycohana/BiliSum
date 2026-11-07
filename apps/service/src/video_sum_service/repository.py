@@ -40,6 +40,7 @@ class SqliteTaskRepository:
                     title TEXT NOT NULL,
                     source_url TEXT NOT NULL,
                     cover_url TEXT,
+                    custom_cover_url TEXT,
                     duration REAL,
                     page_catalog_json TEXT NOT NULL DEFAULT '[]',
                     latest_task_id TEXT,
@@ -129,6 +130,7 @@ class SqliteTaskRepository:
             )
             self._ensure_column(cursor, "video_collections", "visibility_initialized", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "video_collections", "global_order", "REAL NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "video_collections", "custom_cover_url", "TEXT")
             self._ensure_column(cursor, "video_collections", "owner_mid", "TEXT")
             self._ensure_column(cursor, "video_collections", "owner_name", "TEXT")
             self._ensure_column(cursor, "video_collections", "owner_face", "TEXT")
@@ -1408,6 +1410,44 @@ class SqliteTaskRepository:
             )
         return self.get_video_asset(normalized_video_id)
 
+    def remove_video_collection_item_from_library(self, collection_id: str, video_id: str) -> VideoAssetRecord | None:
+        """Hide a collection member from the outer library without deleting its asset or tasks."""
+        normalized_collection_id = str(collection_id or "").strip()
+        normalized_video_id = str(video_id or "").strip()
+        if not normalized_collection_id or not normalized_video_id:
+            return None
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            membership = cursor.execute(
+                """
+                SELECT 1
+                FROM video_collection_items
+                WHERE collection_id = ? AND video_id = ?
+                """,
+                (normalized_collection_id, normalized_video_id),
+            ).fetchone()
+            if membership is None:
+                return None
+            asset = cursor.execute(
+                "SELECT video_id FROM video_assets WHERE video_id = ?",
+                (normalized_video_id,),
+            ).fetchone()
+            if asset is None:
+                return None
+            cursor.execute(
+                """
+                UPDATE video_collection_items
+                SET is_promoted = 0, updated_at = ?
+                WHERE video_id = ?
+                """,
+                (updated_at, normalized_video_id),
+            )
+            cursor.execute(
+                "UPDATE video_assets SET is_global_visible = 0, updated_at = ? WHERE video_id = ?",
+                (updated_at, normalized_video_id),
+            )
+        return self.get_video_asset(normalized_video_id)
+
     def reconcile_video_collection_assets(self, collection_id: str) -> None:
         """Link collection rows to assets that were imported before the collection was detected."""
         normalized_collection_id = str(collection_id or "").strip()
@@ -1776,6 +1816,26 @@ class SqliteTaskRepository:
                 )
         return self.get_video_collection(collection_id)
 
+    def set_video_collection_custom_cover(
+        self,
+        collection_id: str,
+        custom_cover_url: str | None,
+    ) -> VideoCollectionResponse | None:
+        now = datetime.now(timezone.utc).isoformat()
+        normalized_url = str(custom_cover_url or "").strip() or None
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            collection = cursor.execute(
+                "SELECT collection_id FROM video_collections WHERE collection_id = ?",
+                (collection_id,),
+            ).fetchone()
+            if collection is None:
+                return None
+            cursor.execute(
+                "UPDATE video_collections SET custom_cover_url = ?, updated_at = ? WHERE collection_id = ?",
+                (normalized_url, now, collection_id),
+            )
+        return self.get_video_collection(collection_id)
+
     def reorder_video_collection_items(
         self,
         collection_id: str,
@@ -1975,7 +2035,7 @@ class SqliteTaskRepository:
         with self._lock, sqlite_cursor(self._connection) as cursor:
             collection = cursor.execute(
                 """
-                SELECT collection_id, title, source_url, cover_url, auto_check_on_open, last_checked_at, pending_items_json,
+                SELECT collection_id, title, source_url, cover_url, custom_cover_url, auto_check_on_open, last_checked_at, pending_items_json,
                        global_order, folder_id, folder_order, folder_pinned, global_pinned, is_favorite, favorite_updated_at,
                        owner_mid, owner_name, owner_face, owner_url, view_sort_mode, view_group_mode
                 FROM video_collections WHERE collection_id = ?
@@ -2024,6 +2084,14 @@ class SqliteTaskRepository:
                     last_summary_at=asset.last_summary_at if asset else None,
                     asset_updated_at=asset.updated_at if asset else None,
                     is_global_visible=bool(asset and asset.is_global_visible),
+                    is_favorite=bool(asset and asset.is_favorite),
+                    favorite_updated_at=asset.favorite_updated_at if asset else None,
+                    folder_id=asset.folder_id if asset else None,
+                    folder_ids=asset.folder_ids if asset else [],
+                    global_order=asset.global_order if asset else 0,
+                    folder_order=asset.folder_order if asset else 0,
+                    global_pinned=bool(asset and asset.global_pinned),
+                    folder_pinned=bool(asset and asset.folder_pinned),
                 )
             )
         pending_items = [
@@ -2056,10 +2124,14 @@ class SqliteTaskRepository:
         view_group_mode = str(collection["view_group_mode"] or "none")
         if view_group_mode not in {"none", "status", "source_section"}:
             view_group_mode = "none"
+        source_cover_url = str(collection["cover_url"] or "")
+        custom_cover_url = str(collection["custom_cover_url"] or "")
         return VideoCollectionResponse(
             collection_id=str(collection["collection_id"]),
             title=str(collection["title"]),
-            cover_url=str(collection["cover_url"] or ""),
+            cover_url=custom_cover_url or source_cover_url,
+            source_cover_url=source_cover_url,
+            custom_cover_url=custom_cover_url,
             global_order=float(collection["global_order"] or 0),
             folder_order=float(collection["folder_order"] or 0),
             folder_id=collection["folder_id"],
@@ -2701,7 +2773,7 @@ class SqliteTaskRepository:
             row = cursor.execute("SELECT video_id, created_at FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
             if row is not None and row["video_id"]:
                 duration = None
-                if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+                if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED}:
                     try:
                         duration = max(
                             0.0,
@@ -2721,7 +2793,7 @@ class SqliteTaskRepository:
                     (
                         task_id,
                         status.value,
-                        updated_at if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED} else None,
+                        updated_at if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED} else None,
                         duration,
                         status.value,
                         updated_at,
@@ -2785,7 +2857,7 @@ class SqliteTaskRepository:
             self._save_result_locked(cursor, task_id, updated_result, updated_at)
         return self.get_task(task_id)
 
-    def update_error(self, task_id: str, error_code: str, error_message: str) -> TaskRecord | None:
+    def update_error(self, task_id: str, error_code: str | None, error_message: str | None) -> TaskRecord | None:
         updated_at = datetime.now(timezone.utc).isoformat()
         with self._lock, sqlite_cursor(self._connection) as cursor:
             cursor.execute(

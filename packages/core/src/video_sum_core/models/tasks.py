@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class InputType(str, Enum):
@@ -16,10 +16,12 @@ class TaskStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    PAUSED = "paused"
     CANCELLED = "cancelled"
 
 
 class TaskOptions(BaseModel):
+    scheduled_at: AwareDatetime | None = None
     language: str = "zh"
     summary_mode: str = "auto"
     summary_scope: str = "knowledge_note"

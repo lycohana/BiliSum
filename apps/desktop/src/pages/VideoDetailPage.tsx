@@ -1043,7 +1043,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
     });
     source.onerror = () => source.close();
     return () => source.close();
-  }, [latestTaskId]);
+  }, [latestTaskId, latestTaskDetail?.status]);
 
   useEffect(() => {
     if (!latestTaskId || !latestEvents.length) {
@@ -1053,6 +1053,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
     const terminalEvent = [...latestEvents].reverse().find((event) => (
       event.stage === "completed"
       || event.stage === "failed"
+      || event.stage === "paused"
       || event.stage === "cancelled"
       || event.stage === "mindmap_completed"
       || event.stage === "mindmap_failed"
@@ -1363,10 +1364,12 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   const selectedTaskSnapshot = buildTaskSnapshot(selectedTaskDetail ?? selectedTaskSummary);
   const selectedTaskTokenCount = selectedResult?.llm_total_tokens ?? selectedTaskDetail?.llm_total_tokens ?? selectedTaskSummary?.llm_total_tokens ?? null;
   const selectedTaskStatus = selectedTaskDetail?.status ?? selectedTaskSummary?.status;
+  const resumableTask = selectedTaskStatus === "paused" ? selectedTaskDetail
+    : latestTaskDetail?.status === "paused" ? latestTaskDetail : null;
   const canResummarize = Boolean(
     selectedTaskId
     && selectedTaskDetail?.result?.transcript_text?.trim()
-    && selectedTaskDetail.result.artifacts?.summary_path,
+    && selectedTaskStatus !== "queued" && selectedTaskStatus !== "running",
   );
   const canRegenerateVisualNote = Boolean(
     selectedTaskId
@@ -1751,6 +1754,11 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
     setKnowledgeNoteExportMenuOpen(false);
     setStatus(target === "obsidian" ? "正在导出 Obsidian 笔记..." : "正在导出 Markdown 笔记...");
     try {
+      if (!window.desktop?.dialog) {
+        await api.downloadTaskMarkdown(selectedTaskId, target, includeTranscriptInNoteExport);
+        setStatus("已下载笔记；带图片的笔记会打包为 ZIP。");
+        return;
+      }
       const pickedDirectory = await window.desktop?.dialog?.pickDirectory?.(knowledgeOutputDir || undefined);
       if (window.desktop?.dialog && !pickedDirectory) {
         setStatus("已取消导出。");
@@ -1809,6 +1817,21 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   return (
     <section className="video-detail-page">
       <FloatingNoticeStack notices={[{ id: "video-detail-status", message: status }]} />
+      {latestTaskDetail?.status === "queued" && latestTaskDetail.scheduled_at ? <section className="grid-card">
+        定时任务：{formatDateTime(latestTaskDetail.scheduled_at)} 开始。请保持应用或服务运行。
+      </section> : null}
+      {resumableTask ? <section className="grid-card">
+        <h3>转写已保存，等待续跑</h3>
+        <p>{resumableTask.error_message}</p>
+        <button className="primary-button" type="button" onClick={async () => {
+          const taskId = resumableTask.task_id;
+          try {
+            await api.resumeTask(taskId);
+            await refreshDetail({ preferredTaskId: taskId, forceTaskIds: [taskId], syncLibrary: true });
+            setStatus("已继续当前任务，将跳过下载和 ASR。");
+          } catch (error) { setStatus(error instanceof Error ? error.message : "续跑失败"); }
+        }}>仅重跑 LLM（复用转写）</button>
+      </section> : null}
       <CookieHelpDialog
         isOpen={cookieHelpDialogOpen}
         onClose={() => setCookieHelpDialogOpen(false)}
@@ -2052,16 +2075,25 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                                 setActionMenuOpen(false);
                                 setActionMenuSection(null);
                                 setStatus("正在基于当前版本重新生成摘要...");
-                                await api.resummarizeVideoTask(video.video_id, {
-                                  task_id: selectedTaskIdRef.current,
-                                  page_number: effectivePageNumber,
-                                });
+                                try {
+                                  if ((selectedTaskStatus === "paused" || selectedTaskStatus === "failed") && selectedTaskIdRef.current) {
+                                    await api.resumeTask(selectedTaskIdRef.current);
+                                  } else {
+                                    await api.resummarizeVideoTask(video.video_id, {
+                                      task_id: selectedTaskIdRef.current,
+                                      page_number: effectivePageNumber,
+                                    });
+                                  }
+                                } catch (error) {
+                                  setStatus(error instanceof Error ? error.message : "续跑失败");
+                                  return;
+                                }
                                 await refreshDetail({ preferredTaskId: null, syncLibrary: true });
                                 setStatus("已开始新的摘要生成任务");
                               }}
                             >
                               <IconSummaryRefresh className="detail-action-icon" />
-                              <span>重跑文本笔记</span>
+                              <span>{selectedTaskStatus === "paused" || selectedTaskStatus === "failed" ? "仅重跑 LLM（复用转写）" : "重跑文本笔记"}</span>
                             </button>
                             <button
                               className="detail-action-subitem"
@@ -2818,9 +2850,16 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                                   <IconExportNote />
                                 </span>
                                 <span className="detail-section-menu-copy">
-                                  <strong>{isExportingKnowledgeNote ? "正在导出..." : "导出到 Obsidian"}</strong>
-                                  <small>选择目录后写入 Markdown 笔记</small>
+                                  <strong>{isExportingKnowledgeNote ? "正在导出..." : window.desktop?.dialog ? "导出到 Obsidian" : "下载 Obsidian 笔记"}</strong>
+                                  <small>{window.desktop?.dialog ? "选择目录后写入 Markdown 笔记" : "下载到本机，图片会随笔记打包"}</small>
                                 </span>
+                              </button>
+                              <button className="detail-section-menu-item" type="button" role="menuitem"
+                                disabled={!canExportSelectedKnowledgeNote || isExportingKnowledgeNote}
+                                onClick={() => void handleExportKnowledgeNote("markdown")}>
+                                <span className="detail-section-menu-item-icon" aria-hidden="true"><IconFileText /></span>
+                                <span className="detail-section-menu-copy"><strong>{window.desktop?.dialog ? "导出 Markdown" : "下载 Markdown"}</strong>
+                                  <small>通用 Markdown 格式，带图片时提供完整资源</small></span>
                               </button>
                               <label className="detail-section-menu-check" role="menuitemcheckbox" aria-checked={includeTranscriptInNoteExport}>
                                 <input
@@ -2849,8 +2888,8 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                       </div>
                     </div>
                     <h4 className="detail-section-title">知识笔记</h4>
-                    {!knowledgeOutputDir && !window.desktop?.dialog ? (
-                      <p className="detail-section-body">导出前请先在设置中填写输出目录，Markdown / Obsidian 笔记会写入该目录。</p>
+                    {!window.desktop?.dialog ? (
+                      <p className="detail-section-body">笔记会下载到当前浏览器所在的电脑；带图片时自动打包为 ZIP。</p>
                     ) : null}
                     {displayedKnowledgeNoteMarkdown ? (
                       <MarkdownContent

@@ -15,7 +15,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
@@ -35,23 +35,37 @@ import {
   type CollectionStatusFilter,
   type CollectionViewGroup,
 } from "../collectionViewModel";
-import { ExternalLinkIcon, RefreshIcon, SearchIcon, TrashIcon } from "../components/AppIcons";
+import { ArrowUpToLineIcon, ExternalLinkIcon, RefreshIcon, SearchIcon, SettingsIcon, TrashIcon } from "../components/AppIcons";
+import { CollectionSettingsDialog } from "../components/CollectionSettingsDialog";
 import { VideoCard } from "../components/VideoCard";
-import type { CollectionGroupMode, CollectionSortMode, VideoAssetSummary, VideoCollection, VideoCollectionItem } from "../types";
+import {
+  VideoContextMenu,
+  flattenVideoContextMenuFolders,
+  resolveVideoContextMenuPosition,
+} from "../components/VideoContextMenu";
+import { buildFolderTree, getVideoFolderIds, sortFolders } from "../libraryModel";
+import type { CollectionGroupMode, CollectionSortMode, VideoAssetDetail, VideoAssetSummary, VideoCollection, VideoCollectionItem, VideoFolder } from "../types";
 
 type CollectionDetailPageProps = {
   serviceOnline: boolean;
+  folders: VideoFolder[];
   onRefreshCollection(collectionId: string): Promise<VideoCollection>;
   onAddCollectionItems(collectionId: string, bvids: string[]): Promise<VideoCollection>;
   onUpdateCollectionSettings(collectionId: string, autoCheckOnOpen: boolean): Promise<VideoCollection>;
+  onUploadCollectionCover(collectionId: string, file: File): Promise<VideoCollection>;
+  onResetCollectionCover(collectionId: string): Promise<VideoCollection>;
   onUpdateCollectionView(
     collectionId: string,
     payload: { view_sort_mode?: CollectionSortMode; view_group_mode?: CollectionGroupMode },
   ): Promise<VideoCollection>;
   onReorderCollectionItems(collectionId: string, orderedBvids: string[]): Promise<VideoCollection>;
   onDeleteCollection(collectionId: string, mode: "detach" | "delete_contents"): Promise<void>;
-  onPromoteCollectionItem(collectionId: string, videoId: string): Promise<unknown>;
+  onPromoteCollectionItem(collectionId: string, videoId: string): Promise<VideoAssetDetail>;
+  onRemoveCollectionItemFromLibrary(collectionId: string, videoId: string): Promise<VideoAssetDetail>;
   onSummarizeCollectionItems(collectionId: string, videoIds: string[]): Promise<void>;
+  onToggleFavorite(videoId: string, nextFavorite: boolean): Promise<void>;
+  onMoveVideo(videoId: string, folderId?: string | null, folderIds?: string[]): Promise<VideoAssetDetail>;
+  onSetVideoPin(videoId: string, payload: { global_pinned?: boolean | null; folder_pinned?: boolean | null }): Promise<VideoAssetDetail>;
 };
 
 type CollectionSelectionDrag = {
@@ -93,14 +107,21 @@ function withCustomCollectionOrder(collection: VideoCollection, orderedBvids: st
 
 export function CollectionDetailPage({
   serviceOnline,
+  folders,
   onRefreshCollection,
   onAddCollectionItems,
   onUpdateCollectionSettings,
+  onUploadCollectionCover,
+  onResetCollectionCover,
   onUpdateCollectionView,
   onReorderCollectionItems,
   onDeleteCollection,
   onPromoteCollectionItem,
+  onRemoveCollectionItemFromLibrary,
   onSummarizeCollectionItems,
+  onToggleFavorite,
+  onMoveVideo,
+  onSetVideoPin,
 }: CollectionDetailPageProps) {
   const { collectionId = "" } = useParams();
   const navigate = useNavigate();
@@ -118,8 +139,12 @@ export function CollectionDetailPage({
   const [groupMode, setGroupMode] = useState<CollectionGroupMode>("none");
   const [ownerFaceFailed, setOwnerFaceFailed] = useState(false);
   const [newNoticeDismissed, setNewNoticeDismissed] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: VideoCollectionItem } | null>(null);
+  const [contextMenu, setContextMenu] = useState<({ item: VideoCollectionItem } & ReturnType<typeof resolveVideoContextMenuPosition>) | null>(null);
+  const [contextMenuBusy, setContextMenuBusy] = useState(false);
+  const [videoDeleteConfirmId, setVideoDeleteConfirmId] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [heroCoverFailed, setHeroCoverFailed] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [selectionDragActive, setSelectionDragActive] = useState(false);
   const [toolbarStuck, setToolbarStuck] = useState(false);
@@ -147,6 +172,8 @@ export function CollectionDetailPage({
     group: groupMode,
   }), [collection?.items, statusFilter, query, sortMode, groupMode]);
   const renderedItems = useMemo(() => flattenCollectionGroups(view.groups), [view.groups]);
+  const sortedFolders = useMemo(() => sortFolders(folders), [folders]);
+  const folderMenuItems = useMemo(() => flattenVideoContextMenuFolders(buildFolderTree(sortedFolders)), [sortedFolders]);
   const statusCounts = useMemo(() => countCollectionStatuses(collection?.items || []), [collection?.items]);
   const selectableItems = useMemo(() => view.sourceItems.filter(isCollectionItemSummarizable), [view.sourceItems]);
   const visibleSelectedIds = useMemo(() => new Set(
@@ -158,12 +185,20 @@ export function CollectionDetailPage({
   );
   const newItems = collection?.new_items || [];
   const ownerUrl = collection?.owner_url || (collection?.owner_mid ? `https://space.bilibili.com/${collection.owner_mid}` : "");
+  const contextMenuItem = contextMenu
+    ? collection?.items.find((item) => item.bvid === contextMenu.item.bvid) || contextMenu.item
+    : null;
+  const contextMenuVideo = contextMenuItem?.video_id ? buildCollectionVideo(contextMenuItem, collection?.last_checked_at) : null;
   const canCustomReorder = (
     sortMode === "custom"
     && groupMode === "none"
     && statusFilter === "all"
     && !query.trim()
   );
+
+  useEffect(() => {
+    setHeroCoverFailed(false);
+  }, [collection?.cover_url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,11 +303,22 @@ export function CollectionDetailPage({
 
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    window.addEventListener("click", close);
+    const close = (event?: Event) => {
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest(".library-video-context-menu")) return;
+      setContextMenu(null);
+      setContextMenuBusy(false);
+      setVideoDeleteConfirmId(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", closeOnEscape);
     window.addEventListener("blur", close);
     return () => {
-      window.removeEventListener("click", close);
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("blur", close);
     };
   }, [contextMenu]);
@@ -544,16 +590,23 @@ export function CollectionDetailPage({
     }
   }
 
+  async function saveCollectionCover(file: File) {
+    const updated = await onUploadCollectionCover(collectionId, file);
+    setCollection(updated);
+  }
+
+  async function resetCollectionCover() {
+    const updated = await onResetCollectionCover(collectionId);
+    setCollection(updated);
+  }
+
   async function promoteItem(item: VideoCollectionItem) {
     if (!item.video_id) return;
     setBusy(true);
     setErrorMessage("");
     try {
-      await onPromoteCollectionItem(collectionId, item.video_id);
-      setCollection((current) => current ? {
-        ...current,
-        items: current.items.map((entry) => entry.video_id === item.video_id ? { ...entry, is_global_visible: true } : entry),
-      } : current);
+      const updated = await onPromoteCollectionItem(collectionId, item.video_id);
+      mergeCollectionVideo(updated);
     } catch (error) {
       setErrorMessage(readableCollectionError(error, "添加到外层视频库失败。"));
     } finally {
@@ -562,10 +615,39 @@ export function CollectionDetailPage({
     }
   }
 
-  function handleImageError(event: SyntheticEvent<HTMLImageElement>) {
-    const target = event.target as HTMLImageElement;
-    target.style.display = "none";
-    target.parentElement?.querySelector(".collection-detail-placeholder")?.classList.remove("is-hidden");
+  function mergeCollectionVideo(video: VideoAssetSummary) {
+    setCollection((current) => current ? {
+      ...current,
+      items: current.items.map((item) => (
+        item.video_id === video.video_id ? mergeVideoAssetIntoCollectionItem(item, video) : item
+      )),
+    } : current);
+  }
+
+  async function runContextMenuAction(action: () => Promise<void>, fallback: string) {
+    if (contextMenuBusy) return;
+    setContextMenuBusy(true);
+    setErrorMessage("");
+    try {
+      await action();
+      setContextMenu(null);
+      setVideoDeleteConfirmId(null);
+    } catch (error) {
+      setErrorMessage(readableCollectionError(error, fallback));
+    } finally {
+      setContextMenuBusy(false);
+    }
+  }
+
+  function openItemContextMenu(event: MouseEvent, item: VideoCollectionItem) {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenuBusy(false);
+    setVideoDeleteConfirmId(null);
+    setContextMenu({
+      item,
+      ...resolveVideoContextMenuPosition(event.clientX, event.clientY, item.is_global_visible ? 560 : 180),
+    });
   }
 
   if (loading) {
@@ -589,7 +671,7 @@ export function CollectionDetailPage({
 
       <header className="collection-detail-hero video-detail-hero">
         <div className="collection-detail-hero-cover video-detail-cover">
-          {collection.cover_url ? <><img src={collection.cover_url} alt={collection.title} onError={handleImageError} /><div className="collection-detail-placeholder is-hidden">合集</div></> : <div className="collection-detail-placeholder">合集</div>}
+          {collection.cover_url && !heroCoverFailed ? <img src={collection.cover_url} alt={collection.title} onError={() => setHeroCoverFailed(true)} /> : <div className="collection-detail-placeholder">合集</div>}
           <div className="collection-count-badge" aria-label={`${collection.item_count} 个视频`}><strong>{collection.item_count}</strong><span>集</span></div>
         </div>
         <div className="collection-detail-hero-copy video-detail-copy">
@@ -611,13 +693,32 @@ export function CollectionDetailPage({
                 />
               </div>
             </div>
+            <button
+              className="secondary-button compact-button collection-icon-button"
+              type="button"
+              aria-label="合集设置"
+              title="合集设置"
+              aria-expanded={settingsOpen}
+              disabled={busy}
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                setSettingsOpen(true);
+              }}
+            ><SettingsIcon aria-hidden="true" /></button>
             <div className="collection-delete-anchor">
-              <button className="secondary-button compact-button danger-button collection-icon-button" type="button" aria-label="删除合集" title="删除合集" aria-expanded={deleteConfirmOpen} aria-controls="collection-delete-popover" disabled={busy} onClick={() => setDeleteConfirmOpen((open) => !open)}><TrashIcon aria-hidden="true" /></button>
+              <button className="secondary-button compact-button danger-button collection-icon-button" type="button" aria-label="删除合集" title="删除合集" aria-expanded={deleteConfirmOpen} aria-controls="collection-delete-popover" disabled={busy} onClick={() => { setSettingsOpen(false); setDeleteConfirmOpen((open) => !open); }}><TrashIcon aria-hidden="true" /></button>
               {deleteConfirmOpen ? <div className="collection-delete-panel" id="collection-delete-popover" role="dialog" aria-label="删除合集"><strong>删除这个合集</strong><p>仅移除合集会把内部视频恢复到总视频库；删除全部内容会同时移除视频、任务和摘要。</p><div><button className="secondary-button compact-button" type="button" disabled={busy} onClick={() => void deleteCollection("detach")}>仅移除合集</button><button className="primary-button compact-button danger-button" type="button" disabled={busy} onClick={() => void deleteCollection("delete_contents")}>删除全部内容</button></div></div> : null}
             </div>
           </div>
         </div>
       </header>
+
+      {settingsOpen ? <CollectionSettingsDialog
+        collection={collection}
+        onSaveCover={saveCollectionCover}
+        onResetCover={resetCollectionCover}
+        onClose={() => setSettingsOpen(false)}
+      /> : null}
 
       {newItems.length && !newNoticeDismissed ? <div className="collection-detail-new-notice" role="status"><span>发现 {newItems.length} 个新视频，是否添加到这个合集？</span><div><button type="button" disabled={busy} onClick={() => void addNewItems()}>添加</button><button type="button" className="is-quiet" onClick={() => setNewNoticeDismissed(true)}>稍后</button></div></div> : null}
       {errorMessage ? <p className="collection-detail-error" role="alert">{errorMessage}</p> : null}
@@ -652,7 +753,7 @@ export function CollectionDetailPage({
             selectedIds={selectedIds}
             onToggleSelected={toggleSelected}
             onSelectionPointerDown={beginSelectionDrag}
-            onContextMenu={(event, item) => { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY, item }); }}
+            onContextMenu={openItemContextMenu}
           />) : <div className="collection-detail-empty collection-view-empty"><strong>没有符合条件的视频</strong><span>{hasViewConstraint ? "尝试清除搜索或状态筛选。" : "这个合集暂时没有可显示的视频。"}</span>{hasViewConstraint ? <button className="secondary-button compact-button" type="button" onClick={() => { setStatusFilter("all"); setQuery(""); }}>清除筛选</button> : null}</div>}
         </SortableContext>
       </DndContext>
@@ -665,9 +766,72 @@ export function CollectionDetailPage({
         <button className="is-primary" type="button" disabled={busy || selectedIds.size === 0} onClick={() => void summarizeSelected()}>{busy ? "正在创建…" : "一键总结已选"}</button>
       </div> : null}
 
-      {contextMenu ? <div className="library-video-context-menu collection-detail-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" aria-label={`${contextMenu.item.title} 的操作菜单`} onClick={(event) => event.stopPropagation()} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}>
-        <div className="library-video-menu-heading"><strong>{contextMenu.item.title}</strong><span>合集内 · 第 {contextMenu.item.position} 集</span></div>
-        {contextMenu.item.video_id ? <button type="button" role="menuitem" disabled={busy} onClick={() => void promoteItem(contextMenu.item)}>添加到外层视频列表</button> : <span className="collection-detail-context-empty">该视频还未进入任务库</span>}
+      {contextMenu && contextMenuItem && contextMenuVideo ? <VideoContextMenu
+        video={contextMenuVideo}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        submenuSide={contextMenu.submenuSide}
+        folders={folderMenuItems}
+        headingMeta={`合集内 · 第 ${contextMenuItem.position} 集`}
+        canPinInFolder={getVideoFolderIds(contextMenuVideo).length > 0}
+        busy={busy || contextMenuBusy}
+        deleteConfirmOpen={videoDeleteConfirmId === contextMenuVideo.video_id}
+        showLibraryActions={Boolean(contextMenuItem.is_global_visible)}
+        deleteLabel="仅删除外层视频"
+        deleteConfirmText="只会从外层视频列表移除；合集内容、视频文件、任务和摘要都会保留。"
+        deleteConfirmActionLabel="仅删除外层视频"
+        extraActions={!contextMenuItem.is_global_visible ? <button
+          type="button"
+          role="menuitem"
+          disabled={busy || contextMenuBusy}
+          onClick={() => void promoteItem(contextMenuItem)}
+        >
+          <ArrowUpToLineIcon />
+          <span>添加到外层视频列表</span>
+        </button> : undefined}
+        onOpenDetail={() => {
+          setContextMenu(null);
+          navigate(`/videos/${contextMenuVideo.video_id}`, {
+            state: { from: `/collections/${encodeURIComponent(collectionId)}` },
+          });
+        }}
+        onRevealFolder={() => {
+          const primaryFolderId = getVideoFolderIds(contextMenuVideo)[0] || "unfiled";
+          setContextMenu(null);
+          navigate("/library", { state: { scope: primaryFolderId } });
+        }}
+        onSetFolders={(folderIds) => void runContextMenuAction(async () => {
+          mergeCollectionVideo(await onMoveVideo(contextMenuVideo.video_id, undefined, folderIds));
+        }, "视频分组更新失败。")}
+        onToggleFavorite={() => void runContextMenuAction(async () => {
+          const nextFavorite = !contextMenuVideo.is_favorite;
+          await onToggleFavorite(contextMenuVideo.video_id, nextFavorite);
+          mergeCollectionVideo({
+            ...contextMenuVideo,
+            is_favorite: nextFavorite,
+            favorite_updated_at: nextFavorite ? new Date().toISOString() : null,
+          });
+        }, "视频收藏状态更新失败。")}
+        onToggleGlobalPin={() => void runContextMenuAction(async () => {
+          mergeCollectionVideo(await onSetVideoPin(contextMenuVideo.video_id, { global_pinned: !contextMenuVideo.global_pinned }));
+        }, "视频置顶状态更新失败。")}
+        onToggleFolderPin={() => void runContextMenuAction(async () => {
+          mergeCollectionVideo(await onSetVideoPin(contextMenuVideo.video_id, { folder_pinned: !contextMenuVideo.folder_pinned }));
+        }, "视频置顶状态更新失败。")}
+        onRequestDelete={() => setVideoDeleteConfirmId(contextMenuVideo.video_id)}
+        onCancelDelete={() => setVideoDeleteConfirmId(null)}
+        onDelete={() => void runContextMenuAction(async () => {
+          mergeCollectionVideo(await onRemoveCollectionItemFromLibrary(collectionId, contextMenuVideo.video_id));
+        }, "从外层视频列表移除失败。")}
+      /> : contextMenu && contextMenuItem ? <div
+        className="library-video-context-menu"
+        style={{ left: contextMenu.x, top: contextMenu.y }}
+        role="menu"
+        aria-label={`${contextMenuItem.title} 的操作菜单`}
+        onPointerDown={(event) => event.stopPropagation()}
+        onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
+      >
+        <div className="library-video-menu-heading"><strong>{contextMenuItem.title}</strong><span>该视频还未进入任务库</span></div>
       </div> : null}
     </section>
   );
@@ -863,16 +1027,39 @@ function buildCollectionVideo(item: VideoCollectionItem, collectionTimestamp?: s
     latest_status: item.latest_status || null,
     latest_stage: null,
     has_result: Boolean(item.has_result),
-    is_favorite: false,
-    favorite_updated_at: null,
-    folder_id: null,
-    folder_ids: [],
-    global_order: 0,
-    folder_order: 0,
-    global_pinned: false,
-    folder_pinned: false,
+    is_favorite: Boolean(item.is_favorite),
+    favorite_updated_at: item.favorite_updated_at || null,
+    folder_id: item.folder_id || null,
+    folder_ids: item.folder_ids || [],
+    global_order: item.global_order || 0,
+    folder_order: item.folder_order || 0,
+    global_pinned: Boolean(item.global_pinned),
+    folder_pinned: Boolean(item.folder_pinned),
+    is_global_visible: Boolean(item.is_global_visible),
     pages: [],
     created_at: item.last_summary_at || timestamp,
     updated_at: timestamp,
+  };
+}
+
+function mergeVideoAssetIntoCollectionItem(item: VideoCollectionItem, video: VideoAssetSummary): VideoCollectionItem {
+  return {
+    ...item,
+    title: video.title,
+    source_url: video.source_url,
+    cover_url: video.cover_url,
+    duration: video.duration,
+    has_result: video.has_result,
+    latest_status: video.latest_status,
+    asset_updated_at: video.updated_at,
+    is_global_visible: video.is_global_visible,
+    is_favorite: video.is_favorite,
+    favorite_updated_at: video.favorite_updated_at,
+    folder_id: video.folder_id,
+    folder_ids: video.folder_ids,
+    global_order: video.global_order,
+    folder_order: video.folder_order,
+    global_pinned: video.global_pinned,
+    folder_pinned: video.folder_pinned,
   };
 }

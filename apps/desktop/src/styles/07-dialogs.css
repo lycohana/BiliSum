@@ -397,6 +397,207 @@
   width: min(680px, calc(100vw - 40px));
 }
 
+.collection-settings-dialog {
+  width: min(600px, calc(100vw - 40px));
+}
+
+.collection-settings-heading {
+  min-width: 0;
+}
+
+.collection-settings-heading span {
+  display: block;
+  max-width: 420px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-settings-dialog .close-button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.collection-settings-body {
+  display: grid;
+  gap: 14px;
+}
+
+.collection-cover-setting {
+  display: grid;
+  gap: 14px;
+}
+
+.collection-cover-setting-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.collection-cover-setting-copy strong {
+  color: var(--text-primary);
+  font-size: 0.94rem;
+}
+
+.collection-cover-setting-copy span {
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.collection-cover-setting-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.collection-cover-preview {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-soft);
+}
+
+.collection-cover-preview > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.collection-cover-preview > span {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.collection-cover-preview > small {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  color: rgba(250, 250, 248, 0.92);
+  background: rgba(18, 20, 22, 0.76);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  font-size: 0.66rem;
+  font-weight: 700;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.collection-cover-dropzone {
+  display: flex;
+  min-width: 0;
+  padding: 14px;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-lg);
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-soft) 72%, transparent);
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+
+.collection-cover-dropzone:hover {
+  border-color: var(--selection-border);
+  background: var(--bg-accent);
+}
+
+.collection-cover-dropzone > svg {
+  width: 20px;
+  height: 20px;
+  margin-bottom: 10px;
+  color: var(--brand-500);
+}
+
+.collection-cover-dropzone > strong {
+  width: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-cover-dropzone > span {
+  margin: 4px 0 12px;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.collection-cover-file-input {
+  display: none;
+}
+
+.collection-cover-message {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.collection-cover-message.is-error {
+  border-color: var(--danger-border);
+  color: var(--danger);
+  background: var(--bg-danger);
+}
+
+.collection-cover-message.is-success {
+  border-color: var(--success-border);
+  color: var(--success);
+  background: var(--bg-success);
+}
+
+.collection-settings-footer {
+  justify-content: space-between;
+}
+
+.collection-settings-footer > div {
+  display: flex;
+  gap: 8px;
+}
+
+.collection-cover-reset {
+  margin-right: auto;
+}
+
+@media (max-width: 640px) {
+  .collection-cover-setting-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .collection-settings-footer,
+  .collection-settings-footer > div {
+    width: 100%;
+  }
+
+  .collection-settings-footer {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .collection-settings-footer > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .collection-settings-footer button {
+    width: 100%;
+  }
+}
+
 .collection-select-dialog {
   position: relative;
   width: min(880px, calc(100vw - 40px));

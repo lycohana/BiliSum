@@ -10,3 +10,6 @@ import "./markdown-utils.test.ts";
 import "./video-player.test.ts";
 import "./library-model.test.ts";
 import "./collection-view-model.test.ts";
+import "./video-context-menu.test.ts";
+import "./collection-settings.test.ts";
+import "./storage-migration.test.ts";

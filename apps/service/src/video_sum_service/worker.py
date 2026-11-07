@@ -1,4 +1,5 @@
 import logging
+import json
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -142,14 +143,6 @@ class TaskWorker:
             task.task_input.source,
         )
         result = self._enqueue_summary(task)
-        if result == "accepted":
-            self._repository.update_status(task.task_id, TaskStatus.QUEUED)
-            self._repository.append_event(
-                task_id=task.task_id,
-                stage="queued",
-                progress=0,
-                message="任务已进入后台队列",
-            )
         return result
 
     def submit_mindmap(self, task_id: str, *, force: bool = False) -> None:
@@ -338,6 +331,12 @@ class TaskWorker:
                     started_monotonic=time.monotonic(),
                 )
 
+            self._repository.update_status(task.task_id, TaskStatus.QUEUED)
+            self._repository.append_event(
+                task_id=task.task_id, stage="queued", progress=0,
+                message=(f"定时任务：将在 {task.task_input.options.scheduled_at.isoformat()} 开始；需保持服务运行"
+                         if task.task_input.options.scheduled_at else "任务已进入后台队列"),
+            )
             self._task_state.pending.append(task)
             self._task_state.pending_ids.add(job_id)
             self._summary_batch.total_tasks += 1
@@ -406,7 +405,17 @@ class TaskWorker:
                 if not self._accept_new_work and not state.pending and not state.running_ids:
                     return None
                 if state.pending and len(state.running_ids) < state.concurrency:
-                    job = state.pending.popleft()
+                    now = datetime.now(timezone.utc)
+                    job = next((candidate for candidate in state.pending
+                                if not isinstance(candidate, TaskRecord)
+                                or candidate.task_input.options.scheduled_at is None
+                                or candidate.task_input.options.scheduled_at <= now), None)
+                    if job is None:
+                        delay = min((candidate.task_input.options.scheduled_at - now).total_seconds()
+                                    for candidate in state.pending)
+                        self._condition.wait(timeout=max(0.01, min(delay, 30)))
+                        continue
+                    state.pending.remove(job)
                     job_id = state.job_id_for(job)
                     state.pending_ids.discard(job_id)
                     state.running_ids.add(job_id)
@@ -510,6 +519,8 @@ class TaskWorker:
         status = record.status.value if record is not None else TaskStatus.FAILED.value
         if status == TaskStatus.COMPLETED.value:
             return status, "任务已完成", task_tokens
+        if status == TaskStatus.PAUSED.value:
+            return status, "转写已保存，等待续跑", task_tokens
         if status == TaskStatus.CANCELLED.value:
             return status, "任务已取消", task_tokens
         if status == TaskStatus.FAILED.value:
@@ -587,19 +598,28 @@ class TaskWorker:
         return handle_pipeline_event
 
     def _mark_task_failed(self, task_id: str, exc: Exception) -> None:
-        self._repository.update_error(task_id, "TASK_EXECUTION_FAILED", str(exc))
-        self._repository.update_status(task_id, TaskStatus.FAILED)
+        record = self._repository.get_task(task_id)
+        resumable = bool(record and record.result and record.result.transcript_text.strip())
+        status = TaskStatus.PAUSED if resumable else TaskStatus.FAILED
+        from video_sum_core.errors import LLMAuthenticationError
+
+        message = str(exc)
+        if resumable:
+            message += (" 请更新 API Key 后，点击「仅重跑 LLM」。" if isinstance(exc, LLMAuthenticationError)
+                        else " 转写已保存，可点击「仅重跑 LLM」继续。")
+        self._repository.update_error(task_id, "LLM_RESUMABLE" if resumable else "TASK_EXECUTION_FAILED", message)
+        self._repository.update_status(task_id, status)
         self._update_summary_item(
             task_id,
-            status=TaskStatus.FAILED.value,
+            status=status.value,
             progress=0,
-            message=str(exc) or "任务执行失败",
+            message=message or "任务执行失败",
         )
         self._repository.append_event(
             task_id=task_id,
-            stage="failed",
+            stage="paused" if resumable else "failed",
             progress=0,
-            message="任务执行失败",
+            message=message or "任务执行失败",
             payload={"error": str(exc)},
         )
 
@@ -670,12 +690,40 @@ class TaskWorker:
         self._active_runner = self._pipeline_runner
         try:
             context = PipelineContext(task_id=task_id, task_input=record.task_input)
-            transcription = self._pipeline_runner.run_transcription(  # type: ignore[attr-defined]
-                context,
-                on_event=self._pipeline_event_handler(task_id),
-            )
+            if record.result and record.result.transcript_text.strip():
+                summary_path = record.result.artifacts.get("summary_path")
+                task_dir = Path(summary_path).parent if summary_path else Path(self._knowledge_index_settings.tasks_dir) / task_id
+                task_dir.mkdir(parents=True, exist_ok=True)
+                transcription = PipelineTranscription(
+                    title=record.task_input.title or task_id,
+                    transcript=record.result.transcript_text,
+                    segments=record.result.segments,
+                    task_dir=task_dir,
+                    source_path=Path(record.task_input.source) if record.task_input.input_type == InputType.VIDEO_FILE else None,
+                )
+                if record.task_input.input_type == InputType.TRANSCRIPT_TEXT:
+                    try:
+                        payload = json.loads(record.task_input.source)
+                        if isinstance(payload, dict):
+                            transcription.source_kind = payload.get("source_kind")
+                    except ValueError:
+                        pass
+                self._repository.append_event(task_id=task_id, stage="transcript_reused", progress=86,
+                                              message="已复用保存的转写，跳过下载和 ASR")
+            else:
+                transcription = self._pipeline_runner.run_transcription(  # type: ignore[attr-defined]
+                    context,
+                    on_event=self._pipeline_event_handler(task_id),
+                )
             if not isinstance(transcription, PipelineTranscription):
                 raise TypeError("staged transcription must return PipelineTranscription")
+            # Persist the stage boundary even if a runner did not emit a snapshot.
+            if not record.result or not record.result.transcript_text.strip():
+                self._repository.save_result(task_id, TaskResult(
+                    transcript_text=transcription.transcript, segments=transcription.segments,
+                    artifacts={"transcript_path": str(transcription.task_dir / "transcript.txt"),
+                               "summary_path": str(transcription.task_dir / "summary.json")},
+                ))
             with self._condition:
                 self._staged_transcriptions[task_id] = transcription
             return True
@@ -839,21 +887,7 @@ class TaskWorker:
                 self._index_completed_task(record.video_id, task_id)
         except Exception as exc:
             logger.exception("task failed task_id=%s error=%s", task_id, exc)
-            self._repository.update_error(task_id, "TASK_EXECUTION_FAILED", str(exc))
-            self._repository.update_status(task_id, TaskStatus.FAILED)
-            self._update_summary_item(
-                task_id,
-                status=TaskStatus.FAILED.value,
-                progress=0,
-                message=str(exc) or "任务执行失败",
-            )
-            self._repository.append_event(
-                task_id=task_id,
-                stage="failed",
-                progress=0,
-                message="任务执行失败",
-                payload={"error": str(exc)},
-            )
+            self._mark_task_failed(task_id, exc)
         finally:
             self._active_runner = None
 

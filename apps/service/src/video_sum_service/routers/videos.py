@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 
-from video_sum_service.context import LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
+from video_sum_service.context import COVER_CACHE_DIR, LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.runtime_startup import submit_task_or_queue
 from video_sum_service.schemas import (
@@ -64,6 +64,7 @@ router = APIRouter(prefix="/api/v1/videos", tags=["videos"])
 
 MAX_UPLOAD_BYTES = 8 * 1024 ** 3  # 8 GB
 MAX_BATCH_FILES = 20
+MAX_COLLECTION_COVER_BYTES = 10 * 1024 ** 2
 AGGREGATE_SUMMARY_PAGE_NUMBER = 0
 AGGREGATE_SUMMARY_PAGE_TITLE = "全集总结"
 AGGREGATE_SUMMARY_TITLE_SUFFIX = "｜全集总结"
@@ -73,6 +74,44 @@ AGGREGATE_CHAPTER_LIMIT = 180
 AGGREGATE_NOTE_LIMIT = 360
 AGGREGATE_MAX_KEY_POINTS_PER_PAGE = 8
 AGGREGATE_MAX_CHAPTERS_PER_PAGE = 8
+
+
+def _detect_collection_cover_extension(payload: bytes) -> tuple[str, set[str]] | None:
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png", {"image/png"}
+    if payload.startswith(b"\xff\xd8\xff"):
+        return ".jpg", {"image/jpeg", "image/jpg"}
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return ".webp", {"image/webp"}
+    return None
+
+
+async def _read_collection_cover_upload(request: Request) -> bytes:
+    declared_length = request.headers.get("content-length", "").strip()
+    if declared_length.isdigit() and int(declared_length) > MAX_COLLECTION_COVER_BYTES:
+        raise HTTPException(status_code=413, detail="合集封面不能超过 10MB。")
+    payload = bytearray()
+    async for chunk in request.stream():
+        payload.extend(chunk)
+        if len(payload) > MAX_COLLECTION_COVER_BYTES:
+            raise HTTPException(status_code=413, detail="合集封面不能超过 10MB。")
+    if not payload:
+        raise HTTPException(status_code=400, detail="请选择要上传的合集封面。")
+    return bytes(payload)
+
+
+def _remove_cached_collection_cover(cover_url: str) -> None:
+    normalized = str(cover_url or "").strip()
+    prefix = "/media/covers/collection-custom-"
+    if not normalized.startswith(prefix):
+        return
+    target = COVER_CACHE_DIR / Path(normalized).name
+    try:
+        if target.resolve().parent != COVER_CACHE_DIR.resolve():
+            return
+        target.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("remove custom collection cover failed path=%s", target, exc_info=True)
 
 
 def _ensure_collection_assets(
@@ -158,7 +197,6 @@ def _find_resummary_source_task(
                 if (
                     task.result
                     and task.result.transcript_text.strip()
-                    and task.result.artifacts.get("summary_path")
                     and (
                         body.page_number is None
                         or _task_page_number(task) == body.page_number
@@ -328,6 +366,7 @@ def _create_video_task_record(
     visual_note_mode: str | None = None,
     prompt_preset_id: str | None = None,
     summary_scope: str | None = None,
+    scheduled_at=None,
 ):
     record = _build_video_task_record(
         video=video,
@@ -335,6 +374,7 @@ def _create_video_task_record(
         visual_note_mode=visual_note_mode,
         prompt_preset_id=prompt_preset_id,
         summary_scope=summary_scope,
+        scheduled_at=scheduled_at,
     )
     record = task_store.create_task_record(record)
     submit_task_or_queue(app_state, task_store, record)
@@ -350,6 +390,7 @@ def _build_video_task_record(
     visual_note_mode: str | None = None,
     prompt_preset_id: str | None = None,
     summary_scope: str | None = None,
+    scheduled_at=None,
 ) -> TaskRecord:
     page = resolve_video_page(video, page_number)
     if video.pages and page_number is not None and page is None:
@@ -371,6 +412,7 @@ def _build_video_task_record(
     if str(video.platform or "").lower() == "local":
         input_type = infer_local_input_type(source_url)
     task_input = TaskInput(input_type=input_type, source=source_url, title=title, platform_hint=video.platform)
+    task_input.options.scheduled_at = scheduled_at
     if visual_note_mode is not None:
         task_input.options.visual_note_mode = visual_note_mode
     if prompt_preset_id is not None:
@@ -397,10 +439,8 @@ def _create_resummary_task_record(
     if source_task.result is None or not source_task.result.transcript_text.strip():
         raise HTTPException(status_code=400, detail="所选任务还没有可复用的转写文本。")
 
-    summary_path = source_task.result.artifacts.get("summary_path") if source_task.result else None
-    if not summary_path:
-        raise HTTPException(status_code=400, detail="所选任务缺少可复用的分段文件。")
-    segments = load_task_segments(summary_path)
+    summary_path = source_task.result.artifacts.get("summary_path")
+    segments = source_task.result.segments or (load_task_segments(summary_path) if summary_path else [])
 
     payload = json.dumps(
         {
@@ -422,7 +462,7 @@ def _create_resummary_task_record(
             source=payload,
             title=source_task.task_input.title or video.title,
             platform_hint=source_task.task_input.platform_hint,
-            options=source_task.task_input.options,
+            options=source_task.task_input.options.model_copy(update={"scheduled_at": None}),
         ),
         video_id=video.video_id,
         page_number=source_task.page_number,
@@ -688,6 +728,67 @@ def update_video_collection_settings(
     return updated
 
 
+@router.put("/collections/{collection_id}/cover", response_model=VideoCollectionResponse)
+async def upload_video_collection_cover(
+    collection_id: str,
+    request: Request,
+) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    payload = await _read_collection_cover_upload(request)
+    detected = _detect_collection_cover_extension(payload)
+    if detected is None:
+        raise HTTPException(status_code=415, detail="合集封面仅支持 JPEG、PNG 或 WebP 图片。")
+    extension, accepted_types = detected
+    declared_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    allowed_declared_types = {"", "application/octet-stream"} | accepted_types
+    if declared_type not in allowed_declared_types:
+        raise HTTPException(status_code=415, detail="图片格式与文件内容不一致。")
+
+    COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    collection_hash = hashlib.sha256(collection_id.encode("utf-8")).hexdigest()[:16]
+    file_name = f"collection-custom-{collection_hash}-{uuid4().hex[:12]}{extension}"
+    target = COVER_CACHE_DIR / file_name
+    temporary = COVER_CACHE_DIR / f".{file_name}.tmp"
+    cover_saved = False
+    try:
+        temporary.write_bytes(payload)
+        temporary.replace(target)
+        updated = task_store.set_video_collection_custom_cover(
+            collection_id,
+            f"/media/covers/{file_name}",
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Collection not found.")
+        cover_saved = True
+    except Exception:
+        if not cover_saved:
+            target.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    _remove_cached_collection_cover(collection.custom_cover_url)
+    logger.info("update custom collection cover collection_id=%s", collection_id)
+    return updated
+
+
+@router.delete("/collections/{collection_id}/cover", response_model=VideoCollectionResponse)
+def reset_video_collection_cover(collection_id: str, request: Request) -> VideoCollectionResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    updated = task_store.set_video_collection_custom_cover(collection_id, None)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    _remove_cached_collection_cover(collection.custom_cover_url)
+    logger.info("reset custom collection cover collection_id=%s", collection_id)
+    return updated
+
+
 @router.patch("/collections/{collection_id}/items/order", response_model=VideoCollectionResponse)
 def reorder_video_collection_items(
     collection_id: str,
@@ -766,6 +867,7 @@ def create_video_collection_tasks(
         "visual_note_mode": payload.visual_note_mode,
         "prompt_preset_id": payload.prompt_preset_id,
         "summary_scope": payload.summary_scope,
+        "scheduled_at": payload.scheduled_at.isoformat() if payload.scheduled_at else None,
     }
     request_fingerprint = hashlib.sha256(
         json.dumps(
@@ -782,6 +884,7 @@ def create_video_collection_tasks(
             visual_note_mode=payload.visual_note_mode,
             prompt_preset_id=payload.prompt_preset_id,
             summary_scope=payload.summary_scope,
+            scheduled_at=payload.scheduled_at,
         )
         for video in videos
     ]
@@ -932,6 +1035,7 @@ def delete_video_collection(
         deleted_ids = task_store.delete_video_collection(collection_id, detach_contents=False) or []
     else:
         deleted_ids = task_store.delete_video_collection(collection_id, detach_contents=True) or []
+    _remove_cached_collection_cover(collection.custom_cover_url)
     logger.info("delete video collection collection_id=%s mode=%s", collection_id, mode)
     return {"deleted": True, "collection_id": collection_id, "mode": mode, "video_ids": deleted_ids}
 
@@ -977,6 +1081,18 @@ def promote_video_collection_item(collection_id: str, video_id: str, request: Re
     if collection is None or not any(item.video_id == video_id for item in collection.items):
         raise HTTPException(status_code=404, detail="合集内视频不存在。")
     updated = task_store.promote_video_collection_item(collection_id, video_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="视频不存在。")
+    return localize_video_cover(task_store, updated).to_detail()
+
+
+@router.delete("/collections/{collection_id}/items/{video_id}/promote", response_model=VideoAssetDetailResponse)
+def remove_video_collection_item_from_library(collection_id: str, video_id: str, request: Request) -> VideoAssetDetailResponse:
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    collection = task_store.get_video_collection(collection_id)
+    if collection is None or not any(item.video_id == video_id for item in collection.items):
+        raise HTTPException(status_code=404, detail="合集内视频不存在。")
+    updated = task_store.remove_video_collection_item_from_library(collection_id, video_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="视频不存在。")
     return localize_video_cover(task_store, updated).to_detail()
@@ -1165,6 +1281,7 @@ def create_video_task(
         visual_note_mode=getattr(request_body, "visual_note_mode", None) if request_body else None,
         prompt_preset_id=getattr(request_body, "prompt_preset_id", None) if request_body else None,
         summary_scope=getattr(request_body, "summary_scope", None) if request_body else None,
+        scheduled_at=getattr(request_body, "scheduled_at", None) if request_body else None,
     )
     return refreshed.to_detail()
 
@@ -1301,6 +1418,7 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
             video=video,
             page_number=page_number,
             prompt_preset_id=prompt_preset_id,
+            scheduled_at=getattr(body, "scheduled_at", None),
         )
         created_tasks.append(refreshed.to_detail())
 

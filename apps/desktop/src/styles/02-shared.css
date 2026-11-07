@@ -2371,3 +2371,36 @@
   line-height: 1.5;
 }
 
+
+.task-schedule-control {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.task-schedule-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.task-schedule-row input {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 6px;
+  border: 1px solid var(--border-default); border-radius: 8px;
+  background: var(--bg-card); color: var(--text-primary); font: inherit; font-size: 12px;
+}
+.task-schedule-row button {
+  padding: 8px 12px; border: 0; border-radius: 8px;
+  background: var(--brand-600); color: var(--text-on-brand); font: inherit; cursor: pointer;
+}
+.task-schedule-row button:disabled { opacity: .45; cursor: default; }
+.task-schedule-control small { color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+.task-schedule-control small[role="alert"] { color: var(--danger); }
+.task-schedule-row input:focus-visible, .task-schedule-row button:focus-visible,
+.home-prompt-custom-button:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.home-prompt-custom-button {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.home-prompt-custom-button:hover { color: var(--text-primary); background: var(--bg-subtle); border-color: var(--border-strong); }

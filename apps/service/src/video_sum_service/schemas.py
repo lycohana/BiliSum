@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 from video_sum_core.models.tasks import MindMapNode, TaskInput, TaskMindMap, TaskResult, TaskStatus
 from video_sum_core.utils import extract_bilibili_page
 
@@ -17,6 +17,7 @@ class ResummaryRequest(BaseModel):
 
 
 class VideoTaskCreateRequest(BaseModel):
+    scheduled_at: AwareDatetime | None = None
     page_number: int | None = None
     visual_note_mode: str | None = None
     prompt_preset_id: str | None = None
@@ -24,6 +25,7 @@ class VideoTaskCreateRequest(BaseModel):
 
 
 class VideoTaskBatchRequest(BaseModel):
+    scheduled_at: AwareDatetime | None = None
     page_numbers: list[int] = Field(default_factory=list)
     confirm: bool = False
     prompt_preset_id: str | None = None
@@ -178,6 +180,14 @@ class VideoCollectionItemResponse(BaseModel):
     last_summary_at: datetime | None = None
     asset_updated_at: datetime | None = None
     is_global_visible: bool = False
+    is_favorite: bool = False
+    favorite_updated_at: datetime | None = None
+    folder_id: str | None = None
+    folder_ids: list[str] = Field(default_factory=list)
+    global_order: float = 0
+    folder_order: float = 0
+    global_pinned: bool = False
+    folder_pinned: bool = False
     is_new: bool = False
 
 
@@ -185,6 +195,8 @@ class VideoCollectionResponse(BaseModel):
     collection_id: str
     title: str
     cover_url: str = ""
+    source_cover_url: str = ""
+    custom_cover_url: str = ""
     global_order: float = 0
     folder_order: float = 0
     folder_id: str | None = None
@@ -376,6 +388,7 @@ class VideoCollectionItemsOrderRequest(BaseModel):
 
 
 class VideoCollectionTaskCreateRequest(BaseModel):
+    scheduled_at: AwareDatetime | None = None
     batch_id: str | None = Field(default=None, min_length=1, max_length=128)
     ordered_video_ids: list[str] = Field(min_length=1)
     visual_note_mode: str | None = None
@@ -400,6 +413,7 @@ class VideoCollectionTaskCreateResponse(BaseModel):
 
 
 class TaskSummaryResponse(BaseModel):
+    scheduled_at: datetime | None = None
     task_id: str
     video_id: str | None = None
     status: TaskStatus
@@ -492,6 +506,7 @@ class TaskRecord(BaseModel):
     def to_summary(self) -> TaskSummaryResponse:
         page_number = self.page_number if self.page_number is not None else extract_bilibili_page(self.task_input.source)
         return TaskSummaryResponse(
+            scheduled_at=self.task_input.options.scheduled_at,
             task_id=self.task_id,
             video_id=self.video_id,
             status=self.status,

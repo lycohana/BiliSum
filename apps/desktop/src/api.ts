@@ -147,6 +147,24 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 }
 
 export const api = {
+  resumeTask(taskId: string) {
+    return fetchJson<TaskDetail>(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
+  },
+  async downloadTaskMarkdown(taskId: string, target: "markdown" | "obsidian", includeTranscript: boolean) {
+    const response = await fetch(`/api/v1/tasks/${encodeURIComponent(taskId)}/exports/download?target=${target}&include_transcript=${includeTranscript}`, await withDesktopAuth());
+    if (!response.ok) throw new Error(await response.text());
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    const filename = encodedName ? decodeURIComponent(encodedName) : /filename="([^"]+)"/.exec(disposition)?.[1] || "BiliSum.md";
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  },
   getAuthStatus() {
     return fetchJson<AuthStatus>("/api/v1/auth/status");
   },
@@ -287,6 +305,18 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
+  uploadVideoCollectionCover(collectionId: string, file: File) {
+    return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/cover`, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+  },
+  resetVideoCollectionCover(collectionId: string) {
+    return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/cover`, {
+      method: "DELETE",
+    });
+  },
   reorderVideoCollectionItems(collectionId: string, orderedBvids: string[]) {
     return fetchJson<VideoCollection>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/items/order`, {
       method: "PATCH",
@@ -295,6 +325,7 @@ export const api = {
     });
   },
   createVideoCollectionTasks(collectionId: string, payload: {
+    scheduled_at?: string | null;
     batch_id?: string;
     ordered_video_ids: string[];
     visual_note_mode?: string | null;
@@ -345,6 +376,11 @@ export const api = {
   promoteVideoCollectionItem(collectionId: string, videoId: string) {
     return fetchJson<VideoAssetDetail>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(videoId)}/promote`, {
       method: "POST",
+    });
+  },
+  removeVideoCollectionItemFromLibrary(collectionId: string, videoId: string) {
+    return fetchJson<VideoAssetDetail>(`/api/v1/videos/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(videoId)}/promote`, {
+      method: "DELETE",
     });
   },
   updateVideoLibraryPreferences(payload: VideoLibraryPreferences) {
@@ -446,6 +482,7 @@ export const api = {
   createVideoTask(
     videoId: string,
     payload?: {
+      scheduled_at?: string | null;
       page_number?: number | null;
       visual_note_mode?: string | null;
       prompt_preset_id?: string | null;

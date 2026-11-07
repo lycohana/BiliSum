@@ -24,6 +24,21 @@ import {
 import { autoUpdater, ProgressInfo, UpdateInfo as ElectronUpdateInfo } from "electron-updater";
 import desktopPackage from "../package.json";
 import { isAllowedExternalUrl, isCrossOriginNavigation } from "./externalLinks";
+import {
+  cleanupMigratedSource,
+  copyStorageMigration,
+  getActiveTaskCount,
+  type MigrationCopyResult,
+  type MigrationExternalKey,
+  type MigrationLocation,
+  type MigrationPreview,
+  type MigrationProgress,
+  previewStorageMigration,
+  rebaseMigrationDestinations,
+  refreshMigrationDestinationHashes,
+  getMigrationPathMappings,
+  resolveStorageRoot,
+} from "./storageMigration";
 
 type CloseBehavior = "ask" | "tray" | "exit";
 type ThemePreference = "light" | "dark";
@@ -35,6 +50,7 @@ type DesktopPreferences = {
   silentStart: boolean;
   crashAutoRestart: boolean;
   developerMode: boolean;
+  appDataRoot?: string;
   themePreference?: ThemePreference;
   lastOpenedVersion?: string;
   lastSeenAnnouncementVersion?: string;
@@ -110,6 +126,27 @@ type StorageCleanupResult = {
   reclaimedBytes: number;
 };
 
+type StorageMigrationRequest = {
+  targetRoot: string;
+  selectedExternalKeys: MigrationExternalKey[];
+};
+
+type StorageMigrationResult = {
+  success: boolean;
+  sourceRoot: string;
+  targetRoot: string;
+  error: string | null;
+  rolledBack: boolean;
+  serviceRestored: boolean;
+};
+
+type StorageMigrationCleanupResult = {
+  deletedFiles: number;
+  skippedFiles: number;
+  removedDirectories: number;
+  retainedPaths: string[];
+};
+
 type BilibiliCookieExportResult = {
   cookiesFile: string;
   cookieCount: number;
@@ -148,8 +185,6 @@ const legacyUserDataPath = path.join(app.getPath("appData"), LEGACY_PRODUCT_NAME
 const legacyPreferencesPath = path.join(legacyUserDataPath, "desktop-preferences.json");
 const preferencesFileExistedAtLaunch = fs.existsSync(preferencesPath) || fs.existsSync(legacyPreferencesPath);
 
-migrateLegacyDesktopFiles();
-
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let backendProcess: ChildProcess | null = null;
@@ -158,9 +193,13 @@ let frontendStaticUrl = "";
 let applicationLoadPromise: Promise<void> | null = null;
 let applicationLoadedTarget = "";
 let backendStoppingPromise: Promise<void> | null = null;
+let storageMigrationInProgress = false;
+let pendingMigratedSourceCleanup: MigrationCopyResult | null = null;
 let splashShownAt = 0;
 let forceQuit = false;
+migrateLegacyDesktopPreferences();
 let preferences: DesktopPreferences = loadPreferences();
+migrateLegacyLocalData();
 let backendStatus: BackendStatus = {
   running: false,
   ready: false,
@@ -198,7 +237,11 @@ function getLocalAppDataDir() {
 }
 
 function currentLocalDataRoot() {
-  return process.env.VIDEO_SUM_APP_DATA_ROOT || path.join(getLocalAppDataDir(), APP_SLUG);
+  return resolveStorageRoot(
+    process.env.VIDEO_SUM_APP_DATA_ROOT,
+    preferences.appDataRoot,
+    path.join(getLocalAppDataDir(), APP_SLUG),
+  );
 }
 
 function legacyLocalDataRoot() {
@@ -231,13 +274,20 @@ function copyMissingTree(source: string, destination: string, mergeDepth = 0) {
   }
 }
 
-function migrateLegacyDesktopFiles() {
+function migrateLegacyDesktopPreferences() {
   try {
     copyMissingTree(legacyUserDataPath, app.getPath("userData"));
     copyMissingTree(legacyPreferencesPath, preferencesPath);
+  } catch (error) {
+    console.warn("[Migration] Failed to migrate legacy BriefVid desktop preferences:", error);
+  }
+}
+
+function migrateLegacyLocalData() {
+  try {
     copyMissingTree(legacyLocalDataRoot(), currentLocalDataRoot());
   } catch (error) {
-    console.warn("[Migration] Failed to migrate legacy BriefVid files:", error);
+    console.warn("[Migration] Failed to migrate legacy BriefVid application data:", error);
   }
 }
 
@@ -526,6 +576,7 @@ async function getTrustedStorageLocations() {
   const fallbackDataDir = path.join(currentLocalDataRoot(), "data");
   const fallbackCacheDir = path.join(fallbackDataDir, "cache");
   const fallbackTasksDir = path.join(fallbackDataDir, "tasks");
+  const fallbackOutputDir = path.join(fallbackDataDir, "exports");
   try {
     const response = await fetch(`${backendUrl}/api/v1/settings`, {
       headers: withBackendAuthHeaders(),
@@ -533,19 +584,420 @@ async function getTrustedStorageLocations() {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const settings = await response.json() as { data_dir?: string; cache_dir?: string; tasks_dir?: string };
+    const settings = await response.json() as { data_dir?: string; cache_dir?: string; tasks_dir?: string; output_dir?: string };
     return {
       dataDir: resolveManagedPath(settings.data_dir || fallbackDataDir),
       cacheDir: resolveManagedPath(settings.cache_dir || fallbackCacheDir),
       tasksDir: resolveManagedPath(settings.tasks_dir || fallbackTasksDir),
+      outputDir: resolveManagedPath(settings.output_dir || fallbackOutputDir),
     };
   } catch {
     return {
       dataDir: resolveManagedPath(fallbackDataDir),
       cacheDir: resolveManagedPath(fallbackCacheDir),
       tasksDir: resolveManagedPath(fallbackTasksDir),
+      outputDir: resolveManagedPath(fallbackOutputDir),
     };
   }
+}
+
+function getMigrationLocations(locations: Awaited<ReturnType<typeof getTrustedStorageLocations>>): MigrationLocation[] {
+  return [
+    { key: "data", label: "自定义数据目录", path: locations.dataDir },
+    { key: "cache", label: "自定义缓存目录", path: locations.cacheDir },
+    { key: "tasks", label: "自定义任务目录", path: locations.tasksDir },
+    { key: "output", label: "导出目录", path: locations.outputDir },
+  ];
+}
+
+async function createStorageMigrationPreview(input: StorageMigrationRequest): Promise<MigrationPreview> {
+  const sourceRoot = currentLocalDataRoot();
+  const environmentManaged = Boolean(String(process.env.VIDEO_SUM_APP_DATA_ROOT || "").trim());
+  const blockers: string[] = [];
+  let locations = {
+    dataDir: path.join(sourceRoot, "data"),
+    cacheDir: path.join(sourceRoot, "data", "cache"),
+    tasksDir: path.join(sourceRoot, "data", "tasks"),
+    outputDir: path.join(sourceRoot, "data", "exports"),
+  };
+
+  if (!backendStatus.running || !backendStatus.ready) {
+    blockers.push("BiliSum 服务尚未就绪，无法确认当前设置和后台任务。 ");
+  }
+  if (!backendProcess && backendStatus.running) {
+    blockers.push("当前服务不是由桌面端托管，桌面端无法安全停止它。 ");
+  }
+
+  try {
+    const healthResponse = await fetch(`${backendUrl}/health`, { headers: withBackendAuthHeaders() });
+    if (!healthResponse.ok) {
+      throw new Error(`HTTP ${healthResponse.status}`);
+    }
+    const health = await healthResponse.json() as {
+      status?: string;
+      runtime_startup?: { status?: string };
+    };
+    if (health.status !== "ok" || health.runtime_startup?.status !== "ready") {
+      blockers.push("服务或托管运行环境尚未通过就绪检查。 ");
+    }
+  } catch (error) {
+    blockers.push(`无法确认服务健康状态：${error instanceof Error ? error.message : "服务不可用。"}`);
+  }
+
+  try {
+    const settingsResponse = await fetch(`${backendUrl}/api/v1/settings`, { headers: withBackendAuthHeaders() });
+    if (!settingsResponse.ok) {
+      throw new Error(`HTTP ${settingsResponse.status}`);
+    }
+    const settings = await settingsResponse.json() as {
+      data_dir?: string;
+      cache_dir?: string;
+      tasks_dir?: string;
+      output_dir?: string;
+    };
+    locations = {
+      dataDir: resolveManagedPath(settings.data_dir || locations.dataDir),
+      cacheDir: resolveManagedPath(settings.cache_dir || locations.cacheDir),
+      tasksDir: resolveManagedPath(settings.tasks_dir || locations.tasksDir),
+      outputDir: resolveManagedPath(settings.output_dir || locations.outputDir),
+    };
+  } catch (error) {
+    blockers.push(`无法读取当前目录设置：${error instanceof Error ? error.message : "服务不可用。"}`);
+  }
+
+  try {
+    const taskResponse = await fetch(`${backendUrl}/api/v1/tasks`, { headers: withBackendAuthHeaders() });
+    if (!taskResponse.ok) {
+      throw new Error(`HTTP ${taskResponse.status}`);
+    }
+    const tasks = await taskResponse.json() as Array<{ status?: string }>;
+    const activeCount = getActiveTaskCount(tasks);
+    if (activeCount > 0) {
+      blockers.push(`还有 ${activeCount} 个后台任务正在排队或运行，请等它们全部结束后再迁移。`);
+    }
+  } catch (error) {
+    blockers.push(`无法确认后台任务状态：${error instanceof Error ? error.message : "服务不可用。"}`);
+  }
+
+  const preview = await previewStorageMigration({
+    sourceRoot,
+    targetRoot: input.targetRoot,
+    locations: getMigrationLocations(locations),
+    selectedExternalKeys: input.selectedExternalKeys,
+    environmentManaged,
+  });
+  const allBlockers = [...new Set([...preview.blockers, ...blockers])];
+  return { ...preview, blockers: allBlockers, canMigrate: allBlockers.length === 0 };
+}
+
+function sendStorageMigrationProgress(sender: Electron.WebContents, progress: MigrationProgress) {
+  if (!sender.isDestroyed()) {
+    sender.send("desktop:file-manager:migration-progress", progress);
+  }
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      child.removeListener("error", onError);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const onError = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    child.once("exit", onExit);
+    child.once("error", onError);
+  });
+}
+
+async function waitForBackendPortClosed(timeoutMs = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!(await probeBackendPortBusy(250))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
+async function stopBackendForStorageMigration() {
+  const current = backendProcess;
+  if (!current) {
+    if (backendStatus.running || await probeBackendPortBusy(250)) {
+      throw new Error("无法确认服务已由桌面端托管，迁移已取消。");
+    }
+    return;
+  }
+
+  if (current.exitCode === null && current.signalCode === null) {
+    current.kill();
+    let exited = await waitForChildExit(current, 15_000);
+    if (!exited) {
+      current.kill("SIGKILL");
+      exited = await waitForChildExit(current, 8_000);
+    }
+    if (!exited) {
+      throw new Error("服务进程未能安全停止，迁移已取消，源文件保持不变。");
+    }
+  }
+
+  if (backendProcess === current) backendProcess = null;
+  updateBackendStatus({ running: false, ready: false, pid: null, lastError: "" });
+  if (!(await waitForBackendPortClosed())) {
+    throw new Error("服务端口仍被占用，迁移已取消，源文件保持不变。");
+  }
+}
+
+async function waitForStorageMigrationHealth(
+  timeoutMs = 5 * 60_000,
+  copiedBytes = 0,
+  totalBytes = 0,
+  onProgress?: (progress: MigrationProgress) => void,
+) {
+  const start = Date.now();
+  let lastProgressAt = 0;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${backendUrl}/health`, { headers: withBackendAuthHeaders() });
+      if (response.ok) {
+        const health = await response.json() as {
+          status?: string;
+          runtime_startup?: { status?: string; message?: string };
+        };
+        if (health.status === "ok" && health.runtime_startup?.status === "ready") {
+          return true;
+        }
+        if (health.runtime_startup?.status === "error") {
+          throw new Error(`新位置的运行环境启动失败：${health.runtime_startup.message || "运行环境检查未通过。"}`);
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("新位置的运行环境启动失败：")) throw error;
+    }
+    if (Date.now() - lastProgressAt > 5000) {
+      lastProgressAt = Date.now();
+      const progress: MigrationProgress = {
+        phase: "starting",
+        message: "正在验证新位置的服务与托管运行环境…",
+        copiedBytes,
+        totalBytes,
+      };
+      if (onProgress) onProgress(progress);
+      else if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("desktop:file-manager:migration-progress", progress);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return false;
+}
+
+async function startStorageMigration(input: StorageMigrationRequest, sender: Electron.WebContents): Promise<StorageMigrationResult> {
+  const sourceRoot = currentLocalDataRoot();
+  const targetRoot = path.resolve(String(input.targetRoot || ""));
+  if (storageMigrationInProgress) {
+    throw new Error("已有存储迁移正在进行。 ");
+  }
+  if (pendingMigratedSourceCleanup) {
+    throw new Error("上次迁移的旧位置尚未处理，请先清理或保留旧副本。 ");
+  }
+
+  storageMigrationInProgress = true;
+  let stopped = false;
+  let preferenceChanged = false;
+  let preferenceRestored = true;
+  let stageRoot = "";
+  let copied: MigrationCopyResult | null = null;
+  const oldPreferenceRoot = preferences.appDataRoot;
+  try {
+    sendStorageMigrationProgress(sender, {
+      phase: "preparing",
+      message: "正在复核目录、磁盘空间和后台任务…",
+      copiedBytes: 0,
+      totalBytes: 0,
+    });
+    const preview = await createStorageMigrationPreview({
+      targetRoot,
+      selectedExternalKeys: input.selectedExternalKeys,
+    });
+    if (!preview.canMigrate) {
+      throw new Error(preview.blockers.join("\n"));
+    }
+    if (!backendProcess) {
+      throw new Error("服务不是由桌面端托管，无法保证迁移期间停止写入。 ");
+    }
+
+    sendStorageMigrationProgress(sender, {
+      phase: "preparing",
+      message: "正在安全停止 BiliSum 服务…",
+      copiedBytes: 0,
+      totalBytes: preview.requiredBytes,
+    });
+    stopped = true;
+    await stopBackendForStorageMigration();
+
+    await fs.promises.mkdir(path.dirname(targetRoot), { recursive: true });
+    stageRoot = path.join(path.dirname(targetRoot), `.${path.basename(targetRoot) || "BiliSum"}.migration-${crypto.randomBytes(8).toString("hex")}.tmp`);
+    copied = await copyStorageMigration(preview, stageRoot, (progress) => sendStorageMigrationProgress(sender, progress));
+    // Rewrite references only in the verified staging copy. The old database
+    // remains untouched until the new service passes its health checks.
+    const manifestPath = path.join(stageRoot, ".bilisum-migration-manifest.json");
+    const mappings = getMigrationPathMappings(preview);
+    await fs.promises.writeFile(manifestPath, JSON.stringify({ stageRoot, mappings, files: copied.files.map((file) => file.destinationPath) }), { encoding: "utf-8", flag: "wx" });
+    try {
+      const target = isDev ? resolveDevPython() : resolvePackagedBackend();
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(target.command, [...target.args, "--migrate-storage", manifestPath], {
+          cwd: target.cwd, windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
+        });
+        let errorText = "";
+        child.stderr?.on("data", (chunk) => { errorText = (errorText + String(chunk)).slice(-2000); });
+        const timer = setTimeout(() => { child.kill(); reject(new Error("迁移数据库路径更新超时。")); }, 5 * 60_000);
+        child.once("error", (error) => { clearTimeout(timer); reject(error); });
+        child.once("exit", (code) => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error(`迁移数据库路径更新失败：${errorText || code}`));
+        });
+      });
+      await refreshMigrationDestinationHashes(copied);
+    } finally {
+      await fs.promises.unlink(manifestPath).catch(() => undefined);
+    }
+
+    try {
+      const targetStats = await fs.promises.lstat(targetRoot);
+      if (!targetStats.isDirectory() || targetStats.isSymbolicLink() || (await fs.promises.readdir(targetRoot)).length > 0) {
+        throw new Error("复制完成后目标目录已被占用，已取消切换。 ");
+      }
+      await fs.promises.rmdir(targetRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await fs.promises.rename(stageRoot, targetRoot);
+    rebaseMigrationDestinations(copied, stageRoot, targetRoot);
+    stageRoot = "";
+
+    sendStorageMigrationProgress(sender, {
+      phase: "switching",
+      message: "校验完成，正在切换桌面端保存的存储位置…",
+      copiedBytes: copied.copiedBytes,
+      totalBytes: preview.requiredBytes,
+    });
+    preferences = { ...preferences, appDataRoot: targetRoot };
+    savePreferences();
+    preferenceChanged = true;
+
+    sendStorageMigrationProgress(sender, {
+      phase: "starting",
+      message: "正在从新位置启动服务…",
+      copiedBytes: copied.copiedBytes,
+      totalBytes: preview.requiredBytes,
+    });
+    const startStatus = await startBackend();
+    if (!startStatus.running) {
+      throw new Error(startStatus.lastError || "新位置的服务进程未能启动。 ");
+    }
+    if (!(await waitForStorageMigrationHealth(
+      5 * 60_000,
+      copied.copiedBytes,
+      preview.requiredBytes,
+      (progress) => sendStorageMigrationProgress(sender, progress),
+    ))) {
+      throw new Error("新位置的服务或托管运行环境未能在限定时间内通过启动验证。 ");
+    }
+
+    pendingMigratedSourceCleanup = copied;
+    sendStorageMigrationProgress(sender, {
+      phase: "complete",
+      message: "迁移完成，新位置的服务和托管运行环境已通过验证。",
+      copiedBytes: copied.copiedBytes,
+      totalBytes: preview.requiredBytes,
+    });
+    return {
+      success: true,
+      sourceRoot,
+      targetRoot,
+      error: null,
+      rolledBack: false,
+      serviceRestored: true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "存储迁移失败。";
+    sendStorageMigrationProgress(sender, {
+      phase: "rollback",
+      message: "迁移未完成，正在恢复旧位置并重新启动服务…",
+      copiedBytes: copied?.copiedBytes || 0,
+      totalBytes: copied?.copiedBytes || 0,
+    });
+    if (stageRoot) {
+      await fs.promises.rm(stageRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (preferenceChanged || preferences.appDataRoot !== oldPreferenceRoot) {
+      preferences = { ...preferences, appDataRoot: oldPreferenceRoot };
+      try {
+        savePreferences();
+      } catch (saveError) {
+        preferenceRestored = false;
+        console.error("[StorageMigration] Failed to restore the previous desktop preference:", saveError);
+      }
+    }
+
+    let serviceRestored = !stopped && Boolean(backendStatus.running && backendStatus.ready);
+    if (stopped) {
+      try {
+        if (backendProcess || backendStatus.running) {
+          await stopBackendForStorageMigration();
+        }
+        const restoredStatus = await startBackend();
+        serviceRestored = Boolean(restoredStatus.running && await waitForStorageMigrationHealth());
+      } catch (restoreError) {
+        serviceRestored = false;
+        console.error("[StorageMigration] Failed to restart the service from the previous location:", restoreError);
+      }
+    }
+    sendStorageMigrationProgress(sender, {
+      phase: "failed",
+      message: serviceRestored
+        ? "迁移失败，已恢复旧位置并重新启动服务；源文件仍保留。"
+        : "迁移失败，已恢复旧位置；服务未能自动启动，请稍后重试。源文件仍保留。",
+      copiedBytes: copied?.copiedBytes || 0,
+      totalBytes: copied?.copiedBytes || 0,
+    });
+    return {
+      success: false,
+      sourceRoot,
+      targetRoot,
+      error: message,
+      rolledBack: preferenceRestored && preferences.appDataRoot === oldPreferenceRoot,
+      serviceRestored,
+    };
+  } finally {
+    storageMigrationInProgress = false;
+  }
+}
+
+async function cleanupPreviousStorageLocation(): Promise<StorageMigrationCleanupResult> {
+  if (!pendingMigratedSourceCleanup) {
+    throw new Error("没有待确认清理的旧位置。 ");
+  }
+  const result = await cleanupMigratedSource(pendingMigratedSourceCleanup);
+  pendingMigratedSourceCleanup = null;
+  return result;
+}
+
+function keepPreviousStorageLocation() {
+  pendingMigratedSourceCleanup = null;
+  return true;
+}
+
+function hasPendingStorageMigrationCleanup() {
+  return Boolean(pendingMigratedSourceCleanup);
 }
 
 /**
@@ -829,6 +1281,10 @@ function resolveDirectoryByKind(kind: StorageLocationKind, locations: { dataDir:
 function loadPreferences(): DesktopPreferences {
   try {
     const raw = fs.readFileSync(preferencesPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<DesktopPreferences>;
+    const appDataRoot = typeof parsed.appDataRoot === "string" && parsed.appDataRoot.trim()
+      ? path.resolve(parsed.appDataRoot.trim())
+      : undefined;
     return {
       closeBehavior: "ask",
       rememberCloseBehavior: false,
@@ -836,7 +1292,8 @@ function loadPreferences(): DesktopPreferences {
       silentStart: false,
       crashAutoRestart: false,
       developerMode: false,
-      ...JSON.parse(raw),
+      ...parsed,
+      appDataRoot,
     };
   } catch {
     return {
@@ -852,7 +1309,18 @@ function loadPreferences(): DesktopPreferences {
 
 function savePreferences() {
   fs.mkdirSync(path.dirname(preferencesPath), { recursive: true });
-  fs.writeFileSync(preferencesPath, JSON.stringify(preferences, null, 2), "utf-8");
+  const temporaryPath = `${preferencesPath}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(preferences, null, 2), "utf-8");
+    fs.renameSync(temporaryPath, preferencesPath);
+  } catch (error) {
+    try {
+      fs.rmSync(temporaryPath, { force: true });
+    } catch {
+      // Preserve the original preference file if the atomic save cannot complete.
+    }
+    throw error;
+  }
 }
 
 function getPreferences(): DesktopPreferences {
@@ -1248,6 +1716,9 @@ function getSplashMarkup(message = "正在启动 BiliSum 服务...") {
 }
 
 function loadSplash(message = "正在启动 BiliSum 服务...") {
+  // A controlled stop/restart must keep the renderer and its migration IPC
+  // promise alive, including while recovering from a failed new-location start.
+  if (storageMigrationInProgress && applicationLoadedTarget) return;
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
@@ -1316,7 +1787,11 @@ function updateBackendStatus(patch: Partial<BackendStatus>) {
   sendBackendStatus();
 
   if (!previousReady && backendStatus.ready) {
-    setTimeout(() => loadApplication(), 300);
+    if (!storageMigrationInProgress) {
+      setTimeout(() => {
+        if (!storageMigrationInProgress) void loadApplication();
+      }, 300);
+    }
   } else if (!backendStatus.running && backendStatus.lastError) {
     updateSplashMessage(backendStatus.lastError);
   } else if (!backendStatus.running && !backendStatus.ready) {
@@ -2612,9 +3087,9 @@ function registerIpcHandlers() {
   });
   ipcMain.handle("desktop:bilibili:capture-login-cookies", async () => openBilibiliLoginAndCaptureCookies());
   ipcMain.handle("desktop:shell:open-path", (_event, targetPath: string) => shell.openPath(targetPath));
-  ipcMain.handle("desktop:dialog:pick-directory", async (_event, defaultPath?: string) => {
+  ipcMain.handle("desktop:dialog:pick-directory", async (_event, defaultPath?: string, title?: string) => {
     const dialogOptions: OpenDialogOptions = {
-      title: "选择导出目录",
+      title: typeof title === "string" && title.trim() ? title.slice(0, 80) : "选择导出目录",
       properties: ["openDirectory", "createDirectory"],
     };
     if (defaultPath && fs.existsSync(defaultPath)) {
@@ -2693,6 +3168,11 @@ function registerIpcHandlers() {
   ipcMain.handle("desktop:update:get-status", () => updateStatus);
   ipcMain.handle("desktop:file-manager:get-storage-overview", async (_event, input: StorageOverviewInput) => getStorageOverview(input));
   ipcMain.handle("desktop:file-manager:cleanup-orphans", async (_event, input: StorageCleanupInput) => cleanupOrphans(input));
+  ipcMain.handle("desktop:file-manager:preview-migration", async (_event, input: StorageMigrationRequest) => createStorageMigrationPreview(input));
+  ipcMain.handle("desktop:file-manager:start-migration", async (event, input: StorageMigrationRequest) => startStorageMigration(input, event.sender));
+  ipcMain.handle("desktop:file-manager:cleanup-migrated-source", async () => cleanupPreviousStorageLocation());
+  ipcMain.handle("desktop:file-manager:keep-migrated-source", () => keepPreviousStorageLocation());
+  ipcMain.handle("desktop:file-manager:has-pending-migration-cleanup", () => hasPendingStorageMigrationCleanup());
   ipcMain.handle("desktop:file-manager:open-directory", async (_event, kind: StorageLocationKind) => {
     const targetPath = resolveDirectoryByKind(kind, await getTrustedStorageLocations());
     fs.mkdirSync(targetPath, { recursive: true });

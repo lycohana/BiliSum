@@ -167,7 +167,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[
         # 排除不支持的 ARM64 架构文件
         'w64-arm',
@@ -204,7 +204,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[
         # 排除不支持的 ARM64 架构文件
         'w64-arm',

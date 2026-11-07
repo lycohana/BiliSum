@@ -37,7 +37,7 @@ const RELEASES_URL = "https://github.com/lycohana/BiliSum/releases/latest";
 const REPO_URL = "https://github.com/lycohana/BiliSum";
 const DEFAULT_PORT = "3838";
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "paused"]);
 
 function printHelp() {
   const version = readVersion();
@@ -364,7 +364,7 @@ async function runTaskCommand(args, { defaultFormat, brief = false }) {
     baseUrl,
     log,
   );
-  const failed = completed.filter((task) => task.status === "failed" || task.status === "cancelled");
+  const failed = completed.filter((task) => task.status === "failed" || task.status === "cancelled" || task.status === "paused");
   for (const task of failed) {
     log(`[${task.task_id}] ${task.status}：${task.error_message || "未知错误"}`);
   }

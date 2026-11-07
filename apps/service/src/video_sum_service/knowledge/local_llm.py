@@ -160,11 +160,13 @@ def chat_knowledge_llm(
         detail = extract_http_error_detail(response)
         raise HTTPException(status_code=response.status_code, detail=f"知识库 LLM 调用失败：{detail}")
 
-    try:
-        body = response.json()
-    except ValueError:
-        body = None
+    from video_sum_core.llm_response import parse_llm_response_json
+    from video_sum_core.errors import VideoSumError
 
+    try:
+        body = parse_llm_response_json(response)
+    except (ValueError, VideoSumError) as exc:
+        raise HTTPException(status_code=502, detail=f"知识库 LLM 返回了无法读取的响应：{exc}") from exc
     content = extract_llm_message_content(body)
     if not content and _allow_empty_retry and not require_json:
         return chat_knowledge_llm(

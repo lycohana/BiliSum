@@ -10,7 +10,6 @@ type DesktopBackendStatus = {
 };
 
 type UpdateStatus = "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "installing" | "error";
-
 type UpdateInfo = {
   status: UpdateStatus;
   version: string;
@@ -65,6 +64,60 @@ type StorageCleanupResult = {
   reclaimedBytes: number;
 };
 
+type MigrationExternalKey = "data" | "cache" | "tasks" | "output";
+type MigrationItemKey = "app-root" | MigrationExternalKey;
+
+type StorageMigrationPreview = {
+  sourceRoot: string;
+  targetRoot: string;
+  environmentManaged: boolean;
+  items: Array<{
+    key: MigrationItemKey;
+    label: string;
+    path: string;
+    exists: boolean;
+    sizeBytes: number;
+    selected: boolean;
+    required: boolean;
+    carriedByRoot: boolean;
+    selectable: boolean;
+    reason: string | null;
+    errorDetails: string | null;
+    destinationPath: string | null;
+    copySourceKey: MigrationItemKey | null;
+    includedInLabel: string | null;
+  }>;
+  requiredBytes: number;
+  availableBytes: number | null;
+  blockers: string[];
+  canMigrate: boolean;
+  warnings: string[];
+  excludedPaths: string[];
+};
+
+type StorageMigrationProgress = {
+  phase: "preparing" | "copying" | "verifying" | "switching" | "starting" | "rollback" | "complete" | "failed";
+  message: string;
+  copiedBytes: number;
+  totalBytes: number;
+};
+
+type StorageMigrationResult = {
+  success: boolean;
+  sourceRoot: string;
+  targetRoot: string;
+  error: string | null;
+  rolledBack: boolean;
+  serviceRestored: boolean;
+};
+
+type StorageMigrationCleanupResult = {
+  deletedFiles: number;
+  skippedFiles: number;
+  removedDirectories: number;
+  retainedPaths: string[];
+};
+
 type BilibiliCookieExportResult = {
   cookiesFile: string;
   cookieCount: number;
@@ -109,7 +162,7 @@ type DesktopBridge = {
     openPath(targetPath: string): Promise<string>;
   };
   dialog: {
-    pickDirectory(defaultPath?: string): Promise<string | null>;
+    pickDirectory(defaultPath?: string, title?: string): Promise<string | null>;
   };
   logs: {
     getServiceLogPath(): Promise<string>;
@@ -143,6 +196,12 @@ type DesktopBridge = {
   fileManager: {
     getStorageOverview(input: { taskIds?: string[] }): Promise<StorageOverview>;
     cleanupOrphans(input: { taskIds: string[] }): Promise<StorageCleanupResult>;
+    previewMigration(input: { targetRoot: string; selectedExternalKeys?: MigrationExternalKey[] }): Promise<StorageMigrationPreview>;
+    startMigration(input: { targetRoot: string; selectedExternalKeys: MigrationExternalKey[] }): Promise<StorageMigrationResult>;
+    cleanupMigratedSource(): Promise<StorageMigrationCleanupResult>;
+    keepMigratedSource(): Promise<boolean>;
+    hasPendingMigrationCleanup(): Promise<boolean>;
+    onMigrationProgress(listener: (progress: StorageMigrationProgress) => void): () => void;
     openDirectory(kind: StorageLocationKind): Promise<string>;
   };
 };

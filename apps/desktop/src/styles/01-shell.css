@@ -113,9 +113,15 @@
 }
 
 .title-bar-status-pill.is-update {
-  color: var(--brand-700);
+  color: var(--update-text);
   border-color: var(--accent-border);
-  background: color-mix(in srgb, var(--brand-100) 78%, var(--bg-elevated) 22%);
+  background: var(--update-bg);
+}
+
+.title-bar-status-pill.is-update:hover,
+.title-bar-status-wrap.is-open .title-bar-status-pill.is-update {
+  background: var(--update-hover-bg);
+  color: var(--update-text);
 }
 
 .title-bar-status-pill.is-pending {
@@ -903,11 +909,13 @@
 }
 
 .sidebar-status-item.is-update {
-  background: color-mix(in srgb, var(--brand-50) 72%, var(--bg-card) 28%);
+  background: var(--update-bg);
 }
 
+.sidebar-status-item.is-update:hover { background: var(--update-hover-bg); }
+
 .sidebar-status-item.is-update span {
-  color: var(--brand-600);
+  color: var(--update-text);
 }
 
 .sidebar-status-item.is-warning {

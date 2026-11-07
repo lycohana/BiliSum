@@ -1,10 +1,25 @@
 import { Link } from "react-router-dom";
-import type { CSSProperties, MouseEvent, SyntheticEvent } from "react";
+import { useEffect, useState, type CSSProperties, type MouseEvent } from "react";
 
 import { platformLabel } from "../appModel";
 import { GripVerticalIcon, PinIcon, StarIcon } from "./AppIcons";
 import type { VideoCollection } from "../types";
 import { formatDateTime } from "../utils";
+
+function CollectionCoverImage({ coverUrl, title, fallbackClassName = "" }: {
+  coverUrl: string;
+  title: string;
+  fallbackClassName?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => setFailed(false), [coverUrl]);
+
+  if (!coverUrl || failed) {
+    return <span className={fallbackClassName}>合集</span>;
+  }
+  return <img src={coverUrl} alt={title} loading="lazy" draggable={false} onError={() => setFailed(true)} />;
+}
 
 export function CollectionCard({
   collection,
@@ -21,12 +36,6 @@ export function CollectionCard({
   onToggleGlobalPin?: (collectionId: string, nextPinned: boolean) => Promise<unknown>;
   onToggleFolderPin?: (collectionId: string, nextPinned: boolean) => Promise<unknown>;
 }) {
-  function handleImageError(event: SyntheticEvent<HTMLImageElement>) {
-    const target = event.target as HTMLImageElement;
-    target.style.display = "none";
-    target.parentElement?.querySelector(".video-card-placeholder")?.classList.remove("is-hidden");
-  }
-
   const summarizedCount = collection.summarized_count || 0;
   const unsummarizedCount = collection.unsummarized_count ?? Math.max(0, collection.item_count - summarizedCount);
   const latestActivityAt = collection.latest_video_updated_at || collection.last_checked_at;
@@ -39,12 +48,7 @@ export function CollectionCard({
   return (
     <Link className="video-card collection-video-card" to={`/collections/${encodeURIComponent(collection.collection_id)}`} draggable={false} onContextMenu={(event) => onOpenContextMenu?.(event, collection.collection_id)}>
       <div className="video-card-cover">
-        {collection.cover_url ? (
-          <>
-            <img src={collection.cover_url} alt={collection.title} loading="lazy" draggable={false} onError={handleImageError} />
-            <div className="video-card-placeholder is-hidden">合集</div>
-          </>
-        ) : <div className="video-card-placeholder">合集</div>}
+        <CollectionCoverImage coverUrl={collection.cover_url} title={collection.title} fallbackClassName="video-card-placeholder" />
         <div className="collection-count-badge" aria-label={`${collection.item_count} 个视频`}>
           <strong>{collection.item_count}</strong>
           <span>集</span>
@@ -103,7 +107,7 @@ export function CollectionListItem({
     <div ref={setNodeRef} style={style} className={`library-list-item collection-list-item ${className}`.trim()} onContextMenu={(event) => onOpenContextMenu?.(event, collection.collection_id)}>
       <span className="library-drag-handle" title="拖动排序" {...dragHandleProps}><GripVerticalIcon /></span>
       <Link className="library-list-cover" to={`/collections/${encodeURIComponent(collection.collection_id)}`} draggable={false}>
-        {collection.cover_url ? <img src={collection.cover_url} alt={collection.title} loading="lazy" draggable={false} /> : <span>合集</span>}
+        <CollectionCoverImage coverUrl={collection.cover_url} title={collection.title} />
       </Link>
       <Link className="library-list-main" to={`/collections/${encodeURIComponent(collection.collection_id)}`} draggable={false}>
         <strong>{collection.title}</strong>
