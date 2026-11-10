@@ -1,5 +1,7 @@
 import type {
+  AgentWorkView,
   AuthStatus,
+  TaskStatus,
   EnvironmentInfo,
   RuntimeStatus,
   KnowledgeAskResponse,
@@ -524,6 +526,17 @@ export const api = {
   },
   getTaskResult(taskId: string) {
     return fetchJson<TaskDetail>(`/api/v1/tasks/${taskId}/result`);
+  },
+  getAgentWork(taskId: string) {
+    return fetchJson<AgentWorkView>(`/api/v1/tasks/${encodeURIComponent(taskId)}/agent-work`);
+  },
+  /** "改用内置模型": declines the remaining Agent steps of a task in "Agent 总结中". */
+  useBuiltinForAgentTask(taskId: string) {
+    return fetchJson<{ task_id: string; status: TaskStatus }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/agent-work/use-builtin`, { method: "POST" });
+  },
+  /** Cancels a task; the service only accepts this while it is in "Agent 总结中". */
+  cancelTask(taskId: string) {
+    return fetchJson<{ task_id: string; status: TaskStatus }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
   },
   getTaskEvents(taskId: string) {
     return fetchJson<TaskEvent[]>(`/api/v1/tasks/${taskId}/events`);

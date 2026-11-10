@@ -1,0 +1,28 @@
+[
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是一名中文长内容总编辑，正在把一个多 P 视频的分 P 摘要整合为全集总结。输入不是完整转写，而是每个分 P 已生成的概览、要点、章节和笔记摘录。你的任务是做二次归纳：先逐 P 扫描，再跨 P 合并去重，最后输出能直接展示的结构化 JSON。所有结论必须来自输入，不得补充外部资料，不得编造，不得输出 JSON 以外的文字。You must return valid json only.",
+          "role": "system"
+        },
+        {
+          "content": "请基于下面的多 P 摘要素材生成「全集总结」JSON。\n\n工作步骤必须隐式完成，不要把步骤写进输出：\n1. 逐 P 扫描：每个 `## P数字 标题` 是一个分 P，优先读取其中 `[重点-概览]`、`[重点-要点]`、`[重点-章节]`、`[重点-笔记]`。\n2. 每个分 P 至少保留一个高价值信息点，避免只关注开头或结尾导致中间分 P 丢失。\n3. 跨 P 合并：把重复观点合并，把递进关系、因果关系、对比关系、结论与限制提炼出来。\n4. 输出面向全集，而不是逐 P 流水账；但所有章节都必须保留可跳转的 P 数定位。\n\n强约束：\n1. 只返回合法 JSON，对象顶层只允许包含 title、overview、bulletPoints、chapters、chapterGroups 五个字段。\n2. title 使用简洁中文标题，体现全集主题，不要机械重复原题。\n3. overview 写 3 到 5 句，覆盖全集主线、关键展开、最终结论或价值。\n4. bulletPoints 写 5 到 8 条，每条 28 到 88 个字，优先写跨 P 的综合结论、关键方法、限制、争议或行动建议。\n5. chapters 表示全集的主题段落或内容推进，不要等同于每个分 P 一条；每项必须包含 title、start、summary：\n   - start 必须是该主题最适合跳转的分 P 数字，例如 1、2、3；禁止使用时间戳、秒数、00:00、分钟。\n   - title 要像真实小标题，不能写“章节 1”“P1 总结”这类占位标题。\n   - summary 写 40 到 120 个字，说明这个主题覆盖哪些 P、核心信息和为什么重要。\n6. chapterGroups 是大主题分组，每项包含 title、start、summary、children；children 必须来自 chapters。\n   - group.start 同样是分 P 数字。\n   - 分组按语义组织，不要机械平均分配。\n7. 如果某个 P 的材料很短，只做保守归纳；不要补充没有出现的信息。\n8. 不要写”视频主要讲了””本合集介绍了”这类低信息密度开头，直接进入信息本体。\n9. 当分 P 数量较多（超过 20P）时，chapters 应该按主题合并多个相邻分 P，而不是每个分 P 一条。\n10. 当分 P 数量较多时，bulletPoints 应该聚焦跨分 P 的综合结论，而不是单个分 P 的内容。\n\n输出格式示例：\n{\"title\":\"\",\"overview\":\"\",\"bulletPoints\":[\"\", \"\", \"\", \"\", \"\"],\"chapters\":[{\"title\":\"\",\"start\":1,\"summary\":\"\"}],\"chapterGroups\":[{\"title\":\"\",\"start\":1,\"summary\":\"\",\"children\":[{\"title\":\"\",\"start\":1,\"summary\":\"\"}]}]}\n\n全集标题：\n合集\n\n逐 P 摘要素材：\n[00:00] 开场介绍今天的主题\n\nP 数索引：\n[{\"page\": 30, \"label\": \"讲解具体方法\"}]",
+          "role": "user"
+        }
+      ],
+      "model": "test-model"
+    },
+    "timeout": "Timeout(timeout=180)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  }
+]

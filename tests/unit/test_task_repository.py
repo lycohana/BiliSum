@@ -530,3 +530,104 @@ def test_repository_collection_asset_actions_and_detach_delete() -> None:
     assert repository.get_video_collection("season-actions") is None
     restored = repository.get_video_asset(video.video_id)
     assert restored is not None and restored.is_global_visible is True
+
+
+def _transition_repository() -> SqliteTaskRepository:
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+    return repository
+
+
+def test_transition_switches_status_when_current_status_matches() -> None:
+    repository = _transition_repository()
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/video"))
+
+    switched = repository.transition(record.task_id, TaskStatus.QUEUED, TaskStatus.RUNNING)
+
+    assert switched is not None
+    assert switched.status == TaskStatus.RUNNING
+    assert repository.get_task(record.task_id).status == TaskStatus.RUNNING
+
+
+def test_transition_leaves_task_untouched_when_current_status_differs() -> None:
+    repository = _transition_repository()
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/video"))
+    repository.update_status(record.task_id, TaskStatus.RUNNING)
+    repository.update_status(record.task_id, TaskStatus.COMPLETED)
+
+    assert repository.transition(record.task_id, TaskStatus.RUNNING, TaskStatus.FAILED) is None
+    assert repository.get_task(record.task_id).status == TaskStatus.COMPLETED
+
+
+def test_transition_returns_none_for_missing_task() -> None:
+    repository = _transition_repository()
+
+    assert repository.transition("missing", TaskStatus.QUEUED, TaskStatus.RUNNING) is None
+
+
+def test_transition_rejects_disallowed_switch() -> None:
+    repository = _transition_repository()
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/video"))
+    repository.update_status(record.task_id, TaskStatus.RUNNING)
+    repository.update_status(record.task_id, TaskStatus.COMPLETED)
+
+    try:
+        repository.transition(record.task_id, TaskStatus.COMPLETED, TaskStatus.RUNNING)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("completed -> running must be rejected")
+    assert repository.get_task(record.task_id).status == TaskStatus.COMPLETED
+
+
+def test_transition_lets_exactly_one_concurrent_caller_win() -> None:
+    repository = _transition_repository()
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com/video"))
+    repository.update_status(record.task_id, TaskStatus.RUNNING)
+
+    def finish(target: TaskStatus):
+        return repository.transition(record.task_id, TaskStatus.RUNNING, target)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(finish, [TaskStatus.COMPLETED, TaskStatus.FAILED] * 8))
+
+    winners = [outcome for outcome in outcomes if outcome is not None]
+    assert len(winners) == 1
+    assert repository.get_task(record.task_id).status == winners[0].status
+
+
+def test_transition_updates_video_latest_status_like_update_status() -> None:
+    repository = _transition_repository()
+    video = repository.upsert_video_asset(
+        VideoAssetRecord(canonical_id="BV1transition", platform="bilibili", title="视频", source_url="https://www.bilibili.com/video/BV1transition")
+    )
+    record = repository.create_task(
+        TaskInput(input_type=InputType.URL, source="https://www.bilibili.com/video/BV1transition"),
+        video_id=video.video_id,
+    )
+    repository.transition(record.task_id, TaskStatus.QUEUED, TaskStatus.RUNNING)
+    repository.transition(record.task_id, TaskStatus.RUNNING, TaskStatus.COMPLETED)
+
+    refreshed = repository.get_video_asset(video.video_id)
+    assert refreshed.latest_status == TaskStatus.COMPLETED.value
+    assert refreshed.last_summary_at is not None
+
+
+def test_task_waiting_for_agent_does_not_keep_the_service_active() -> None:
+    # Spec: agent_summarizing is not an active task, so idle shutdown still
+    # happens while a task waits for an Agent; it is not recoverable either.
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    connection.row_factory = sqlite3.Row
+    repository = SqliteTaskRepository(connection)
+    repository.initialize()
+
+    record = repository.create_task(TaskInput(input_type=InputType.URL, source="https://example.com"))
+    repository.update_status(record.task_id, TaskStatus.AGENT_SUMMARIZING)
+
+    assert repository.has_active_tasks() is False
+    assert repository.list_recoverable_tasks() == []
+
+    repository.update_status(record.task_id, TaskStatus.RUNNING)
+    assert repository.has_active_tasks() is True

@@ -401,13 +401,13 @@
 .primary-button {
   color: var(--text-on-brand);
   background: var(--brand-500);
-  box-shadow: 0 2px 8px rgba(251, 114, 153, 0.25);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--brand-500) 25%, transparent);
 }
 
 .primary-button:hover {
   transform: translateY(-1px);
   background: var(--brand-600);
-  box-shadow: 0 4px 12px rgba(251, 114, 153, 0.3);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--brand-500) 30%, transparent);
 }
 
 .primary-button:active {
@@ -466,20 +466,20 @@
 }
 
 .danger-button:hover {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .primary-button.danger-button {
   color: var(--text-inverse);
   background: var(--danger);
   border-color: var(--danger);
-  box-shadow: 0 8px 20px rgba(225, 75, 90, 0.18);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .primary-button.danger-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 86%, black 14%);
   border-color: color-mix(in srgb, var(--danger) 86%, black 14%);
-  box-shadow: 0 10px 24px rgba(225, 75, 90, 0.22);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 .primary-button.danger-button:disabled {
@@ -541,7 +541,7 @@
 
 .status-info {
   color: var(--brand-500, #0ea5e9);
-  background: rgba(14, 165, 233, 0.1);
+  background: var(--bg-accent-strong);
 }
 
 .status-warning {

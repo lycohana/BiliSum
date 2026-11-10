@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import glob
+import hashlib
 import json
 import logging
 import math
@@ -27,15 +27,14 @@ from video_sum_infra.config import (
     normalize_summary_context_mode,
     normalize_visual_note_mode,
 )
-from video_sum_infra.llm import (
-    ANTHROPIC_API_VERSION,
-    apply_openai_reasoning_settings,
-    anthropic_messages_url,
-    build_anthropic_messages_payload,
-    extract_llm_message_content,
-    is_anthropic_llm,
-    normalize_openai_compatible_model_name,
-    openai_chat_completions_url,
+from video_sum_infra.llm import normalize_openai_compatible_model_name
+from video_sum_infra.model_client import (
+    ChatModelClient,
+    ModelClient,
+    ModelRequest,
+    ModelResponse,
+    extract_response_error_detail,
+    normalize_usage_record,
 )
 from video_sum_infra.prompt_library import load_presets
 from video_sum_infra.runtime import (
@@ -56,18 +55,42 @@ from video_sum_core.errors import (
     UnsupportedInputError,
     VideoSumError,
 )
-from video_sum_core.twelvelabs import (
-    DEFAULT_TWELVELABS_PROMPT,
-    analyze_video_with_pegasus,
-    video_context_from_file,
+from video_sum_core.models.tasks import (
+    InputType,
+    MindMapNode,
+    TaskInput,
+    TaskMindMap,
+    TaskResult,
+    merge_llm_usage_records,
 )
-from video_sum_core.models.tasks import InputType, MindMapNode, TaskInput, TaskMindMap, TaskResult, merge_llm_usage_records
 from video_sum_core.pipeline.base import (
     PipelineContext,
     PipelineEvent,
     PipelineEventReporter,
     PipelineRunner,
     PipelineTranscription,
+)
+from video_sum_core.pipeline.model_steps import (
+    AgentSignal,
+    RouteLog,
+    StepRouter,
+    extract_json_object_text,
+    extract_llm_response_content,
+    parse_llm_json_content,
+    step_for_stage,
+    submit_in_context,
+)
+from video_sum_core.pipeline.prompt_directives import PromptDirectives, apply_prompt_directives
+from video_sum_core.pipeline.visual_assets import (
+    CachedFrame,
+    VisualAssetManifest,
+    clear_derived_visual_artifacts,
+    frame_file_stem,
+)
+from video_sum_core.twelvelabs import (
+    DEFAULT_TWELVELABS_PROMPT,
+    analyze_video_with_pegasus,
+    video_context_from_file,
 )
 from video_sum_core.utils import ensure_directory, normalize_video_url, sanitize_filename
 
@@ -143,69 +166,10 @@ def _truncate_text(value: str, limit: int) -> str:
     return text[:limit]
 
 
-def _extract_response_error_detail(response: httpx.Response) -> str:
-    try:
-        payload = response.json()
-    except ValueError:
-        return _truncate_text(response.text.strip(), 400)
-
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            message = error.get("message")
-            code = error.get("code")
-            if message and code:
-                return f"{code}: {message}"
-            if message:
-                return str(message)
-        message = payload.get("message")
-        if message:
-            return str(message)
-    return _truncate_text(json.dumps(payload, ensure_ascii=False), 400)
+_extract_response_error_detail = extract_response_error_detail
 
 
-def _extract_json_object_text(value: str) -> str:
-    text = str(value or "").strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
-    return text
-
-
-def _parse_llm_response_json(response: httpx.Response) -> dict[str, object]:
-    """Keep the upstream parser entry point while sharing gateway handling."""
-    from video_sum_core.llm_response import parse_llm_response_json
-
-    return parse_llm_response_json(response)
-
-
-def _should_retry_llm_transport_error(error: Exception) -> bool:
-    return isinstance(
-        error,
-        (
-            httpx.ConnectError,
-            httpx.ConnectTimeout,
-            httpx.ReadTimeout,
-            httpx.WriteTimeout,
-            httpx.ReadError,
-            httpx.WriteError,
-            httpx.CloseError,
-            httpx.ProxyError,
-            httpx.RemoteProtocolError,
-            httpx.NetworkError,
-            httpx.ProtocolError,
-            httpx.TransportError,
-        ),
-    )
+_extract_json_object_text = extract_json_object_text
 
 
 @dataclass(slots=True)
@@ -287,8 +251,13 @@ class PipelineSettings:
 
 
 class RealPipelineRunner(PipelineRunner):
-    def __init__(self, settings: PipelineSettings) -> None:
+    def __init__(
+        self, settings: PipelineSettings, model_client: ChatModelClient | None = None
+    ) -> None:
         self._settings = settings
+        self._model_client: ChatModelClient = model_client or ModelClient()
+        # Every pipeline model call goes through the router (see model_steps.py).
+        self._router = StepRouter(settings, self._model_client)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -296,6 +265,9 @@ class RealPipelineRunner(PipelineRunner):
 
     def supports_staged_execution(self) -> bool:
         return True
+
+    def task_dir(self, task_id: str) -> Path:
+        return self._settings.tasks_dir / task_id
 
     def preflight(
         self,
@@ -309,7 +281,10 @@ class RealPipelineRunner(PipelineRunner):
                 return
             on_event(PipelineEvent(stage=stage, progress=progress, message=message, payload=payload or {}))
 
-        if not (self._settings.llm_enabled and str(self._settings.llm_api_key or "").strip()):
+        if task_input.options.transcript_only:
+            return
+
+        if not self._router.needs_probe():
             return
 
         if task_input.input_type not in {
@@ -344,8 +319,20 @@ class RealPipelineRunner(PipelineRunner):
             task_input.source,
         )
         transcription = self.run_transcription(context, on_event=record_event)
+        if task_input.options.transcript_only:
+            return events, self.build_transcript_result(transcription)
         result = self.run_summary(context, transcription, on_event=record_event)
         return events, result
+
+    def build_transcript_result(self, transcription: PipelineTranscription) -> TaskResult:
+        result = self._export_transcript_snapshot(
+            transcription.task_dir,
+            transcription.title,
+            transcription.transcript,
+            transcription.segments,
+        )
+        result.model_sources = RouteLog().model_sources()
+        return result
 
     def run_transcription(
         self,
@@ -370,8 +357,29 @@ class RealPipelineRunner(PipelineRunner):
         transcription: PipelineTranscription,
         on_event: PipelineEventReporter | None = None,
     ) -> TaskResult:
+        with self._router.recording() as route_log:
+            result = self._run_summary_steps(context, transcription, on_event, route_log)
+        logger.info(
+            "pipeline summary stage finish task_id=%s segments=%d transcript_chars=%d "
+            "output_dir=%s model_sources=%s",
+            context.task_id,
+            len(transcription.segments),
+            len(transcription.transcript),
+            transcription.task_dir,
+            result.model_sources,
+        )
+        return result
+
+    def _run_summary_steps(
+        self,
+        context: PipelineContext,
+        transcription: PipelineTranscription,
+        on_event: PipelineEventReporter | None,
+        route_log: RouteLog,
+    ) -> TaskResult:
         emit = self._build_stage_emitter(context, on_event)
         task_input = context.task_input
+        directives = PromptDirectives.from_options(task_input.options)
         pegasus_video = None
         if transcription.source_path and self._settings.twelvelabs_summary_enabled:
             pegasus_video = video_context_from_file(transcription.source_path)
@@ -384,6 +392,7 @@ class RealPipelineRunner(PipelineRunner):
             prompt_preset_id=task_input.options.prompt_preset_id,
             summary_scope=task_input.options.summary_scope,
             pegasus_video=pegasus_video,
+            directives=directives,
         )
         emit("exporting", 97, "正在导出任务结果")
         result = self._export_result(
@@ -393,6 +402,9 @@ class RealPipelineRunner(PipelineRunner):
             transcription.segments,
             summary,
         )
+        result.extra_instructions = directives.extra_instructions
+        result.language = directives.language
+        result.model_sources = route_log.model_sources()
         emit(
             "exporting",
             98,
@@ -410,14 +422,8 @@ class RealPipelineRunner(PipelineRunner):
             result,
             emit,
         )
+        result = result.model_copy(update={"model_sources": route_log.model_sources()})
         emit("exporting", 99, "结果文件已写入本地目录")
-        logger.info(
-            "pipeline summary stage finish task_id=%s segments=%d transcript_chars=%d output_dir=%s",
-            context.task_id,
-            len(transcription.segments),
-            len(transcription.transcript),
-            transcription.task_dir,
-        )
         return result
 
     def _build_stage_emitter(
@@ -2256,15 +2262,16 @@ class RealPipelineRunner(PipelineRunner):
         prompt_preset_id: str | None = None,
         summary_scope: str = "knowledge_note",
         pegasus_video: dict[str, str] | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         emit(
             "summarizing",
             88,
             self._build_summary_start_message(),
-            {"llm_enabled": self._settings.llm_enabled and bool(self._settings.llm_api_key)},
+            {"llm_enabled": self._router.available("summary")},
         )
         used_llm_summary = False
-        if self._settings.llm_enabled and self._settings.llm_api_key:
+        if self._router.available("summary"):
             emit("summarizing", 91, f"正在请求 LLM：{self._settings.llm_model or '未命名模型'}")
             logger.info(
                 "llm summary request model=%s base_url=%s transcript_chars=%d segments=%d",
@@ -2282,6 +2289,7 @@ class RealPipelineRunner(PipelineRunner):
                         emit,
                         source_kind=source_kind,
                         prompt_preset_id=prompt_preset_id,
+                        directives=directives,
                     )
                 else:
                     summary = self._summarize_with_llm(
@@ -2290,6 +2298,7 @@ class RealPipelineRunner(PipelineRunner):
                         title,
                         emit,
                         source_kind=source_kind,
+                        directives=directives,
                     )
                 used_llm_summary = True
             except (LLMAuthenticationError, LLMConfigurationError) as exc:
@@ -2301,10 +2310,12 @@ class RealPipelineRunner(PipelineRunner):
                     {"fallback": "rules", "reason": str(exc)},
                 )
                 summary = self._summarize_with_rules(transcript, segments, title)
+                self._router.mark_local("summary")
         else:
             emit("summarizing", 91, "未启用 LLM，使用本地规则摘要")
             logger.info("rule summary start transcript_chars=%d segments=%d", len(transcript), len(segments))
             summary = self._summarize_with_rules(transcript, segments, title)
+            self._router.mark_local("summary")
         summary = self._normalize_summary(summary, transcript, segments, title)
         emit(
             "summarizing",
@@ -2315,6 +2326,9 @@ class RealPipelineRunner(PipelineRunner):
                 "result_scope": "knowledge_cards",
             },
         )
+        if not used_llm_summary:
+            # No model summary, so the knowledge note comes from the local builder.
+            self._router.mark_local("knowledge_note")
         if used_llm_summary and summary_scope != "summary":
             emit("summarizing", 96, "正在生成知识笔记")
             try:
@@ -2327,6 +2341,7 @@ class RealPipelineRunner(PipelineRunner):
                     full_context=self._should_use_full_summary_context(
                         transcript, segments, source_kind
                     ),
+                    directives=directives,
                 )
                 knowledge_note_markdown = str(note_payload.get("knowledgeNoteMarkdown") or "").strip()
                 if knowledge_note_markdown:
@@ -2353,6 +2368,7 @@ class RealPipelineRunner(PipelineRunner):
                         summary[cache_key] = (existing or 0) + (added or 0)
             except VideoSumError as exc:
                 logger.warning("knowledge note llm generation failed, fallback to local note builder error=%s", exc)
+                self._router.mark_local("knowledge_note")
                 emit(
                     "summarizing",
                     97,
@@ -2422,7 +2438,7 @@ class RealPipelineRunner(PipelineRunner):
         emit("summarizing", 98, "Pegasus 视频理解摘要已并入知识笔记", {"pegasus": "ok"})
 
     def _build_summary_start_message(self) -> str:
-        if self._settings.llm_enabled and self._settings.llm_api_key:
+        if self._router.available("summary"):
             return "开始生成 LLM 摘要"
         return "开始生成本地规则摘要"
 
@@ -2434,12 +2450,13 @@ class RealPipelineRunner(PipelineRunner):
         emit: Callable[[str, int, str, dict[str, object] | None], None],
         source_kind: str | None = None,
         prompt_preset_id: str | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
-        base_url = (self._settings.llm_base_url or "").rstrip("/")
-        if not base_url or not self._settings.llm_model:
-            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+        base_url = self._router.require_llm_config("summary")
         if source_kind == "aggregate_series":
-            return self._summarize_aggregate_series_with_llm(base_url, transcript, segments, title, emit)
+            return self._summarize_aggregate_series_with_llm(
+                base_url, transcript, segments, title, emit, directives=directives
+            )
         system_prompt_override, user_prompt_override = self._resolve_prompt(prompt_preset_id)
         if self._should_use_full_summary_context(transcript, segments, source_kind):
             emit(
@@ -2459,6 +2476,7 @@ class RealPipelineRunner(PipelineRunner):
                 title=title,
                 system_prompt_override=system_prompt_override,
                 user_prompt_override=user_prompt_override,
+                directives=directives,
             )
         chunks = self._build_summary_chunks(segments)
         if not chunks:
@@ -2491,7 +2509,8 @@ class RealPipelineRunner(PipelineRunner):
         failures: list[str] = []
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             future_map = {
-                executor.submit(
+                submit_in_context(
+                    executor,
                     self._request_llm_summary_chunk,
                     base_url,
                     title,
@@ -2500,6 +2519,7 @@ class RealPipelineRunner(PipelineRunner):
                     retry_count,
                     system_prompt_override,
                     user_prompt_override,
+                    directives=directives,
                 ): chunk
                 for chunk in chunks
             }
@@ -2567,6 +2587,7 @@ class RealPipelineRunner(PipelineRunner):
                 segments_excerpt=aggregate_segments,
                 system_prompt_override=system_prompt_override,
                 user_prompt_override=user_prompt_override,
+                directives=directives,
             ),
             usage_stage="summary_merge",
         )
@@ -2608,6 +2629,7 @@ class RealPipelineRunner(PipelineRunner):
         title: str,
         system_prompt_override: str | None = None,
         user_prompt_override: str | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         transcript_context, segments_context = self._build_full_summary_inputs(transcript, segments)
         logger.info(
@@ -2624,6 +2646,7 @@ class RealPipelineRunner(PipelineRunner):
                 segments_excerpt=segments_context,
                 system_prompt_override=system_prompt_override,
                 user_prompt_override=user_prompt_override,
+                directives=directives,
             ),
             usage_stage="summary_full",
         )
@@ -2635,6 +2658,7 @@ class RealPipelineRunner(PipelineRunner):
         segments: list[dict[str, object]],
         title: str,
         emit: Callable[[str, int, str, dict[str, object] | None], None],
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         page_count = len({int(float(item.get("start") or 0)) for item in segments if item.get("start") is not None})
         transcript_excerpt = self._build_aggregate_series_excerpt(transcript)
@@ -2658,6 +2682,7 @@ class RealPipelineRunner(PipelineRunner):
                 title=title,
                 transcript_excerpt=transcript_excerpt,
                 segments_excerpt=segments_excerpt,
+                directives=directives,
             ),
             usage_stage="aggregate_summary",
         )
@@ -2671,47 +2696,41 @@ class RealPipelineRunner(PipelineRunner):
         retry_count: int,
         system_prompt_override: str | None = None,
         user_prompt_override: str | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         chunk_index = int(chunk["index"])
-        last_error: Exception | None = None
-        for attempt in range(retry_count + 1):
-            logger.info(
-                "llm summary chunk request model=%s chunk=%d/%d attempt=%d transcript_chars=%d segments_json_chars=%d",
-                self._settings.llm_model,
-                chunk_index,
-                chunk_count,
-                attempt + 1,
-                len(str(chunk["transcript"])),
-                len(str(chunk["segments_json"])),
-            )
-            try:
-                partial = self._request_llm_json(
-                    base_url=base_url,
-                    payload=self._build_llm_summary_payload(
-                        title=f"{title} - 分块 {chunk_index}",
-                        transcript_excerpt=str(chunk["transcript"]),
-                        segments_excerpt=str(chunk["segments_json"]),
-                        system_prompt_override=system_prompt_override,
-                        user_prompt_override=user_prompt_override,
-                    ),
-                    usage_stage="summary_chunk",
-                )
-                partial["chunk_index"] = chunk_index
-                partial["chunk_start"] = float(chunk.get("chunk_start") or 0)
-                partial["chunk_end"] = float(chunk.get("chunk_end") or partial["chunk_start"])
-                partial["source_segment_count"] = int(chunk.get("source_segment_count") or 0)
-                return partial
-            except Exception as exc:
-                last_error = exc
-                logger.warning(
-                    "llm summary chunk request failed model=%s chunk=%d/%d attempt=%d error=%s",
-                    self._settings.llm_model,
-                    chunk_index,
-                    chunk_count,
-                    attempt + 1,
-                    exc,
-                )
-        raise VideoSumError(str(last_error) if last_error else f"Chunk {chunk_index} failed.")
+        logger.info(
+            "llm summary chunk request model=%s chunk=%d/%d transcript_chars=%d "
+            "segments_json_chars=%d",
+            self._settings.llm_model,
+            chunk_index,
+            chunk_count,
+            len(str(chunk["transcript"])),
+            len(str(chunk["segments_json"])),
+        )
+        # Retries come from the summary_chunk policy
+        # (settings.summary_chunk_retry_count == retry_count).
+        partial = self._router.run(
+            "summary",
+            self._router.llm_request(
+                "summary_chunk",
+                self._build_llm_summary_payload(
+                    title=f"{title} - 分块 {chunk_index}",
+                    transcript_excerpt=str(chunk["transcript"]),
+                    segments_excerpt=str(chunk["segments_json"]),
+                    system_prompt_override=system_prompt_override,
+                    user_prompt_override=user_prompt_override,
+                    directives=directives,
+                ),
+                base_url=base_url,
+            ),
+            index=chunk_index,
+        )
+        partial["chunk_index"] = chunk_index
+        partial["chunk_start"] = float(chunk.get("chunk_start") or 0)
+        partial["chunk_end"] = float(chunk.get("chunk_end") or partial["chunk_start"])
+        partial["source_segment_count"] = int(chunk.get("source_segment_count") or 0)
+        return partial
 
     def _request_llm_json_with_retries(
         self,
@@ -2719,184 +2738,11 @@ class RealPipelineRunner(PipelineRunner):
         base_url: str,
         payload: dict[str, object],
         timeout: float = 180,
-        usage_stage: str = "llm",
+        usage_stage: str,
     ) -> dict[str, object]:
-        """Retry response-level failures for non-chunk LLM stages.
-
-        The low-level request retries transport failures, while chunk
-        summaries have their own outer retry loop. Full-context summaries and
-        follow-up stages do not, so an HTTP 200 response with an empty message
-        used to fail immediately. This wrapper keeps those stages consistent
-        with the user-configured retry count.
-        """
-        from video_sum_core.errors import LLMTransientError
-
-        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
-        last_error: Exception | None = None
-        for attempt in range(retry_count + 1):
-            try:
-                return self._request_llm_json(
-                    base_url=base_url,
-                    payload=payload,
-                    timeout=timeout,
-                    retry_count=0,
-                    usage_stage=usage_stage,
-                )
-            except (LLMAuthenticationError, LLMConfigurationError):
-                raise
-            except httpx.TimeoutException as exc:
-                last_error = exc
-            except httpx.TransportError as exc:
-                last_error = exc
-            except LLMTransientError as exc:
-                last_error = exc
-            except VideoSumError as exc:
-                if "no readable message content" not in str(exc).lower():
-                    raise
-                last_error = exc
-
-            if attempt >= retry_count:
-                break
-            logger.warning(
-                "llm response retry model=%s stage=%s attempt=%d/%d error=%s",
-                self._settings.llm_model,
-                usage_stage,
-                attempt + 1,
-                retry_count,
-                last_error,
-            )
-            time.sleep(min(30.0, 1.5 * (2 ** attempt)))
-
-        if last_error is not None:
-            raise last_error
-        raise VideoSumError("LLM request failed before receiving a response.")
-
-    def _request_llm_json(
-        self,
-        base_url: str,
-        payload: dict[str, object],
-        *,
-        timeout: float = 180,
-        retry_count: int | None = None,
-        usage_stage: str = "llm",
-    ) -> dict[str, object]:
-        payload = dict(payload)
-        use_anthropic = is_anthropic_llm(self._settings.llm_provider, base_url)
-        if not use_anthropic:
-            payload["model"] = normalize_openai_compatible_model_name(
-                str(payload.get("model") or self._settings.llm_model or "")
-            )
-            payload = apply_openai_reasoning_settings(
-                payload,
-                thinking_type=self._settings.llm_thinking_type,
-                reasoning_effort=self._settings.llm_reasoning_effort,
-                provider=self._settings.llm_provider,
-                model=str(payload.get("model") or ""),
-                base_url=base_url,
-            )
-        payload["model"] = (
-            str(payload.get("model") or "").strip()
-            if use_anthropic
-            else normalize_openai_compatible_model_name(str(payload.get("model") or ""))
-        )
-        if use_anthropic:
-            headers = {
-                "x-api-key": self._settings.llm_api_key,
-                "anthropic-version": ANTHROPIC_API_VERSION,
-                "Content-Type": "application/json",
-            }
-            request_url = anthropic_messages_url(base_url)
-            request_payload = build_anthropic_messages_payload(payload)
-        else:
-            headers = {
-                "Authorization": f"Bearer {self._settings.llm_api_key}",
-                "Content-Type": "application/json",
-            }
-            request_url = openai_chat_completions_url(base_url)
-            request_payload = payload
-        transport_retry_count = max(0, int(self._settings.summary_chunk_retry_count if retry_count is None else retry_count))
-        last_error: Exception | None = None
-        response: httpx.Response | None = None
-        for attempt in range(transport_retry_count + 1):
-            try:
-                with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                    response = client.post(request_url, headers=headers, json=request_payload)
-                if (response.status_code == 429 or response.status_code >= 500) and attempt < transport_retry_count:
-                    time.sleep(min(30.0, 1.5 * (2 ** attempt)))
-                    continue
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt >= transport_retry_count or not _should_retry_llm_transport_error(exc):
-                    raise
-                backoff_seconds = min(6.0, 1.5 * (attempt + 1))
-                logger.warning(
-                    "llm json transport retry model=%s attempt=%d/%d error=%s backoff=%.1fs",
-                    self._settings.llm_model,
-                    attempt + 1,
-                    transport_retry_count + 1,
-                    exc,
-                    backoff_seconds,
-                )
-                time.sleep(backoff_seconds)
-        if response is None:
-            raise VideoSumError(str(last_error) if last_error else "LLM request failed before receiving response.")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = _extract_response_error_detail(exc.response)
-            logger.error(
-                "llm json request failed status=%s model=%s detail=%s",
-                exc.response.status_code,
-                self._settings.llm_model,
-                detail,
-            )
-            status_code = exc.response.status_code
-            if status_code in (401, 403):
-                raise LLMAuthenticationError(
-                    f"LLM API Key 无效、已过期，或当前模型/接口无权限访问（HTTP {status_code}: {detail}）。"
-                ) from exc
-            if status_code == 429 or status_code >= 500:
-                from video_sum_core.errors import LLMTransientError
-
-                raise LLMTransientError(f"LLM request failed with status {status_code}: {detail}") from exc
-            raise VideoSumError(f"LLM request failed with status {status_code}: {detail}") from exc
-        logger.info("llm json response status=%s model=%s", response.status_code, self._settings.llm_model)
-        response_json = _parse_llm_response_json(response)
-        content = self._extract_llm_response_content(response_json)
-        parsed = self._parse_llm_json_content(content)
-        usage_payload = response_json.get("usage")
-        usage = usage_payload if isinstance(usage_payload, dict) else {}
-        parsed.setdefault("title", "")
-        parsed.setdefault("overview", "")
-        parsed.setdefault("bulletPoints", [])
-        parsed.setdefault("chapters", [])
-        usage_record = self._normalize_llm_usage_record(
-            usage,
-            stage=usage_stage,
-            model=str(payload.get("model") or self._settings.llm_model or "").strip() or None,
-            provider=self._settings.llm_provider,
-        )
-        parsed["llm_prompt_tokens"] = usage_record.get("prompt_tokens") if usage_record else None
-        parsed["llm_completion_tokens"] = usage_record.get("completion_tokens") if usage_record else None
-        parsed["llm_total_tokens"] = usage_record.get("total_tokens") if usage_record else None
-        parsed["llm_prompt_cache_hit_tokens"] = usage_record.get("cache_hit_tokens") if usage_record else None
-        parsed["llm_prompt_cache_miss_tokens"] = usage_record.get("cache_miss_tokens") if usage_record else None
-        parsed["llm_prompt_cache_creation_tokens"] = usage_record.get("cache_creation_tokens") if usage_record else None
-        if usage_record:
-            parsed["_llm_usage_record"] = usage_record
-        logger.info(
-            "llm usage model=%s prompt_tokens=%s completion_tokens=%s "
-            "prompt_cache_hit_tokens=%s prompt_cache_miss_tokens=%s "
-            "prompt_cache_creation_tokens=%s",
-            self._settings.llm_model,
-            parsed["llm_prompt_tokens"],
-            parsed["llm_completion_tokens"],
-            parsed["llm_prompt_cache_hit_tokens"],
-            parsed["llm_prompt_cache_miss_tokens"],
-            parsed["llm_prompt_cache_creation_tokens"],
-        )
-        return parsed
+        """One text model call through the router; retries follow ``usage_stage``'s policy."""
+        request = self._router.llm_request(usage_stage, payload, base_url=base_url, timeout=timeout)
+        return self._router.run(step_for_stage(usage_stage), request)  # type: ignore[return-value]
 
     @staticmethod
     def _llm_usage_records_from_payloads(*payloads: dict[str, object]) -> list[dict[str, object]]:
@@ -2918,148 +2764,16 @@ class RealPipelineRunner(PipelineRunner):
         model: str | None,
         provider: str | None,
     ) -> dict[str, object] | None:
-        usage = usage_payload if isinstance(usage_payload, dict) else {}
-        raw_prompt_tokens = _safe_int(usage.get("prompt_tokens"))
-        input_tokens = _safe_int(usage.get("input_tokens"))
-        prompt_tokens = raw_prompt_tokens if raw_prompt_tokens is not None else input_tokens
-        completion_tokens = _safe_int(usage.get("completion_tokens") or usage.get("output_tokens"))
-        total_tokens = _safe_int(usage.get("total_tokens"))
-        prompt_cache_hit_tokens = _safe_int(usage.get("prompt_cache_hit_tokens"))
-        prompt_cache_miss_tokens = _safe_int(usage.get("prompt_cache_miss_tokens"))
-        prompt_cache_creation_tokens = _safe_int(usage.get("cache_creation_input_tokens"))
-        prompt_token_details = usage.get("prompt_tokens_details")
-        input_token_details = usage.get("input_tokens_details")
-        anthropic_cache_read_tokens = _safe_int(usage.get("cache_read_input_tokens"))
-        anthropic_cache_creation_tokens: int | None = None
-        if prompt_cache_hit_tokens is None and isinstance(prompt_token_details, dict):
-            prompt_cache_hit_tokens = _safe_int(prompt_token_details.get("cached_tokens"))
-        if prompt_cache_hit_tokens is None and isinstance(input_token_details, dict):
-            prompt_cache_hit_tokens = _safe_int(input_token_details.get("cached_tokens"))
-        if prompt_cache_hit_tokens is None:
-            prompt_cache_hit_tokens = _safe_int(usage.get("cached_tokens"))
-        if prompt_cache_hit_tokens is None:
-            prompt_cache_hit_tokens = _safe_int(usage.get("input_cached_tokens"))
-        if prompt_cache_creation_tokens is None and isinstance(prompt_token_details, dict):
-            prompt_cache_creation_tokens = _safe_int(prompt_token_details.get("cache_creation_input_tokens"))
-        if prompt_cache_creation_tokens is None and isinstance(input_token_details, dict):
-            prompt_cache_creation_tokens = _safe_int(input_token_details.get("cache_creation_input_tokens"))
-        if prompt_cache_creation_tokens is None:
-            prompt_cache_creation_tokens = _safe_int(usage.get("cache_write_tokens"))
-        if provider == "anthropic" or anthropic_cache_read_tokens is not None:
-            anthropic_cache_creation_tokens = prompt_cache_creation_tokens
-        if anthropic_cache_read_tokens is not None or anthropic_cache_creation_tokens is not None:
-            prompt_cache_hit_tokens = anthropic_cache_read_tokens or 0
-            if input_tokens is not None:
-                prompt_cache_miss_tokens = input_tokens + (anthropic_cache_creation_tokens or 0)
-                prompt_tokens = input_tokens + prompt_cache_hit_tokens + (anthropic_cache_creation_tokens or 0)
-        elif prompt_cache_miss_tokens is None and prompt_tokens is not None and prompt_cache_hit_tokens is not None:
-            prompt_cache_miss_tokens = max(0, prompt_tokens - prompt_cache_hit_tokens)
-        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
-            total_tokens = prompt_tokens + completion_tokens
-        values = (prompt_tokens, completion_tokens, total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, prompt_cache_creation_tokens)
-        if not any(value is not None for value in values):
-            return None
-        return {
-            "stage": stage,
-            "provider": str(provider or "").strip() or None,
-            "model": model,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "cache_hit_tokens": prompt_cache_hit_tokens,
-            "cache_miss_tokens": prompt_cache_miss_tokens,
-            "cache_creation_tokens": prompt_cache_creation_tokens,
-        }
+        return normalize_usage_record(usage_payload, stage=stage, model=model, provider=provider)
 
     def _extract_llm_response_content(self, response_json: object) -> str:
-        if not isinstance(response_json, dict):
-            raise VideoSumError("LLM returned an unexpected response payload.")
-        content = extract_llm_message_content(response_json)
-        if content:
-            return content
-        raise VideoSumError("LLM returned no readable message content.")
+        return extract_llm_response_content(response_json)
 
     def _preflight_llm_availability(self) -> None:
-        base_url = (self._settings.llm_base_url or "").rstrip("/")
-        if not base_url or not self._settings.llm_model:
-            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
-
-        # 说明：有意不传 response_format（json_object）
-        # 本地 LLM 后端（Ollama/llama.cpp/vLLM 等）不支持该参数，会返回 400
-        # 输出格式靠 system prompt 中"只输出合法 JSON"约束
-        payload = {
-            "model": self._settings.llm_model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "你是一个 JSON 测试助手。你只能返回合法 JSON，不能输出任何额外文字。",
-                },
-                {
-                    "role": "user",
-                    "content": '请只返回：{"ok":true}',
-                },
-            ],
-            "temperature": 0,
-            "max_tokens": 32,
-            "enable_thinking": False,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-        retry_count = max(0, int(self._settings.summary_chunk_retry_count))
-        last_error: VideoSumError | None = None
-        for attempt in range(retry_count + 1):
-            try:
-                # 预检的重试由这一层统一控制，这样空响应、无效响应和网络错误
-                # 都会遵守同一个可配置的重试次数，而不是只重试传输异常。
-                self._request_llm_json(base_url=base_url, payload=payload, timeout=20, retry_count=0)
-                return
-            except (LLMAuthenticationError, LLMConfigurationError):
-                raise
-            except httpx.TimeoutException as exc:
-                last_error = VideoSumError("LLM API 检查超时，请稍后重试或检查 Base URL / 网络代理。")
-                last_error.__cause__ = exc
-            except httpx.TransportError as exc:
-                last_error = VideoSumError(f"LLM API 检查失败，请检查 Base URL / 网络代理：{exc}")
-                last_error.__cause__ = exc
-            except VideoSumError as exc:
-                last_error = exc
-
-            if attempt >= retry_count:
-                break
-            logger.warning(
-                "llm preflight failed, retrying attempt=%d/%d error=%s",
-                attempt + 1,
-                retry_count,
-                last_error,
-            )
-            time.sleep(min(1.5, 0.25 * (2 ** attempt)))
-
-        if last_error is not None:
-            raise last_error
+        self._router.probe()
 
     def _parse_llm_json_content(self, content: str) -> dict[str, object]:
-        # 移除可能的 think 标签（某些模型如 MiniMax-M2.5 可能返回）
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
-
-        candidates = [str(content or "").strip()]
-        extracted = _extract_json_object_text(content)
-        if extracted not in candidates:
-            candidates.append(extracted)
-
-        for candidate in candidates:
-            if not candidate:
-                continue
-            try:
-                return json.loads(candidate)
-            except json.JSONDecodeError:
-                try:
-                    return json.loads(candidate, strict=False)
-                except json.JSONDecodeError:
-                    continue
-
-        preview = _truncate_text(str(content or "").replace("\r", "\\r").replace("\n", "\\n"), 600)
-        logger.error("llm json returned invalid content preview=%s", preview)
-        raise VideoSumError("LLM returned invalid JSON content.")
+        return parse_llm_json_content(content)
 
     def _build_llm_summary_payload(
         self,
@@ -3068,6 +2782,7 @@ class RealPipelineRunner(PipelineRunner):
         segments_excerpt: str,
         system_prompt_override: str | None = None,
         user_prompt_override: str | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         messages = self._build_summary_messages(
             title,
@@ -3077,6 +2792,7 @@ class RealPipelineRunner(PipelineRunner):
             user_prompt_override=user_prompt_override,
         )
         messages = self._ensure_json_keyword_in_messages(messages)
+        messages = apply_prompt_directives(messages, directives)
         # Qwen mixed-thinking models may reject json_object mode when thinking is enabled.
         return {
             "model": self._settings.llm_model,
@@ -3090,9 +2806,11 @@ class RealPipelineRunner(PipelineRunner):
         title: str,
         transcript_excerpt: str,
         segments_excerpt: str,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         messages = self._build_aggregate_series_summary_messages(title, transcript_excerpt, segments_excerpt)
         messages = self._ensure_json_keyword_in_messages(messages)
+        messages = apply_prompt_directives(messages, directives)
         return {
             "model": self._settings.llm_model,
             "messages": messages,
@@ -3396,6 +3114,7 @@ P 数索引：
         segments_excerpt: str,
         summary_json: str,
         source_kind: str | None = None,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
         if source_kind == "aggregate_series":
             messages = self._build_aggregate_series_note_messages(
@@ -3407,6 +3126,7 @@ P 数索引：
         else:
             messages = self._build_knowledge_note_messages(title, transcript_excerpt, segments_excerpt, summary_json)
         messages = self._ensure_json_keyword_in_messages(messages)
+        messages = apply_prompt_directives(messages, directives)
         return {
             "model": self._settings.llm_model,
             "messages": messages,
@@ -3422,10 +3142,9 @@ P 数索引：
         summary: dict[str, object],
         source_kind: str | None = None,
         full_context: bool = False,
+        directives: PromptDirectives | None = None,
     ) -> dict[str, object]:
-        base_url = (self._settings.llm_base_url or "").rstrip("/")
-        if not base_url or not self._settings.llm_model:
-            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+        base_url = self._router.require_llm_config("knowledge_note")
         if source_kind == "aggregate_series":
             transcript_excerpt = self._build_aggregate_series_excerpt(transcript)
             segments_excerpt = self._build_aggregate_series_segments_excerpt(segments)
@@ -3461,12 +3180,12 @@ P 数索引：
             segments_excerpt=segments_excerpt,
             summary_json=summary_json,
             source_kind=source_kind,
+            directives=directives,
         )
-        result = self._request_llm_json_with_retries(base_url=base_url, payload=payload, usage_stage="knowledge_note")
-        result.setdefault("knowledgeNoteMarkdown", "")
-        if not str(result.get("knowledgeNoteMarkdown") or "").strip():
-            raise VideoSumError("LLM returned empty knowledge note markdown.")
-        return result
+        # The knowledge_note parser rejects an empty knowledgeNoteMarkdown.
+        return self._request_llm_json_with_retries(
+            base_url=base_url, payload=payload, usage_stage="knowledge_note"
+        )
 
     def build_and_export_mindmap(
         self,
@@ -3495,8 +3214,8 @@ P 数索引：
     ) -> tuple[dict[str, object], Path, Path]:
         task_dir = ensure_directory(self._settings.tasks_dir / task_id)
         visual_dir = task_dir / "visual_evidence"
-        if force and visual_dir.exists():
-            shutil.rmtree(visual_dir)
+        if force:
+            clear_derived_visual_artifacts(visual_dir)
         visual_dir = ensure_directory(visual_dir)
         frames_dir = ensure_directory(visual_dir / "frames")
         frame_index_path = visual_dir / "frame_index.json"
@@ -3538,7 +3257,9 @@ P 数索引：
         report("visual_source_preparing", 34, "正在并发准备视频画面来源", {"mode": mode})
         with ThreadPoolExecutor(max_workers=2) as executor:
             source_future = executor.submit(self._prepare_visual_source, task_input, task_dir, title)
-            plan_future = executor.submit(self._build_visual_keyframe_plan, title, result, mode)
+            plan_future = submit_in_context(
+                executor, self._build_visual_keyframe_plan, title, result, mode
+            )
             source_path, source_kind, warnings = source_future.result()
             keyframe_plan = plan_future.result()
         usage_breakdown = [
@@ -3589,10 +3310,14 @@ P 数索引：
             try:
                 report("visual_frame_analyzing", 70, "正在调用 VLM 解析画面内容", {"mode": mode, "frame_count": len(frames)})
                 observations = self._describe_visual_frames(frames, title, result, usage_breakdown)
+            except AgentSignal:
+                raise
             except Exception as exc:
                 logger.warning("visual frame description failed task_id=%s error=%s", task_id, exc)
                 warnings.append(f"视觉模型描述失败：{exc}")
         elif frames:
+            if mode == "vlm_integrated":
+                self._router.mark_local("visual_frame")
             observations = [
                 {
                     "frame_id": str(frame["frame_id"]),
@@ -3709,6 +3434,8 @@ P 数索引：
                 mode=mode,
                 on_event=handle_visual_event,
             )
+        except AgentSignal:
+            raise
         except Exception as exc:
             logger.exception("inline visual note generation failed task_id=%s error=%s", task_id, exc)
             failed_result = started_result.model_copy(
@@ -3773,13 +3500,12 @@ P 数索引：
 
     def _build_visual_keyframe_plan(self, title: str, result: TaskResult, mode: str) -> dict[str, object]:
         fallback = self._build_visual_keyframe_plan_locally(result, mode)
-        if not self._settings.llm_enabled or not self._settings.llm_api_key or not self._settings.llm_base_url or not self._settings.llm_model:
+        if not self._router.available("keyframe_plan"):
+            self._router.mark_local("keyframe_plan")
             return fallback
-        try:
-            return self._build_visual_keyframe_plan_with_llm(title, result, mode)
-        except Exception as exc:
-            logger.warning("visual keyframe planning llm failed error=%s", exc)
-            return fallback
+        return self._build_visual_keyframe_plan_with_llm(
+            title, result, mode, fallback=lambda _exc: fallback
+        )
 
     def _build_visual_keyframe_plan_locally(self, result: TaskResult, mode: str) -> dict[str, object]:
         keyframes: list[dict[str, object]] = []
@@ -3823,8 +3549,15 @@ P 数索引：
             ]
         return {"schema_version": 1, "mode": mode, "planner": "local", "keyframes": keyframes[:max_frames]}
 
-    def _build_visual_keyframe_plan_with_llm(self, title: str, result: TaskResult, mode: str) -> dict[str, object]:
-        base_url = (self._settings.llm_base_url or "").rstrip("/")
+    def _build_visual_keyframe_plan_with_llm(
+        self,
+        title: str,
+        result: TaskResult,
+        mode: str,
+        *,
+        fallback: Callable[[Exception], dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        base_url = self._router.llm_base_url()
         max_frames = max(1, min(int(self._settings.visual_evidence_max_frames or 12), 30))
         summary_payload = {
             "overview": result.overview,
@@ -3867,13 +3600,21 @@ P 数索引：
             "temperature": 0.1,
             "enable_thinking": False,
         }
-        parsed = self._request_llm_json(
-            base_url=base_url,
-            payload=payload,
-            timeout=90,
-            retry_count=1,
-            usage_stage="visual_keyframe_plan",
+        fallback_used: list[dict[str, object]] = []
+
+        def use_fallback(exc: Exception) -> None:
+            fallback_used.append(fallback(exc))  # type: ignore[misc]
+
+        parsed = self._router.run(
+            "keyframe_plan",
+            self._router.llm_request(
+                "visual_keyframe_plan", payload, base_url=base_url, timeout=90
+            ),
+            fallback=None if fallback is None else use_fallback,
         )
+        if fallback_used:
+            return fallback_used[0]
+        assert isinstance(parsed, dict)
         usage_records = self._llm_usage_records_from_payloads(parsed)
         raw_items = parsed.get("keyframes")
         keyframes: list[dict[str, object]] = []
@@ -3965,7 +3706,28 @@ P 数索引：
         return timestamps or self._choose_visual_timestamps(result)
 
     def _attach_visual_keyframe_plan(self, frames: list[dict[str, object]], keyframes: list[dict[str, object]]) -> None:
-        for frame, planned in zip(frames, keyframes):
+        """Give each extracted frame the plan entry it was extracted for.
+
+        Pair by timestamp, not position: close timestamps are dropped before
+        extraction and an extraction can fail, so frames and plan entries do
+        not line up one to one.
+        """
+
+        def planned_timestamp(item: dict[str, object]) -> float | None:
+            try:
+                return max(0.0, float(item.get("timestamp_seconds") or 0))
+            except (TypeError, ValueError):
+                return None
+
+        timed = [(ts, item) for item in keyframes if (ts := planned_timestamp(item)) is not None]
+        for frame in frames:
+            try:
+                frame_ts = float(frame.get("timestamp_seconds") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not timed:
+                break
+            planned = min(timed, key=lambda entry: abs(entry[0] - frame_ts))[1]
             frame["anchor_heading"] = str(planned.get("anchor_heading") or "").strip()
             frame["planned_concept"] = str(planned.get("concept") or "").strip()
             frame["planned_reason"] = str(planned.get("reason") or "").strip()
@@ -4004,6 +3766,10 @@ P 数索引：
         ensure_directory(output_dir)
         output_template = str(output_dir / f"{safe_title}.visual.%(ext)s")
         height = self._visual_download_height()
+        manifest = VisualAssetManifest(output_dir)
+        cached_video = manifest.find_video(url, height)
+        if cached_video is not None:
+            return cached_video
         options = {
             **self._base_ydl_options(),
             "format": (
@@ -4032,6 +3798,8 @@ P 数索引：
         )
         if not candidates:
             raise VideoSumError("图文笔记视频源下载失败。")
+        manifest.record_video(url, height, candidates[0])
+        manifest.save()
         return candidates[0]
 
     def _visual_download_height(self) -> int:
@@ -4089,91 +3857,45 @@ P 数索引：
         frames_dir: Path,
     ) -> tuple[list[dict[str, object]], list[str]]:
         warnings: list[str] = []
+        width = max(320, min(int(self._settings.visual_evidence_frame_width or 960), 1600))
+        analysis_width = max(
+            320, min(int(self._settings.visual_evidence_vlm_image_width or 768), width)
+        )
+        manifest = VisualAssetManifest(frames_dir.parent)
+        cache = manifest.frame_cache(
+            source_path,
+            {
+                "width": width,
+                "analysis_width": analysis_width,
+                "analysis_quality": self._ffmpeg_jpeg_quality_for_visual_analysis(),
+            },
+        )
         ffmpeg_exe = ffmpeg_location()
-        if ffmpeg_exe is None:
+        if ffmpeg_exe is None and not cache:
             return [], ["FFmpeg 不可用，已跳过截图证据。"]
         frames: list[dict[str, object]] = []
         seen_hashes: set[str] = set()
-        width = max(320, min(int(self._settings.visual_evidence_frame_width or 960), 1600))
-        analysis_width = max(320, min(int(self._settings.visual_evidence_vlm_image_width or 768), width))
+        ffmpeg_warned = False
         for index, timestamp in enumerate(timestamps, start=1):
             frame_id = f"f{index:04d}"
-            target = frames_dir / f"{frame_id}.jpg"
-            analysis_target = frames_dir / f"{frame_id}.analysis.jpg"
-            command = [
-                str(ffmpeg_exe),
-                "-y",
-                "-ss",
-                f"{max(0.0, float(timestamp)):.3f}",
-                "-i",
-                str(source_path),
-                "-frames:v",
-                "1",
-                "-vf",
-                f"scale='min({width},iw)':-2",
-                "-q:v",
-                "3",
-                str(target),
-            ]
-            try:
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=45,
-                    check=False,
-                    **_windows_hidden_subprocess_kwargs(),
+            cached = manifest.lookup_frame(cache, timestamp)
+            if cached is None:
+                if ffmpeg_exe is None:
+                    if not ffmpeg_warned:
+                        warnings.append("FFmpeg 不可用，已跳过截图证据。")
+                        ffmpeg_warned = True
+                    continue
+                cached = self._extract_visual_frame_file(
+                    ffmpeg_exe, source_path, timestamp, frames_dir, width, analysis_width, warnings
                 )
-            except (OSError, subprocess.SubprocessError) as exc:
-                warnings.append(f"{self._format_seconds(timestamp)} 截图失败：{exc}")
+                if cached is None:
+                    continue
+                manifest.record_frame(timestamp, cached)
+            if cached.sha256 in seen_hashes:
                 continue
-            if result.returncode != 0 or not target.exists():
-                warnings.append(f"{self._format_seconds(timestamp)} 截图失败。")
-                continue
-            if analysis_width < width:
-                analysis_command = [
-                    str(ffmpeg_exe),
-                    "-y",
-                    "-i",
-                    str(target),
-                    "-vf",
-                    f"scale='min({analysis_width},iw)':-2",
-                    "-q:v",
-                    str(self._ffmpeg_jpeg_quality_for_visual_analysis()),
-                    str(analysis_target),
-                ]
-                try:
-                    analysis_result = subprocess.run(
-                        analysis_command,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=30,
-                        check=False,
-                        **_windows_hidden_subprocess_kwargs(),
-                    )
-                    if analysis_result.returncode != 0 or not analysis_target.exists():
-                        analysis_target = target
-                except (OSError, subprocess.SubprocessError):
-                    analysis_target = target
-            else:
-                analysis_target = target
-            digest = self._sha256_file(target)
-            if digest in seen_hashes:
-                try:
-                    target.unlink()
-                except OSError:
-                    pass
-                if analysis_target != target:
-                    try:
-                        analysis_target.unlink()
-                    except OSError:
-                        pass
-                continue
-            seen_hashes.add(digest)
+            seen_hashes.add(cached.sha256)
+            target = frames_dir / cached.file_name
+            analysis_target = frames_dir / cached.analysis_file_name
             frames.append(
                 {
                     "frame_id": frame_id,
@@ -4184,12 +3906,93 @@ P 数索引：
                     "analysis_image_path": f"frames/{analysis_target.name}",
                     "_absolute_path": str(target),
                     "_analysis_absolute_path": str(analysis_target),
-                    "sha256": digest,
+                    "sha256": cached.sha256,
                     "selected": True,
                     "reason": "chapter_anchor",
                 }
             )
+        manifest.save()
         return frames, warnings
+
+    def _extract_visual_frame_file(
+        self,
+        ffmpeg_exe: Path,
+        source_path: Path,
+        timestamp: float,
+        frames_dir: Path,
+        width: int,
+        analysis_width: int,
+        warnings: list[str],
+    ) -> CachedFrame | None:
+        stem = frame_file_stem(timestamp)
+        target = frames_dir / f"{stem}.jpg"
+        analysis_target = frames_dir / f"{stem}.analysis.jpg"
+        command = [
+            str(ffmpeg_exe),
+            "-y",
+            "-ss",
+            f"{max(0.0, float(timestamp)):.3f}",
+            "-i",
+            str(source_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale='min({width},iw)':-2",
+            "-q:v",
+            "3",
+            str(target),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+                check=False,
+                **_windows_hidden_subprocess_kwargs(),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            warnings.append(f"{self._format_seconds(timestamp)} 截图失败：{exc}")
+            return None
+        if result.returncode != 0 or not target.exists():
+            warnings.append(f"{self._format_seconds(timestamp)} 截图失败。")
+            return None
+        if analysis_width < width:
+            analysis_command = [
+                str(ffmpeg_exe),
+                "-y",
+                "-i",
+                str(target),
+                "-vf",
+                f"scale='min({analysis_width},iw)':-2",
+                "-q:v",
+                str(self._ffmpeg_jpeg_quality_for_visual_analysis()),
+                str(analysis_target),
+            ]
+            try:
+                analysis_result = subprocess.run(
+                    analysis_command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                    **_windows_hidden_subprocess_kwargs(),
+                )
+                if analysis_result.returncode != 0 or not analysis_target.exists():
+                    analysis_target = target
+            except (OSError, subprocess.SubprocessError):
+                analysis_target = target
+        else:
+            analysis_target = target
+        return CachedFrame(
+            file_name=target.name,
+            analysis_file_name=analysis_target.name,
+            sha256=self._sha256_file(target),
+        )
 
     def _ffmpeg_jpeg_quality_for_visual_analysis(self) -> str:
         try:
@@ -4201,19 +4004,10 @@ P 数索引：
         return str(max(2, min(qscale, 31)))
 
     def _visual_llm_available(self) -> bool:
-        if not self._settings.visual_evidence_use_llm:
-            return False
-        if hasattr(self._settings, "visual_multimodal_enabled") and not self._settings.visual_multimodal_enabled:
-            return False
-        _provider, base_url, model, api_key = self._visual_llm_config()
-        return bool(base_url and model and api_key)
+        return self._router.available("visual_frame")
 
     def _visual_llm_config(self) -> tuple[str, str, str, str]:
-        provider = (self._settings.visual_vlm_provider or "openai-compatible").strip()
-        base_url = (self._settings.visual_evidence_base_url or self._settings.llm_base_url or "").rstrip("/")
-        model = self._settings.visual_evidence_model or self._settings.llm_model
-        api_key = self._settings.visual_evidence_api_key or self._settings.llm_api_key
-        return provider, base_url, model, api_key
+        return self._router.visual_config()
 
     def _describe_visual_frames(
         self,
@@ -4231,8 +4025,11 @@ P 数索引：
         )
         is_anthropic = provider == "anthropic"
         timeout = max(15, int(self._settings.visual_evidence_timeout_seconds or 120))
-        retry_count = max(0, min(int(self._settings.visual_evidence_retry_count or 1), 3))
-        for frame in frames:
+        # 1) assemble one request per frame, 2) router.run_many, 3) parse in input order.
+        requested_frames: list[dict[str, object]] = []
+        requests: list[ModelRequest] = []
+        frame_indices: list[int] = []
+        for frame_index, frame in enumerate(frames):
             image_path = frame.get("_analysis_absolute_path") or frame.get("_absolute_path")
             if not image_path:
                 image_path = str(frame.get("analysis_image_path") or frame.get("image_path") or "")
@@ -4280,68 +4077,68 @@ P 数索引：
             # Third-party Anthropic-compatible endpoints (e.g. SiliconFlow) do not
             # support images via /messages — fall back to OpenAI format for those.
             use_anthropic_images = is_anthropic and "api.anthropic.com" in base_url.lower()
-            if use_anthropic_images:
-                request_url = anthropic_messages_url(base_url)
-                headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-                request_payload = build_anthropic_messages_payload(payload)
-            else:
-                request_url = f"{base_url}/chat/completions"
-                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-                payload = apply_openai_reasoning_settings(
-                    payload,
-                    thinking_type=self._settings.llm_thinking_type,
-                    reasoning_effort=self._settings.llm_reasoning_effort,
-                    provider=self._settings.llm_provider,
-                    model=model,
-                    base_url=base_url,
+            request = ModelRequest(
+                usage_stage="visual_frame",
+                base_url=base_url,
+                api_key=api_key,
+                payload=payload,
+                wire_format="anthropic" if use_anthropic_images else "openai",
+                provider=provider,
+                reasoning=self._router.reasoning(),
+                timeout=timeout,
+                lenient_body=False,
+                endpoint_url=None if use_anthropic_images else f"{base_url}/chat/completions",
+                usage_model=model,
+                images=(str(image_file.resolve()),),
+            )
+            requested_frames.append(frame)
+            requests.append(request)
+            frame_indices.append(frame_index)
+
+        def record_usage(response: ModelResponse) -> None:
+            if response.usage_record and usage_records is not None:
+                usage_records.append(response.usage_record)
+
+        def failed_frame(exc: Exception, frame_index: int) -> None:
+            logger.warning(
+                "visual frame llm request failed frame_id=%s error=%s",
+                frames[frame_index].get("frame_id"),
+                exc,
+            )
+            return None
+
+        replies = self._router.run_many(
+            "visual_frame",
+            requests,
+            indices=frame_indices,
+            fallback=failed_frame,
+            on_response=record_usage,
+        )
+        for frame, parsed in zip(requested_frames, replies, strict=True):
+            if isinstance(parsed, dict):
+                key_facts_raw = parsed.get("key_facts")
+                key_facts: list[str] = []
+                if isinstance(key_facts_raw, list):
+                    key_facts = [str(f).strip()[:200] for f in key_facts_raw if str(f).strip()]
+                observations.append(
+                    {
+                        "frame_id": str(frame["frame_id"]),
+                        "timestamp_seconds": float(frame["timestamp_seconds"]),
+                        "visual_type": str(
+                            parsed.get("visual_type") or parsed.get("scene") or "unknown"
+                        ).strip()[:64],
+                        "caption": str(parsed.get("caption") or "关键画面信息").strip()[:240],
+                        "ocr_text": str(parsed.get("ocr_text") or "").strip()[:600],
+                        "semantic_summary": str(parsed.get("semantic_summary") or "").strip()[:600],
+                        "key_facts": key_facts,
+                        "importance": parsed.get("importance"),
+                        "should_insert": parsed.get("should_insert", True),
+                        "suggested_anchor": str(parsed.get("suggested_anchor") or "").strip()[:120],
+                        "scene": str(parsed.get("scene") or "unknown").strip()[:64],
+                        "confidence": parsed.get("confidence"),
+                    }
                 )
-                payload["model"] = normalize_openai_compatible_model_name(model)
-                request_payload = payload
-            last_error: Exception | None = None
-            for attempt in range(retry_count + 1):
-                try:
-                    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                        response = client.post(request_url, headers=headers, json=request_payload)
-                    response.raise_for_status()
-                    body = response.json()
-                    usage_record = self._normalize_llm_usage_record(
-                        body.get("usage") if isinstance(body, dict) else None,
-                        stage="visual_frame",
-                        model=model,
-                        provider=provider,
-                    )
-                    if usage_record and usage_records is not None:
-                        usage_records.append(usage_record)
-                    content = extract_llm_message_content(body)
-                    parsed = json.loads(_extract_json_object_text(content))
-                    key_facts_raw = parsed.get("key_facts")
-                    key_facts: list[str] = []
-                    if isinstance(key_facts_raw, list):
-                        key_facts = [str(f).strip()[:200] for f in key_facts_raw if str(f).strip()]
-                    observations.append(
-                        {
-                            "frame_id": str(frame["frame_id"]),
-                            "timestamp_seconds": float(frame["timestamp_seconds"]),
-                            "visual_type": str(parsed.get("visual_type") or parsed.get("scene") or "unknown").strip()[:64],
-                            "caption": str(parsed.get("caption") or "关键画面信息").strip()[:240],
-                            "ocr_text": str(parsed.get("ocr_text") or "").strip()[:600],
-                            "semantic_summary": str(parsed.get("semantic_summary") or "").strip()[:600],
-                            "key_facts": key_facts,
-                            "importance": parsed.get("importance"),
-                            "should_insert": parsed.get("should_insert", True),
-                            "suggested_anchor": str(parsed.get("suggested_anchor") or "").strip()[:120],
-                            "scene": str(parsed.get("scene") or "unknown").strip()[:64],
-                            "confidence": parsed.get("confidence"),
-                        }
-                    )
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    if attempt >= retry_count:
-                        logger.warning("visual frame llm request failed frame_id=%s error=%s", frame.get("frame_id"), exc)
-                    else:
-                        time.sleep(min(4.0, 1.2 * (attempt + 1)))
-            if last_error and not any(item.get("frame_id") == frame.get("frame_id") for item in observations):
+            else:
                 observations.append(
                     {
                         "frame_id": str(frame["frame_id"]),
@@ -4379,6 +4176,9 @@ P 数索引：
                     importance = float(observation.get("importance") if observation.get("importance") is not None else 0.75)
                 except (TypeError, ValueError):
                     importance = 0.75
+                if importance > 1:
+                    # The frame prompt asks for importance on a 1-10 scale.
+                    importance /= 10
                 if not should_insert and importance < 0.72:
                     continue
             chapter = self._nearest_visual_chapter(result, float(frame.get("timestamp_seconds") or 0))
@@ -4454,20 +4254,23 @@ P 数索引：
         base_note = str(result.knowledge_note_markdown or "").strip()
         if not base_note:
             return ""
-        if mode == "vlm_integrated" and observations and self._visual_llm_available():
-            try:
-                model_note = self._compose_visual_note_with_llm(
-                    title,
-                    base_note,
-                    observations,
-                    insert_plan,
-                    usage_records=usage_breakdown,
-                )
+        compose_available = (
+            self._visual_llm_available() or self._router.resolve("visual_compose") == "agent"
+        )
+        if mode == "vlm_integrated" and observations and compose_available:
+            model_note = self._compose_visual_note_with_llm(
+                title,
+                base_note,
+                observations,
+                insert_plan,
+                usage_records=usage_breakdown,
+                fallback=lambda _exc: None,
+            )
+            if model_note is not None:
                 if self._visual_note_preserves_text_subject(model_note):
                     return model_note
                 logger.warning("visual enhanced note llm composition rejected because text subject was not preserved")
-            except Exception as exc:
-                logger.warning("visual enhanced note llm composition failed error=%s", exc)
+        self._router.mark_local("visual_compose")
         return self._compose_visual_note_locally(base_note, insert_plan)
 
     def _visual_note_preserves_text_subject(self, markdown: str) -> bool:
@@ -4488,7 +4291,8 @@ P 数索引：
         observations: list[dict[str, object]],
         insert_plan: dict[str, object] | None = None,
         usage_records: list[dict[str, object]] | None = None,
-    ) -> str:
+        fallback: Callable[[Exception], str | None] | None = None,
+    ) -> str | None:
         provider, base_url, model, api_key = self._visual_llm_config()
         is_anthropic = provider == "anthropic"
         system_prompt = self._settings.visual_note_system_prompt.strip() or (
@@ -4564,40 +4368,30 @@ P 数索引：
             "max_tokens": 65536,
             "enable_thinking": True,
         }
-        if is_anthropic:
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-            request_url = anthropic_messages_url(base_url)
-            request_payload = build_anthropic_messages_payload(openai_payload)
-        else:
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            openai_payload = apply_openai_reasoning_settings(
-                openai_payload,
-                thinking_type=self._settings.llm_thinking_type,
-                reasoning_effort=self._settings.llm_reasoning_effort,
-                provider=self._settings.llm_provider,
-                model=model,
-                base_url=base_url,
-            )
-            request_url = f"{base_url}/chat/completions"
-            request_payload = openai_payload
         # Compose step processes the full knowledge note + all observations — can take a while.
         compose_timeout = max(60, int(self._settings.visual_evidence_timeout_seconds or 300))
-        with httpx.Client(timeout=compose_timeout, follow_redirects=True) as client:
-            response = client.post(request_url, headers=headers, json=request_payload)
-        response.raise_for_status()
-        body = response.json()
-        usage_record = self._normalize_llm_usage_record(
-            body.get("usage") if isinstance(body, dict) else None,
-            stage="visual_note_compose",
-            model=model,
-            provider=provider,
+        def record_usage(response: ModelResponse) -> None:
+            if response.usage_record and usage_records is not None:
+                usage_records.append(response.usage_record)
+
+        return self._router.run(  # type: ignore[return-value]
+            "visual_compose",
+            ModelRequest(
+                usage_stage="visual_note_compose",
+                base_url=base_url,
+                api_key=api_key,
+                payload=openai_payload,
+                wire_format="anthropic" if is_anthropic else "openai",
+                provider=provider,
+                reasoning=self._router.reasoning(),
+                timeout=compose_timeout,
+                lenient_body=False,
+                endpoint_url=None if is_anthropic else f"{base_url}/chat/completions",
+                usage_model=model,
+            ),
+            fallback=fallback,
+            on_response=record_usage,
         )
-        if usage_record and usage_records is not None:
-            usage_records.append(usage_record)
-        content = extract_llm_message_content(body)
-        if not content:
-            raise VideoSumError("图文笔记模型返回空内容。")
-        return content
 
     def _compose_visual_note_locally(self, knowledge_note_markdown: str, insert_plan: dict[str, object]) -> str:
         insertions = [item for item in insert_plan.get("insertions", []) if isinstance(item, dict)]
@@ -4818,9 +4612,7 @@ P 数索引：
         title: str,
         result: TaskResult,
     ) -> tuple[TaskMindMap, list[dict[str, object]]]:
-        base_url = (self._settings.llm_base_url or "").rstrip("/")
-        if not base_url or not self._settings.llm_model:
-            raise LLMConfigurationError("LLM 配置不完整，请检查 Base URL 和模型名。")
+        base_url = self._router.require_llm_config("mindmap")
 
         summary_json = _truncate_text(
             json.dumps(
@@ -4845,7 +4637,9 @@ P 数索引：
             len(result.timeline or []),
             len(result.chapter_groups or []),
         )
+        directives = PromptDirectives.from_result(result)
         payload = self._build_llm_mindmap_payload(title, summary_json, knowledge_note_markdown)
+        payload["messages"] = apply_prompt_directives(list(payload["messages"]), directives)
         llm_result = self._request_llm_json_with_retries(
             base_url=base_url,
             payload=payload,
@@ -4860,6 +4654,9 @@ P 数索引：
                     summary_json=summary_json,
                     knowledge_note_markdown=knowledge_note_markdown,
                 )
+                repair_payload["messages"] = apply_prompt_directives(
+                    list(repair_payload["messages"]), directives
+                )
                 repair_result = self._request_llm_json_with_retries(
                     base_url=base_url,
                     payload=repair_payload,
@@ -4871,9 +4668,13 @@ P 数索引：
                     mindmap = repaired_mindmap
                 else:
                     mindmap = self._build_mindmap_fallback(title=title, result=result)
+                    self._router.mark_local("mindmap")
+            except AgentSignal:
+                raise
             except Exception as exc:
                 logger.warning("mindmap repair failed; using local fallback error=%s", exc)
                 mindmap = self._build_mindmap_fallback(title=title, result=result)
+                self._router.mark_local("mindmap")
         return mindmap, usage_breakdown
 
     def _build_llm_mindmap_repair_payload(
@@ -5261,6 +5062,9 @@ P 数索引：
     ) -> bool:
         if source_kind == "aggregate_series":
             return False
+        if self._router.resolve("summary") == "agent":
+            # Chunking would cost the Agent several extra rounds (design 3.3 premise 3).
+            return True
         mode = normalize_summary_context_mode(self._settings.summary_context_mode)
         if mode == "full":
             return True

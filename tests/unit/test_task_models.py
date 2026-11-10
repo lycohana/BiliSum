@@ -1,7 +1,8 @@
+import functools
 from pathlib import Path
 
 import pytest
-
+from video_sum_core.errors import VideoSumError
 from video_sum_core.models.tasks import (
     InputType,
     TaskInput,
@@ -9,18 +10,22 @@ from video_sum_core.models.tasks import (
     TaskStatus,
     merge_llm_usage_records,
 )
-from video_sum_core.errors import VideoSumError
-from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_core.pipeline.base import PipelineContext
+from video_sum_core.pipeline.model_steps import require_step_router
+from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 from video_sum_infra.config import (
     ServiceSettings,
-    recommend_llm_concurrency,
     normalize_transcription_provider,
+    recommend_llm_concurrency,
     recommend_mindmap_concurrency,
     recommend_task_concurrency,
     recommend_transcription_concurrency,
 )
 from video_sum_infra.llm import apply_openai_reasoning_settings
+from video_sum_infra.model_client_fake import FakeModelClient
+
+# Pipeline tests: any model call that bypasses StepRouter fails.
+RoutedFake = functools.partial(FakeModelClient, guard=require_step_router)
 from video_sum_infra.runtime import default_data_dir
 from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePayload
 
@@ -28,7 +33,7 @@ from video_sum_service.settings_manager import SettingsManager, SettingsUpdatePa
 def test_task_input_defaults() -> None:
     task_input = TaskInput(input_type=InputType.URL, source="https://example.com/video")
 
-    assert task_input.options.language == "zh"
+    assert task_input.options.language is None
     assert "json" in task_input.options.export_formats
     assert task_input.options.summary_scope == "knowledge_note"
 
@@ -604,9 +609,15 @@ def test_merge_llm_usage_records_adds_independent_request_totals() -> None:
     assert merged.llm_usage_breakdown[0].stage == "mindmap"
 
 
-def test_mindmap_generation_repairs_single_root_and_falls_back_to_three_branches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mindmap_generation_repairs_single_root_and_falls_back_to_three_branches() -> None:
+    single_root = {
+        "title": "测试导图",
+        "root": "root",
+        "nodes": [{"id": "root", "label": "测试主题", "type": "root", "children": []}],
+    }
+    fake = RoutedFake(
+        default=single_root, usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}
+    )
     runner = RealPipelineRunner(
         PipelineSettings(
             tasks_dir=Path("."),
@@ -614,25 +625,9 @@ def test_mindmap_generation_repairs_single_root_and_falls_back_to_three_branches
             llm_api_key="test-key",
             llm_base_url="https://llm.example/v1",
             llm_model="test-model",
-        )
+        ),
+        model_client=fake,
     )
-    calls: list[str] = []
-
-    def fake_request(**kwargs: object) -> dict[str, object]:
-        calls.append(str(kwargs["usage_stage"]))
-        return {
-            "title": "测试导图",
-            "root": "root",
-            "nodes": [{"id": "root", "label": "测试主题", "type": "root", "children": []}],
-            "_llm_usage_record": {
-                "stage": str(kwargs["usage_stage"]),
-                "prompt_tokens": 10,
-                "completion_tokens": 2,
-                "total_tokens": 12,
-            },
-        }
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
     mindmap, usage_breakdown = runner._generate_mindmap_with_llm(
         "测试导图",
         TaskResult(
@@ -646,7 +641,7 @@ def test_mindmap_generation_repairs_single_root_and_falls_back_to_three_branches
         ),
     )
 
-    assert calls == ["mindmap", "mindmap_repair"]
+    assert fake.stages == ["mindmap", "mindmap_repair"]
     assert len(mindmap.nodes[0].children) >= 3
     assert all(child.children for child in mindmap.nodes[0].children)
     assert [record["stage"] for record in usage_breakdown] == ["mindmap", "mindmap_repair"]

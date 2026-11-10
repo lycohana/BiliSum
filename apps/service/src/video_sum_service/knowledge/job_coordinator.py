@@ -4,9 +4,14 @@ import json
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread
 
-from video_sum_core.models.tasks import TaskStatus
+from video_sum_core.models.tasks import TERMINAL_STATUSES, TaskStatus
 from video_sum_infra.config import ServiceSettings
-from video_sum_service.knowledge.local_llm import chat_knowledge_llm, knowledge_llm_available, parse_json_payload
+
+from video_sum_service.knowledge.local_llm import (
+    chat_knowledge_llm,
+    knowledge_llm_available,
+    parse_json_payload,
+)
 from video_sum_service.repository import SqliteTaskRepository
 
 
@@ -74,7 +79,7 @@ class KnowledgeJobCoordinator:
             return True
 
         statuses = {str(item.get("status") or TaskStatus.FAILED.value) for item in items}
-        terminal = {TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}
+        terminal = {status.value for status in TERMINAL_STATUSES}
         if not statuses.issubset(terminal):
             if str(job.get("status")) == "queued" or phase != "waiting_tasks":
                 state["phase"] = "waiting_tasks"

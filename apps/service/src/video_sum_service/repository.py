@@ -1,27 +1,67 @@
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from video_sum_core.models.tasks import TaskInput, TaskResult, TaskStatus
+from video_sum_core.models.tasks import (
+    ACTIVE_STATUSES,
+    RECOVERABLE_STATUSES,
+    TERMINAL_STATUSES,
+    TaskInput,
+    TaskResult,
+    TaskStatus,
+)
 from video_sum_infra.db import sqlite_cursor
+
 from video_sum_service.schemas import (
     KnowledgeIndexChunkRecord,
     TaskEventRecord,
     TaskRecord,
-    VideoTagRecord,
     VideoAssetRecord,
     VideoCollectionItemResponse,
     VideoCollectionResponse,
     VideoFolderResponse,
     VideoLibraryPreferencesResponse,
     VideoPageOptionResponse,
+    VideoTagRecord,
 )
 
 _UNSET = object()
+
+# Status switches ``SqliteTaskRepository.transition`` accepts. ``update_status``
+# stays unchecked for existing callers; new lifecycle code goes through
+# ``transition`` so every allowed switch is listed here.
+ALLOWED_STATUS_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.QUEUED: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED}),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.PAUSED,
+            TaskStatus.CANCELLED,
+            TaskStatus.QUEUED,
+            TaskStatus.AGENT_SUMMARIZING,
+        }
+    ),
+    TaskStatus.AGENT_SUMMARIZING: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    ),
+    TaskStatus.COMPLETED: frozenset({TaskStatus.QUEUED}),
+    TaskStatus.FAILED: frozenset({TaskStatus.QUEUED}),
+    TaskStatus.PAUSED: frozenset({TaskStatus.QUEUED, TaskStatus.CANCELLED}),
+    TaskStatus.CANCELLED: frozenset({TaskStatus.QUEUED}),
+}
+
+
+def _status_values(statuses: frozenset[TaskStatus]) -> tuple[str, ...]:
+    return tuple(sorted(status.value for status in statuses))
+
+
+def _placeholders(values: tuple[str, ...]) -> str:
+    return ", ".join("?" for _ in values)
 
 
 class SqliteTaskRepository:
@@ -1187,20 +1227,30 @@ class SqliteTaskRepository:
         }
 
     def list_recoverable_tasks(self) -> list[TaskRecord]:
+        statuses = _status_values(RECOVERABLE_STATUSES)
         with self._lock, sqlite_cursor(self._connection) as cursor:
             rows = cursor.execute(
-                """
+                f"""
                 SELECT
                     t.task_id, t.video_id, t.status, t.task_input_json, t.page_number, t.page_title,
                     NULL AS result_json, t.error_code,
                     t.error_message, t.created_at, t.updated_at
                 FROM tasks t
-                WHERE t.status IN (?, ?)
+                WHERE t.status IN ({_placeholders(statuses)})
                 ORDER BY t.created_at ASC, t.task_id ASC
                 """,
-                (TaskStatus.QUEUED.value, TaskStatus.RUNNING.value),
+                statuses,
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
+
+    def has_active_tasks(self) -> bool:
+        statuses = _status_values(ACTIVE_STATUSES)
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            row = cursor.execute(
+                f"SELECT 1 FROM tasks WHERE status IN ({_placeholders(statuses)}) LIMIT 1",
+                statuses,
+            ).fetchone()
+        return row is not None
 
     def list_tasks_for_video(self, video_id: str) -> list[TaskRecord]:
         with self._lock, sqlite_cursor(self._connection) as cursor:
@@ -2770,38 +2820,73 @@ class SqliteTaskRepository:
                 "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
                 (status.value, updated_at, task_id),
             )
-            row = cursor.execute("SELECT video_id, created_at FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-            if row is not None and row["video_id"]:
-                duration = None
-                if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED}:
-                    try:
-                        duration = max(
-                            0.0,
-                            (datetime.fromisoformat(updated_at) - datetime.fromisoformat(row["created_at"])).total_seconds(),
-                        )
-                    except (TypeError, ValueError):
-                        duration = None
-                cursor.execute(
-                    """
-                    UPDATE video_assets
-                    SET latest_task_id = ?, latest_status = ?, latest_task_completed_at = ?,
-                        latest_task_duration_seconds = ?,
-                        last_summary_at = CASE WHEN ? = 'completed' THEN ? ELSE last_summary_at END,
-                        updated_at = ?
-                    WHERE video_id = ?
-                    """,
-                    (
-                        task_id,
-                        status.value,
-                        updated_at if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED} else None,
-                        duration,
-                        status.value,
-                        updated_at,
-                        updated_at,
-                        row["video_id"],
-                    ),
-                )
+            self._sync_video_latest_status_locked(cursor, task_id, status, updated_at)
         return self.get_task(task_id)
+
+    def transition(self, task_id: str, from_: TaskStatus, to: TaskStatus) -> TaskRecord | None:
+        """Atomically switch a task from ``from_`` to ``to``.
+
+        Returns the updated record, or ``None`` when the task does not exist or
+        is no longer in ``from_`` (another caller won the race). Raises
+        ``ValueError`` for a switch not listed in ``ALLOWED_STATUS_TRANSITIONS``.
+        """
+
+        if to not in ALLOWED_STATUS_TRANSITIONS.get(from_, frozenset()):
+            raise ValueError(f"task status transition not allowed: {from_.value} -> {to.value}")
+        updated_at = datetime.now(UTC).isoformat()
+        with self._lock, sqlite_cursor(self._connection) as cursor:
+            cursor.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ? AND status = ?",
+                (to.value, updated_at, task_id, from_.value),
+            )
+            if cursor.rowcount != 1:
+                return None
+            self._sync_video_latest_status_locked(cursor, task_id, to, updated_at)
+        return self.get_task(task_id)
+
+    def _sync_video_latest_status_locked(
+        self,
+        cursor: sqlite3.Cursor,
+        task_id: str,
+        status: TaskStatus,
+        updated_at: str,
+    ) -> None:
+        row = cursor.execute(
+            "SELECT video_id, created_at FROM tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        if row is not None and row["video_id"]:
+            duration = None
+            if status in TERMINAL_STATUSES:
+                try:
+                    duration = max(
+                        0.0,
+                        (
+                            datetime.fromisoformat(updated_at)
+                            - datetime.fromisoformat(row["created_at"])
+                        ).total_seconds(),
+                    )
+                except (TypeError, ValueError):
+                    duration = None
+            cursor.execute(
+                """
+                UPDATE video_assets
+                SET latest_task_id = ?, latest_status = ?, latest_task_completed_at = ?,
+                    latest_task_duration_seconds = ?,
+                    last_summary_at = CASE WHEN ? = 'completed' THEN ? ELSE last_summary_at END,
+                    updated_at = ?
+                WHERE video_id = ?
+                """,
+                (
+                    task_id,
+                    status.value,
+                    updated_at if status in TERMINAL_STATUSES else None,
+                    duration,
+                    status.value,
+                    updated_at,
+                    updated_at,
+                    row["video_id"],
+                ),
+            )
 
     def _save_result_locked(
         self,

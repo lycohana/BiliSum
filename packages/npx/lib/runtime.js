@@ -217,6 +217,8 @@ function runChecked(command, args, options = {}) {
  * Make sure the CLI standalone venv exists and the bundled packages are
  * installed into it. Returns the venv python path. First run creates the venv
  * and installs dependencies (may take a few minutes).
+ * `options.stdoutReserved` (MCP stdio mode) sends the installers' output to
+ * stderr and gives them no stdin, so protocol streams stay untouched.
  */
 function ensureCliVenv(options, log) {
   const pythonPath = cliVenvPython();
@@ -235,9 +237,10 @@ function ensureCliVenv(options, log) {
 
   mkdirSync(cliHomeDir(), { recursive: true });
   const runtimeRoot = runtimeSourceDir();
+  const childOptions = options.stdoutReserved ? { stdio: ["ignore", 2, 2] } : {};
   log("正在初始化 CLI 独立环境（首次运行需创建虚拟环境并安装依赖，可能需要几分钟）...");
-  runChecked(system.command, [...system.args, "-m", "venv", cliVenvDir()]);
-  runChecked(pythonPath, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "hatchling"]);
+  runChecked(system.command, [...system.args, "-m", "venv", cliVenvDir()], childOptions);
+  runChecked(pythonPath, ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "hatchling"], childOptions);
   runChecked(pythonPath, [
     "-m",
     "pip",
@@ -245,7 +248,7 @@ function ensureCliVenv(options, log) {
     join(runtimeRoot, "packages", "infra"),
     join(runtimeRoot, "packages", "core"),
     join(runtimeRoot, "apps", "service"),
-  ]);
+  ], childOptions);
   writeFileSync(marker, readVersion(), "utf8");
   log("CLI 独立环境就绪。");
   return pythonPath;

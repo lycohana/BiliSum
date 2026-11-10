@@ -60,6 +60,44 @@ bilisum summarize <url> --environment cli   # 单次使用某环境
 
 任务等待期间进度显示在 stderr（`[task_id]  12% [stage] 消息`），stdout 保持干净。
 
+## 读取结果（bilisum result）
+
+读取已完成任务的结果，转写可以按时间段 / 关键词筛选，长内容可以分段读取：
+
+```bash
+bilisum result <task-id>                                # 元数据 + 知识笔记
+bilisum result <task-id> --format brief                 # 摘要卡片（也可 transcript / json）
+bilisum result <task-id> --time 12:00-15:30             # 这段时间内的转写，每段带时间戳
+bilisum result <task-id> --grep 缓存 --context 1        # 命中段（* 标记）及前后各 1 段（默认 2）
+bilisum result <task-id> --max-chars 20000 --offset 0 --json   # 分段读取：content / next_offset / total_chars
+```
+
+`--time` / `--grep` 只用于转写（不写 `--format` 时自动按 `transcript`），在本地按结果里已有的分段筛选。没读完时 stderr 会提示下一段的 `--offset`；`--json` 输出的 `next_offset` 为 `null` 表示已读完。
+
+## MCP 服务（bilisum mcp）
+
+不能执行 shell 命令、但支持 MCP 的本地对话客户端，可以通过 `bilisum mcp`（stdio）使用 BiliSum。连接规则与 CLI 相同（desktop / cli / custom / auto），服务在第一次工具调用时才连接或拉起。
+
+```bash
+bilisum mcp --print-config                    # 打印可直接粘贴的客户端配置（不含令牌）
+bilisum mcp --print-config --environment cli  # 连接参数会写进配置的 args
+```
+
+打印出的配置形如：
+
+```json
+{
+  "mcpServers": {
+    "bilisum": {
+      "command": "npx",
+      "args": ["-y", "bilisum", "mcp"]
+    }
+  }
+}
+```
+
+提供的工具：`bilisum_summarize`、`bilisum_brief`、`bilisum_transcribe`、`bilisum_status`、`bilisum_result`、`bilisum_tasks`、`bilisum_env`、`bilisum_doctor`、`bilisum_settings_url`，以及 Agent 模式的 `bilisum_agent_next`、`bilisum_agent_submit`。工具列表和参数见完整文档的“MCP 服务”一节。
+
 ## 它如何"控制现有程序"
 
 - `desktop` 环境连接桌面端服务 `http://127.0.0.1:3838`，任务、结果、知识库都与桌面端**同一个数据库**；默认 `auto` 会优先探测 desktop，不可达时使用 cli 独立环境。
@@ -122,7 +160,7 @@ bilisum skill install --path ./agent-skills/bilisum-video-understanding
 | `--timeout <sec>` | 等待完成超时（默认 3600） |
 | `--quiet` | 抑制 stderr 进度输出 |
 
-> 说明：任务转写与摘要在服务端一体执行；`transcribe` 输出转写全文，任务仍会顺带生成摘要。语言 / 摘要模式等参数跟随服务端设置。
+> 说明：`transcribe` 只转写，转写完成即结束任务，不生成摘要、不调用模型；需要顺带生成摘要时加 `--with-summary`。摘要模式等参数跟随服务端设置；输出语言也跟随设置，除非用 `--language` 显式指定。
 
 > 完整文档见 [BiliSum CLI 使用指南](https://github.com/lycohana/BiliSum/blob/master/docs/cli.md)。
 

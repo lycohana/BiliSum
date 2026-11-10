@@ -151,32 +151,32 @@
 }
 
 .cuda-step.done {
-  border-color: rgba(34, 168, 102, 0.28);
-  background: rgba(34, 168, 102, 0.08);
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
 }
 
 .cuda-step.done .cuda-step-index {
-  background: rgba(34, 168, 102, 0.16);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
   color: var(--success);
 }
 
 .cuda-step.active {
-  border-color: rgba(251, 114, 153, 0.24);
-  background: rgba(251, 114, 153, 0.06);
+  border-color: color-mix(in srgb, var(--brand-500) 24%, transparent);
+  background: color-mix(in srgb, var(--brand-500) 6%, transparent);
 }
 
 .cuda-step.active .cuda-step-index {
-  background: rgba(251, 114, 153, 0.14);
+  background: color-mix(in srgb, var(--brand-500) 14%, transparent);
   color: var(--brand-600);
 }
 
 .cuda-step.failed {
-  border-color: rgba(225, 75, 90, 0.26);
-  background: rgba(225, 75, 90, 0.06);
+  border-color: color-mix(in srgb, var(--danger) 26%, transparent);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 .cuda-step.failed .cuda-step-index {
-  background: rgba(225, 75, 90, 0.14);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 
@@ -214,8 +214,8 @@
 
 .cuda-status-note.is-error {
   color: var(--danger);
-  border-color: rgba(225, 75, 90, 0.22);
-  background: rgba(225, 75, 90, 0.06);
+  border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
 .log-viewer {
@@ -786,7 +786,7 @@
 }
 
 .collection-card-toggle:hover,
-.collection-card-toggle:focus-visible { color: var(--text-primary); background: var(--bg-hover); outline: none; }
+.collection-card-toggle:focus-visible { color: var(--text-primary); background: var(--bg-soft); outline: none; }
 .collection-card-chevron { font-size: 1.25rem; line-height: 1; }
 
 .collection-card-new-notice {
@@ -854,7 +854,7 @@
   background: var(--bg-card);
 }
 
-.collection-card-item:hover { background: var(--bg-hover); }
+.collection-card-item:hover { background: var(--bg-soft); }
 .collection-card-item-cover { display: grid; place-items: center; overflow: hidden; width: 76px; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); background: var(--bg-subtle); color: var(--text-tertiary); font-size: 0.7rem; }
 .collection-card-item-cover img { width: 100%; height: 100%; object-fit: cover; }
 .collection-card-item-copy { min-width: 0; }
@@ -867,10 +867,10 @@
 .collection-card-batch-bar { justify-content: flex-end; flex-wrap: wrap; color: var(--text-tertiary); font-size: 0.78rem; }
 .collection-card-batch-bar > span { margin-right: auto; }
 
-.collection-card-context-menu { position: fixed; z-index: 100; min-width: 180px; padding: 5px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-elevated); box-shadow: var(--shadow-lg); }
+.collection-card-context-menu { position: fixed; z-index: 100; min-width: 180px; padding: 5px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
 .collection-card-context-menu button { width: 100%; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .collection-card-context-menu button:hover,
-.collection-card-context-menu button:focus-visible { background: var(--bg-hover); outline: none; }
+.collection-card-context-menu button:focus-visible { background: var(--bg-soft); outline: none; }
 .collection-card-context-menu span { display: block; padding: 8px 10px; color: var(--text-tertiary); font-size: 0.78rem; }
 
 .task-form {
@@ -897,12 +897,12 @@
   min-height: 52px;
   border-radius: var(--radius-md);
   background: var(--brand-500);
-  box-shadow: 0 2px 8px rgba(251, 114, 153, 0.25);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--brand-500) 25%, transparent);
   overflow: hidden;
 }
 
 .summary-split-button:hover {
-  box-shadow: 0 4px 12px rgba(251, 114, 153, 0.3);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--brand-500) 30%, transparent);
 }
 
 .summary-submit-main.primary-button {
@@ -969,8 +969,8 @@
   position: relative;
   padding: 10px 32px 10px 12px;
   border-radius: var(--radius-md);
-  background: rgba(251, 114, 153, 0.06);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  background: color-mix(in srgb, var(--brand-500) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 18%, transparent);
   font-size: 0.78rem;
   line-height: 1.5;
   color: var(--text-secondary);
@@ -1000,7 +1000,7 @@
 }
 
 .summary-preference-hint-close:hover {
-  background: rgba(251, 114, 153, 0.12);
+  background: color-mix(in srgb, var(--brand-500) 12%, transparent);
   color: var(--text-primary);
 }
 
@@ -1038,7 +1038,7 @@
 .summary-preference-option:hover,
 .summary-preference-option:focus-within,
 .summary-preference-option.is-selected {
-  background: rgba(251, 114, 153, 0.08);
+  background: color-mix(in srgb, var(--brand-500) 8%, transparent);
   color: var(--text-primary);
 }
 
@@ -1094,7 +1094,7 @@
 
 .summary-preference-option input[type="radio"]:checked {
   background: var(--bg-canvas);
-  box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 12%, transparent);
 }
 
 .summary-preference-option input[type="radio"]:checked::after {
@@ -1108,7 +1108,7 @@
 
 .summary-preference-option input:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.18);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 18%, transparent);
 }
 
 .summary-preference-option span {
@@ -1202,7 +1202,7 @@
 .home-prompt-option:hover,
 .home-prompt-option:focus-visible,
 .home-prompt-option.is-selected {
-  background: rgba(251, 114, 153, 0.1);
+  background: color-mix(in srgb, var(--brand-500) 10%, transparent);
   color: var(--text-primary);
   outline: none;
 }
@@ -1221,7 +1221,7 @@
   min-height: 26px;
   padding: 0 10px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-size: 0.78rem;
@@ -1230,7 +1230,7 @@
 }
 
 .home-prompt-mode-option.is-active {
-  background: var(--surface-elevated);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
@@ -1257,7 +1257,7 @@
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--surface-elevated);
+  background: var(--bg-elevated);
   box-shadow: var(--shadow-lg);
 }
 
@@ -1266,7 +1266,7 @@
   min-height: 32px;
   padding: 0 10px;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
   font-size: 0.86rem;
@@ -1278,7 +1278,7 @@
 .home-prompt-context-menu button:hover,
 .home-prompt-context-menu button:focus-visible {
   outline: none;
-  background: var(--surface-muted);
+  background: var(--bg-soft);
 }
 .batch-import-panel {
   display: grid;
@@ -1399,7 +1399,7 @@
 
 .home-tour-skip:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-soft);
 }
 
 .home-tour-next {
@@ -1450,7 +1450,7 @@
 
 .summary-metric.metric-success {
   background: var(--bg-success);
-  border-color: rgba(34, 168, 102, 0.2);
+  border-color: color-mix(in srgb, var(--success) 20%, transparent);
 }
 
 .summary-metric.metric-success strong {
@@ -1459,7 +1459,7 @@
 
 .summary-metric.metric-info {
   background: var(--bg-info);
-  border-color: rgba(86, 126, 255, 0.2);
+  border-color: color-mix(in srgb, var(--info) 20%, transparent);
 }
 
 .summary-metric.metric-info strong {
@@ -1485,18 +1485,18 @@
 }
 
 [data-theme="dark"] .summary-metric.metric-accent {
-  border-color: rgba(251, 114, 153, 0.12);
-  background: rgba(251, 114, 153, 0.08);
+  border-color: color-mix(in srgb, var(--brand-500) 12%, transparent);
+  background: color-mix(in srgb, var(--brand-500) 8%, transparent);
 }
 
 [data-theme="dark"] .summary-metric.metric-success {
-  border-color: rgba(34, 168, 102, 0.12);
-  background: rgba(34, 168, 102, 0.08);
+  border-color: color-mix(in srgb, var(--success) 12%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
 }
 
 [data-theme="dark"] .summary-metric.metric-info {
-  border-color: rgba(86, 126, 255, 0.12);
-  background: rgba(86, 126, 255, 0.08);
+  border-color: color-mix(in srgb, var(--info) 12%, transparent);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
 }
 
 [data-theme="dark"] .filter-pill {
@@ -2233,7 +2233,7 @@
 
 .collection-refresh-control > .collection-icon-button:hover:not(:disabled) {
   border-color: transparent;
-  background: var(--bg-hover);
+  background: var(--bg-soft);
 }
 
 .collection-auto-check-control {
@@ -2246,7 +2246,7 @@
 }
 
 .collection-auto-check-control:focus-within {
-  background: var(--bg-hover);
+  background: var(--bg-soft);
 }
 
 .collection-auto-check-control .collection-toolbar-select {
@@ -2296,7 +2296,7 @@
   padding: 7px;
   border: 1px solid var(--border-default);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-elevated) 92%, var(--bg-accent) 8%);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-accent) 8%);
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(18px) saturate(130%);
   transform: translateX(-50%);
@@ -2321,7 +2321,7 @@
 
 .collection-selection-dock button:hover:not(:disabled),
 .collection-selection-dock button:focus-visible {
-  background: var(--bg-hover);
+  background: var(--bg-soft);
   color: var(--text-primary);
   outline: none;
 }
@@ -2557,7 +2557,7 @@
 }
 
 .collection-status-tabs button:hover {
-  background: var(--bg-hover);
+  background: var(--bg-soft);
   color: var(--text-primary);
 }
 
@@ -2730,7 +2730,7 @@
 .collection-selection-dock .collection-toolbar-select-menu button:hover,
 .collection-selection-dock .collection-toolbar-select-menu button:focus-visible,
 .collection-selection-dock .collection-toolbar-select-menu button.is-selected {
-  background: color-mix(in srgb, var(--brand-500) 9%, var(--bg-hover));
+  background: color-mix(in srgb, var(--brand-500) 9%, var(--bg-soft));
   color: var(--text-primary);
 }
 
@@ -2883,7 +2883,7 @@
 }
 
 .collection-detail-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-soft);
 }
 
 .collection-detail-item-cover {

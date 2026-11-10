@@ -3,6 +3,7 @@ import type { SVGProps } from "react";
 import { Link } from "react-router-dom";
 
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { isTaskCompleted, isTaskFailed } from "../../taskStatus";
 import type { KnowledgeJob, KnowledgeReference, KnowledgeReferenceItem, KnowledgeSourceRef, KnowledgeSuggestion, KnowledgeToolTrace } from "../../types";
 
 export type KnowledgeChatMessage = {
@@ -408,9 +409,9 @@ export function AskPanel({
                             <div className="knowledge-chat-job-items">
                               {message.job.items.map((item) => (
                                 item.video_id ? (
-                                  <Link key={item.task_id} className={`is-${item.status}`} to={`/videos/${item.video_id}`} title={item.error_message || item.message}>{item.status === "completed" ? "✓" : item.status === "failed" ? "!" : "·"} {item.title}</Link>
+                                  <Link key={item.task_id} className={`is-${item.status}`} to={`/videos/${item.video_id}`} title={item.error_message || item.message}>{isTaskCompleted(item.status) ? "✓" : isTaskFailed(item.status) ? "!" : "·"} {item.title}</Link>
                                 ) : (
-                                  <span key={item.task_id} className={`is-${item.status}`} title={item.error_message || item.message}>{item.status === "completed" ? "✓" : item.status === "failed" ? "!" : "·"} {item.title}</span>
+                                  <span key={item.task_id} className={`is-${item.status}`} title={item.error_message || item.message}>{isTaskCompleted(item.status) ? "✓" : isTaskFailed(item.status) ? "!" : "·"} {item.title}</span>
                                 )
                               ))}
                             </div>

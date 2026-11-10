@@ -13,15 +13,23 @@ import {
   getConfigHealth,
   isUpdateUnsupported,
   normalizeDevicePreference,
-  taskStatusClass,
 } from "../appModel";
 import { api } from "../api";
+import {
+  AGENT_CAPABILITIES,
+  AGENT_CAPABILITY_LABELS,
+  AGENT_DELEGATION_STEPS,
+  AGENT_STEP_LABELS,
+  parseAgentChoices,
+  toggleAgentChoice,
+} from "../agentWork";
 import { SearchIcon } from "../components/AppIcons";
 import { FloatingNoticeStack } from "../components/FloatingNoticeStack";
 import { DependencyTree } from "../components/DependencyTree";
 import type { EnvironmentInfo, MigrationExternalKey, PromptPreset, PromptPresetCreateRequest, RuntimeStatus, ServiceSettings, StorageLocationKind, StorageDirectoryStat, StorageMigrationPreview, StorageMigrationProgress, StorageOverview, TaskSummary } from "../types";
 
-import { formatDateTime, taskStatusLabel } from "../utils";
+import { isTaskQueued, isTaskRunning, taskStatusClass, taskStatusLabel } from "../taskStatus";
+import { formatDateTime } from "../utils";
 import { buildKnowledgeDependencyTree, buildAsrDependencyTree } from "../utils/dependencyTreeBuilder";
 import { getSummaryStrategy, getSummaryStrategyPatch, SUMMARY_STRATEGY_COPY, type PresetSummaryStrategy } from "../utils/summaryStrategy";
 import { settingsCategories, type SettingsCategory } from "./settingsConfig";
@@ -182,6 +190,9 @@ const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   { category: "transcription", targetKey: "device_preference", title: "推理设备", description: "本地 ASR 使用 CPU 或 CUDA。", keywords: ["cuda", "gpu", "cpu", "设备"] },
   { category: "transcription", targetKey: "fixed_model", title: "Whisper 固定模型", description: "本地 Whisper 模型大小。", keywords: ["whisper", "tiny", "base", "small", "medium", "large"] },
   { category: "generation", targetKey: "llm_enabled", title: "启用 LLM 摘要", description: "打开或关闭大模型摘要。", keywords: ["llm", "摘要", "开启", "关闭"] },
+  { category: "generation", targetKey: "default_engine", title: "默认引擎", description: "Agent 创建任务时默认用内置模型还是 Agent 自己的模型。", keywords: ["agent", "引擎", "engine", "内置模型", "claude", "codex", "mcp"] },
+  { category: "generation", targetKey: "agent_default_capabilities", title: "默认 Agent 能力", description: "Agent 未声明时默认具备的能力（文本、画面）。", keywords: ["agent", "能力", "文本", "画面", "vision"] },
+  { category: "generation", targetKey: "agent_delegation", title: "允许交给 Agent 的步骤", description: "限定哪些模型步骤可以交给 Agent。", keywords: ["agent", "步骤", "委托", "摘要", "画面理解"] },
   { category: "generation", targetKey: "auto_generate_mindmap", title: "自动生成思维导图", description: "摘要完成后自动生成导图。", keywords: ["导图", "mindmap", "自动", "思维导图"] },
   { category: "generation", targetKey: "prompt_router_mode", title: "Prompt 路由模式", description: "选择自动套用推荐 Prompt，或每次确认后使用。", keywords: ["prompt", "提示词", "路由", "自动", "确认"] },
   { category: "generation", targetKey: "visual_note_mode", title: "图文笔记形式", description: "选择纯文本、插图笔记或 VLM 理解型图文笔记。", keywords: ["视觉", "图片", "截图", "图文笔记", "vlm"] },
@@ -1405,8 +1416,8 @@ export function SettingsPage({
   const llmConcurrencySliderValue = Math.min(8, Math.max(1, form.llm_concurrency || form.task_concurrency || 1));
   const mindmapConcurrencySliderValue = Math.min(8, Math.max(1, form.mindmap_concurrency || 1));
   const summaryChunkConcurrencySliderValue = Math.min(8, Math.max(1, form.summary_chunk_concurrency || 1));
-  const queuedTaskCount = taskList.filter((task) => task.status === "queued").length;
-  const runningTaskCount = taskList.filter((task) => task.status === "running").length;
+  const queuedTaskCount = taskList.filter((task) => isTaskQueued(task.status)).length;
+  const runningTaskCount = taskList.filter((task) => isTaskRunning(task.status)).length;
   const localAsrInstalled = Boolean(environment?.localAsrInstalled);
 
   const knowledgeDepsReady = Boolean(environment?.knowledgeDependenciesReady);
@@ -3652,6 +3663,64 @@ export function SettingsPage({
                     <div className="settings-inline-alert info">
                       <strong>分块并发在性能页调整</strong>
                       <span>如果需要控制单个任务内部同时请求的摘要块数量，请前往"性能与资源"。</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="settings-tree-panel">
+                  <header className="settings-tree-panel-header">
+                    <span className="settings-tree-index">{(form.visual_note_mode || "text") !== "text" ? "07" : "06"}</span>
+                    <div>
+                      <h3>Agent 模式</h3>
+                      <p>Claude Code、Codex 等 Agent 通过 CLI 或 MCP 创建任务时，可以用 Agent 自己的模型完成模型步骤。桌面端创建的任务始终使用内置模型。</p>
+                    </div>
+                  </header>
+                  <div className="settings-tree-grid">
+                    <label className="settings-input-group" ref={registerFocusTarget("default_engine") as (node: HTMLLabelElement | null) => void}>
+                      <span className="settings-input-label">默认引擎</span>
+                      <select className="settings-select-field" value={form.default_engine === "agent" ? "agent" : "builtin"} onChange={(e) => updateForm({ ...form, default_engine: e.target.value })}>
+                        <option value="builtin">内置模型</option>
+                        <option value="agent">Agent</option>
+                      </select>
+                      <span className="settings-input-caption">Agent 调用时可以显式指定引擎，优先于这里的默认值。</span>
+                    </label>
+                    <div className="settings-input-group" ref={registerFocusTarget("agent_default_capabilities") as (node: HTMLDivElement | null) => void}>
+                      <span className="settings-input-label">默认 Agent 能力</span>
+                      {AGENT_CAPABILITIES.map((capability) => (
+                        <div className="settings-toggle-row" key={capability}>
+                          <div className="settings-toggle-label">
+                            <span className="settings-toggle-title">{AGENT_CAPABILITY_LABELS[capability]}</span>
+                          </div>
+                          <label className="toggle-switch">
+                            <input
+                              type="checkbox"
+                              checked={parseAgentChoices(form.agent_default_capabilities ?? "text,vision", AGENT_CAPABILITIES).includes(capability)}
+                              onChange={() => updateForm({ ...form, agent_default_capabilities: toggleAgentChoice(form.agent_default_capabilities ?? "text,vision", capability, AGENT_CAPABILITIES) })}
+                            />
+                            <span className="toggle-slider" />
+                          </label>
+                        </div>
+                      ))}
+                      <span className="settings-input-caption">Agent 没有声明自己的能力时使用；Agent 声明的能力优先。</span>
+                    </div>
+                    <div className="settings-input-group" ref={registerFocusTarget("agent_delegation") as (node: HTMLDivElement | null) => void}>
+                      <span className="settings-input-label">允许交给 Agent 的步骤</span>
+                      {AGENT_DELEGATION_STEPS.map((step) => (
+                        <div className="settings-toggle-row" key={step}>
+                          <div className="settings-toggle-label">
+                            <span className="settings-toggle-title">{AGENT_STEP_LABELS[step]}</span>
+                          </div>
+                          <label className="toggle-switch">
+                            <input
+                              type="checkbox"
+                              checked={parseAgentChoices(form.agent_delegation ?? AGENT_DELEGATION_STEPS.join(","), AGENT_DELEGATION_STEPS).includes(step)}
+                              onChange={() => updateForm({ ...form, agent_delegation: toggleAgentChoice(form.agent_delegation ?? AGENT_DELEGATION_STEPS.join(","), step, AGENT_DELEGATION_STEPS) })}
+                            />
+                            <span className="toggle-slider" />
+                          </label>
+                        </div>
+                      ))}
+                      <span className="settings-input-caption">未勾选的步骤和 Agent 做不了的步骤改用内置模型，再不行用本地兜底。</span>
                     </div>
                   </div>
                 </section>

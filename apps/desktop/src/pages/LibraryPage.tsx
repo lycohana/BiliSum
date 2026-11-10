@@ -24,7 +24,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Tree, type NodeRendererProps } from "react-arborist";
 
 import type { LibraryFilter, Snapshot } from "../appModel";
-import { platformLabel, taskStatusClass } from "../appModel";
+import { platformLabel } from "../appModel";
 import {
   ArrowRightIcon,
   ArrowUpToLineIcon,
@@ -66,7 +66,8 @@ import {
   type LibraryViewMode,
 } from "../libraryModel";
 import type { VideoAssetDetail, VideoAssetSummary, VideoCollection, VideoFolder } from "../types";
-import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
+import { taskStatusClass, taskStatusLabel } from "../taskStatus";
+import { formatDateTime, formatDuration } from "../utils";
 
 const COVER_ROWS_PER_PAGE = 5;
 const LIST_VIDEOS_PER_PAGE = 15;

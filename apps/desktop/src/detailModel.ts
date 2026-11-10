@@ -1,4 +1,5 @@
-import type { LlmUsageRecord, PageAggregateStatus, TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem, VideoPageBatchOption, VideoPageOption } from "./types";
+import type { AgentIdentity, LlmUsageRecord, ModelSource, ModelStep, PageAggregateStatus, TaskDetail, TaskMindMapResponse, TaskResult, TaskSummary, TimelineItem, VideoPageBatchOption, VideoPageOption } from "./types";
+import { isTaskActive, isTaskCompleted, isTaskFailedOrCancelled } from "./taskStatus.ts";
 
 export type DetailTab = "knowledge" | "summary" | "mindmap";
 export type TaskPanelState = "collapsed" | "expanded";
@@ -108,13 +109,13 @@ export function taskPageLabel(task: Pick<TaskSummary, "page_number" | "page_titl
 }
 
 export function derivePageAggregateStatus(tasks: TaskSummary[]): PageAggregateStatus {
-  if (tasks.some((task) => task.status === "running" || task.status === "queued")) {
+  if (tasks.some((task) => isTaskActive(task.status))) {
     return "in_progress";
   }
-  if (tasks.some((task) => task.status === "completed")) {
+  if (tasks.some((task) => isTaskCompleted(task.status))) {
     return "completed";
   }
-  if (tasks.some((task) => task.status === "failed" || task.status === "cancelled" || task.status === "paused")) {
+  if (tasks.some((task) => isTaskFailedOrCancelled(task.status))) {
     return "failed";
   }
   return "not_started";
@@ -129,7 +130,7 @@ export function buildVideoPageBatchOptions(pages: VideoPageOption[], tasks: Task
       aggregate_status: derivePageAggregateStatus(tasksForPage),
       latest_task_status: latestTask?.status ?? null,
       latest_task_updated_at: latestTask?.updated_at ?? null,
-      has_completed_result: tasksForPage.some((task) => task.status === "completed"),
+      has_completed_result: tasksForPage.some((task) => isTaskCompleted(task.status)),
     };
   });
 }
@@ -200,7 +201,7 @@ export function pickDetailTaskId(tasks: TaskSummary[], preferredTaskId?: string 
   if (preferredTaskId && tasks.some((item) => item.task_id === preferredTaskId)) {
     return preferredTaskId;
   }
-  const latestCompleted = tasks.find((item) => item.status === "completed");
+  const latestCompleted = tasks.find((item) => isTaskCompleted(item.status));
   return latestCompleted?.task_id ?? tasks[0]?.task_id ?? null;
 }
 
@@ -487,7 +488,7 @@ export function resolveKnowledgeNoteMarkdown(result?: TaskResult | null): string
 }
 
 export function canExportKnowledgeNote(task?: Pick<TaskDetail, "status" | "result"> | null): boolean {
-  if (!task || task.status !== "completed" || !task.result) {
+  if (!task || !isTaskCompleted(task.status) || !task.result) {
     return false;
   }
   return Boolean(resolveKnowledgeNoteMarkdown(task.result).trim());
@@ -518,14 +519,14 @@ export function describeTaskContentState(task?: Pick<TaskDetail, "status" | "res
       description: "开始处理后，这里会整理出摘要结果和知识卡片。",
     };
   }
-  if (task.status === "running" || task.status === "queued") {
+  if (isTaskActive(task.status)) {
     return {
       tone: "pending",
       title: "当前任务还在处理中",
       description: "可以先查看顶部任务药丸中的实时进度，结果生成后这里会自动可用。",
     };
   }
-  if (task.status === "failed" || task.status === "cancelled" || task.status === "paused") {
+  if (isTaskFailedOrCancelled(task.status)) {
     return {
       tone: "failed",
       title: "当前任务未生成可用结果",
@@ -576,7 +577,7 @@ export function describeMindMapWorkspace(
       actionEnabled: true,
     };
   }
-  if (task.status === "running" || task.status === "queued") {
+  if (isTaskActive(task.status)) {
     return {
       tone: "pending",
       title: "任务完成后才能生成导图",
@@ -585,7 +586,7 @@ export function describeMindMapWorkspace(
       actionEnabled: false,
     };
   }
-  if (task.status === "failed" || task.status === "cancelled" || task.status === "paused") {
+  if (isTaskFailedOrCancelled(task.status)) {
     return {
       tone: "failed",
       title: "当前任务暂时无法生成导图",
@@ -601,4 +602,70 @@ export function describeMindMapWorkspace(
     actionLabel: "生成思维导图",
     actionEnabled: true,
   };
+}
+
+const MODEL_STEP_LABELS: Record<ModelStep, string> = {
+  summary: "摘要",
+  knowledge_note: "知识笔记",
+  keyframe_plan: "截图规划",
+  visual_frame: "画面理解",
+  visual_compose: "图文合成",
+  mindmap: "思维导图",
+};
+
+export type ModelSourceTone = "agent" | "model" | "fallback";
+
+export type ModelSourceItem = {
+  step: ModelStep;
+  stepLabel: string;
+  source: Exclude<ModelSource, "none">;
+  sourceLabel: string;
+  tone: ModelSourceTone;
+  /** Agent steps only: self-reported Agent name(s), e.g. "Claude Code（claude-opus）（自报）". */
+  agentLabel?: string;
+};
+
+// usage_stage -> step (mirrors model_steps.STAGES). agent_identities are keyed by item key
+// "usage_stage#index" (older results: plain usage_stage).
+const USAGE_STAGE_STEPS: Record<string, ModelStep> = {
+  summary_full: "summary",
+  summary_chunk: "summary",
+  summary_merge: "summary",
+  aggregate_summary: "summary",
+  knowledge_note: "knowledge_note",
+  visual_keyframe_plan: "keyframe_plan",
+  visual_frame: "visual_frame",
+  visual_note_compose: "visual_compose",
+  mindmap: "mindmap",
+  mindmap_repair: "mindmap",
+};
+
+function describeAgentIdentities(identities: Record<string, AgentIdentity> | undefined, step: ModelStep): string | undefined {
+  const names: string[] = [];
+  for (const [key, identity] of Object.entries(identities ?? {})) {
+    const stage = key.split("#", 1)[0];
+    if (USAGE_STAGE_STEPS[stage] !== step || !identity?.name) continue;
+    const label = identity.model ? `${identity.name}（${identity.model}）` : identity.name;
+    if (!names.includes(label)) names.push(label);
+  }
+  return names.length ? `${names.join("、")}（自报）` : undefined;
+}
+
+/** 执行来源 of the steps that ran, in pipeline order ("none" steps are left out). */
+export function describeModelSources(result?: Pick<TaskResult, "model_sources" | "agent_identities"> | null): ModelSourceItem[] {
+  const sources = result?.model_sources ?? {};
+  const items: ModelSourceItem[] = [];
+  for (const step of Object.keys(MODEL_STEP_LABELS) as ModelStep[]) {
+    const source = sources[step];
+    if (source === "agent") {
+      const agentLabel = describeAgentIdentities(result?.agent_identities, step);
+      items.push({ step, stepLabel: MODEL_STEP_LABELS[step], source, sourceLabel: "Agent 生成", tone: "agent", ...(agentLabel ? { agentLabel } : {}) });
+    } else if (source === "internal") {
+      items.push({ step, stepLabel: MODEL_STEP_LABELS[step], source, sourceLabel: "内置模型", tone: "model" });
+    } else if (source === "local") {
+      const sourceLabel = step === "summary" ? "规则摘要" : "本地兜底";
+      items.push({ step, stepLabel: MODEL_STEP_LABELS[step], source, sourceLabel, tone: "fallback" });
+    }
+  }
+  return items;
 }

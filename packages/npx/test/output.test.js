@@ -45,10 +45,12 @@ test("pickMarkdown returns empty without result", () => {
 test("toJson keeps agent-friendly shape", () => {
   const json = toJson(task());
   assert.deepEqual(Object.keys(json).sort(), [
+    "batch_id",
     "error_code",
     "error_message",
     "page_number",
     "result",
+    "reused",
     "status",
     "task_id",
     "title",

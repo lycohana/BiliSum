@@ -1,0 +1,67 @@
+[
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer vision-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "enable_thinking": false,
+      "max_tokens": 2048,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "提取画面中的客观信息输出 JSON。不要叙述、不要评价、不要写「该画面」。字段：visual_type, caption, ocr_text, key_facts, semantic_summary, importance, should_insert, suggested_anchor, scene, confidence。\n视频标题：示例视频\n时间点：00:12\n章节线索：\n- 00:00 开场：开场介绍\n- 00:30 方法：方法说明",
+              "type": "text"
+            },
+            {
+              "image_url": {
+                "detail": "low",
+                "url": "data:image/jpeg;base64,/9j/4GZha2UtanBlZw=="
+              },
+              "type": "image_url"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "mimo-vl-test",
+      "reasoning_effort": "low",
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": "Timeout(timeout=120)",
+    "url": "https://vlm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer vision-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "enable_thinking": true,
+      "max_tokens": 65536,
+      "messages": [
+        {
+          "content": "你是一名擅长将截图与文字深度整合的中文技术编辑。只输出 Markdown 正文。输出必须是段落→图片→段落的交替结构，只选最重要的 3-6 张图。绝对禁止图片堆积在末尾，禁止使用「画面呈现」「该画面」「上图」等流水账句式。",
+          "role": "system"
+        },
+        {
+          "content": "请以画面客观信息为参考重新整合知识笔记，图片链接使用 observations 中的 markdown_image。\n核心规则：输出必须是 段落1→图1→段落2→图2 交替模式，只选 3-6 张最重要的图，禁止图片堆在末尾。\n要求：以知识点为叙事主线；精简合并重复内容；禁止「画面呈现」「该画面」「上图」等句式；图片插入后用 1-2 句自然过渡；key_facts/semantic_summary 转化为自己的语言。\n标题：示例视频\n原始知识笔记：\n# 知识笔记\n\n## 开场\n\n内容\n视觉解析 JSON：\n[\n  {\n    \"frame_id\": \"f0001\",\n    \"timestamp_seconds\": 12.0,\n    \"visual_type\": \"slide\",\n    \"caption\": \"幻灯片\",\n    \"ocr_text\": \"\",\n    \"semantic_summary\": \"说明\",\n    \"key_facts\": [\n      \"事实\"\n    ],\n    \"importance\": 4,\n    \"should_insert\": true,\n    \"suggested_anchor\": \"开场\",\n    \"scene\": \"slide\",\n    \"confidence\": 0.9,\n    \"markdown_image\": \"visual://f0001\",\n    \"insert_plan\": {\n      \"frame_id\": \"f0001\",\n      \"anchor_heading\": \"开场\"\n    }\n  }\n]",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-vl-test",
+      "reasoning_effort": "low",
+      "temperature": 0.5,
+      "thinking": {
+        "type": "enabled"
+      }
+    },
+    "timeout": "Timeout(timeout=120)",
+    "url": "https://vlm.example.com/v1/chat/completions"
+  }
+]

@@ -7,6 +7,7 @@ import {
   buildVideoPageBatchOptions,
   canExportKnowledgeNote,
   describeMindMapWorkspace,
+  describeModelSources,
   describeTaskContentState,
   describeUserFacingErrorMessage,
   filterTasksForPage,
@@ -349,4 +350,50 @@ run("returns null when a ready mind map exists", () => {
   const state = describeMindMapWorkspace(createTaskDetail({ status: "completed" }), mindmap);
 
   assert.equal(state, null);
+});
+
+run("labels the source of each model step that ran, rule summary included", () => {
+  const sources = describeModelSources(
+    createTaskResult({
+      model_sources: { summary: "local", knowledge_note: "local", mindmap: "internal", visual_frame: "agent", keyframe_plan: "none" },
+    }),
+  );
+
+  assert.deepEqual(
+    sources.map((item) => `${item.stepLabel}:${item.sourceLabel}:${item.tone}`),
+    ["摘要:规则摘要:fallback", "知识笔记:本地兜底:fallback", "画面理解:Agent 生成:agent", "思维导图:内置模型:model"],
+  );
+});
+
+run("names the self-reported Agent behind each Agent step", () => {
+  const sources = describeModelSources(
+    createTaskResult({
+      model_sources: { summary: "agent", knowledge_note: "agent", mindmap: "internal" },
+      agent_identities: {
+        "summary_chunk#0": { name: "Claude Code", model: "claude-opus", self_reported: true },
+        "summary_chunk#1": { name: "Claude Code", model: "claude-opus", self_reported: true },
+        "summary_merge#0": { name: "Codex", model: null, self_reported: true },
+        // Results stored before identities were recorded per item are keyed by usage_stage.
+        knowledge_note: { name: "Claude Code", model: null, self_reported: true },
+      },
+    }),
+  );
+
+  assert.deepEqual(
+    sources.map((item) => `${item.stepLabel}:${item.agentLabel ?? "-"}`),
+    ["摘要:Claude Code（claude-opus）、Codex（自报）", "知识笔记:Claude Code（自报）", "思维导图:-"],
+  );
+});
+
+run("a multi-page video waiting for an Agent is in progress", () => {
+  const options = buildVideoPageBatchOptions(
+    [{ page: 1, title: "P1", source_url: "u", cover_url: "" }],
+    [createTaskSummary({ task_id: "t1", status: "agent_summarizing", page_number: 1 })],
+  );
+  assert.equal(options[0].aggregate_status, "in_progress");
+});
+
+run("reports no model sources for results stored before they were recorded", () => {
+  assert.deepEqual(describeModelSources(createTaskResult()), []);
+  assert.deepEqual(describeModelSources(null), []);
 });

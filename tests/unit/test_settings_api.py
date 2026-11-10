@@ -1,22 +1,25 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
-from fastapi import HTTPException
-
 import video_sum_service.app as service_app
 import video_sum_service.runtime_support as runtime_support
+from fastapi import HTTPException
 from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
 from video_sum_infra.config import (
-    DEFAULT_VISUAL_FRAME_PLANNING_PROMPT,
     DEFAULT_KNOWLEDGE_NOTE_SYSTEM_PROMPT,
     DEFAULT_KNOWLEDGE_NOTE_USER_PROMPT_TEMPLATE,
+    DEFAULT_VISUAL_FRAME_PLANNING_PROMPT,
     DEFAULT_VISUAL_VLM_PROMPT,
     ServiceSettings,
 )
+from video_sum_infra.model_client import ModelResponseError
+from video_sum_infra.model_client_fake import FakeModelClient, RawBody
 from video_sum_service.app import (
     app,
     install_knowledge_dependencies,
@@ -30,7 +33,20 @@ from video_sum_service.app import (
 )
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.settings_manager import SettingsUpdatePayload
-import sqlite3
+
+
+class _WireCalls:
+    """Read-only view of what ``fake`` would have sent, as {url, headers, json} dicts."""
+
+    def __init__(self, fake: FakeModelClient) -> None:
+        self._fake = fake
+
+    def __getitem__(self, index: int) -> dict[str, object]:
+        spec = self._fake.wire_requests()[index]
+        return {"url": spec.url, "headers": spec.headers, "json": spec.json}
+
+    def __len__(self) -> int:
+        return len(self._fake.requests)
 
 
 def test_update_settings_reuses_environment_probe(monkeypatch, tmp_path: Path) -> None:
@@ -511,7 +527,7 @@ def test_recover_incomplete_tasks_resubmits_queued_and_running_records() -> None
         def __init__(self) -> None:
             self.submitted: list[str] = []
 
-        def submit(self, record) -> None:
+        def recover(self, record) -> None:
             self.submitted.append(record.task_id)
 
     worker = FakeWorker()
@@ -2521,32 +2537,12 @@ def test_llm_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> Non
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(
+    response = probe_llm_connection(model_client=fake, payload=
         SettingsUpdatePayload(
             llm_base_url="https://api.example.com/v1",
             llm_api_key="new-key",
@@ -2576,32 +2572,12 @@ def test_llm_connection_uses_saved_api_key_when_payload_blanks_key(monkeypatch, 
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(
+    response = probe_llm_connection(model_client=fake, payload=
         SettingsUpdatePayload(
             llm_base_url="https://api.example.com/v1",
             llm_api_key="",
@@ -2634,32 +2610,12 @@ def test_knowledge_llm_connection_uses_saved_api_key_when_payload_masks_key(monk
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(
+    response = probe_llm_connection(model_client=fake, payload=
         SettingsUpdatePayload(
             llm_test_scope="knowledge",
             llm_enabled=True,
@@ -2694,32 +2650,12 @@ def test_knowledge_llm_connection_uses_unsaved_api_key_when_present(monkeypatch,
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(
+    response = probe_llm_connection(model_client=fake, payload=
         SettingsUpdatePayload(
             llm_test_scope="knowledge",
             llm_enabled=True,
@@ -2756,32 +2692,14 @@ def test_knowledge_llm_connection_uses_custom_provider(monkeypatch, tmp_path: Pa
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"content": [{"type": "text", "text": '{"ok":true,"message":"test"}'}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"content":[{"type":"text","text":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"content": [{"type": "text", "text": '{"ok":true,"message":"test"}'}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(SettingsUpdatePayload(llm_test_scope="knowledge"))
+    response = probe_llm_connection(
+        model_client=fake, payload=SettingsUpdatePayload(llm_test_scope="knowledge")
+    )
 
     assert response["ok"] is True
     assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
@@ -2807,32 +2725,26 @@ def test_visual_llm_connection_sends_image_and_uses_visual_config(monkeypatch, t
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [
+            RawBody(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"ok":true,"text":"BILISUM","shape":"pink circle"}'
+                            }
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"text\\":\\"BILISUM\\",\\"shape\\":\\"pink circle\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"text":"BILISUM","shape":"pink circle"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection(SettingsUpdatePayload(llm_test_scope="visual"))
+    response = probe_llm_connection(
+        model_client=fake, payload=SettingsUpdatePayload(llm_test_scope="visual")
+    )
 
     assert response["ok"] is True
     assert response["model"] == "visual-model"
@@ -2858,32 +2770,12 @@ def test_llm_connection_normalizes_mimo_model_and_requests_json_mode(monkeypatch
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection()
+    response = probe_llm_connection(model_client=fake)
 
     assert response["ok"] is True
     assert response["model"] == "MiMo-V2.5-Pro"
@@ -2906,29 +2798,9 @@ def test_llm_connection_accepts_choice_text_response(monkeypatch, tmp_path: Path
     )
     settings_manager._settings = current
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"text":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}]}'
+    fake = FakeModelClient([RawBody({"choices": [{"text": '{"ok":true,"message":"test"}'}]})])
 
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"text": '{"ok":true,"message":"test"}'}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection()
+    response = probe_llm_connection(model_client=fake)
 
     assert response["ok"] is True
     assert response["jsonPreview"] == '{"ok": true, "message": "test"}'
@@ -2948,32 +2820,12 @@ def test_llm_connection_accepts_anthropic_messages_response(monkeypatch, tmp_pat
     )
     settings_manager._settings = current
 
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"content": [{"type": "text", "text": '{"ok":true,"message":"test"}'}]})]
+    )
+    calls = _WireCalls(fake)
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"content":[{"type":"text","text":"{\\"ok\\":true,\\"message\\":\\"test\\"}"}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"content": [{"type": "text", "text": '{"ok":true,"message":"test"}'}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
-
-    response = probe_llm_connection()
+    response = probe_llm_connection(model_client=fake)
 
     assert response["ok"] is True
     assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
@@ -3019,35 +2871,152 @@ def test_llm_connection_rejects_invalid_json_response(monkeypatch, tmp_path: Pat
     )
     settings_manager._settings = current
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"not json"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": "not json"}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            return FakeResponse()
-
-    monkeypatch.setattr(service_app.httpx, "Client", FakeClient)
+    fake = FakeModelClient([RawBody({"choices": [{"message": {"content": "not json"}}]})])
 
     try:
-        probe_llm_connection()
+        probe_llm_connection(model_client=fake)
     except HTTPException as exc:
         assert exc.status_code == 502
         assert "未返回合法 JSON" in str(exc.detail)
     else:
         raise AssertionError("expected HTTPException")
+
+
+def _use_probe_settings(tmp_path: Path, **overrides: object) -> None:
+    values: dict[str, object] = {
+        "data_dir": tmp_path / "data",
+        "cache_dir": tmp_path / "cache",
+        "tasks_dir": tmp_path / "tasks",
+        "runtime_channel": "base",
+        "llm_enabled": True,
+        "llm_base_url": "https://api.example.com/v1",
+        "llm_api_key": "test-key",
+        "llm_model": "test-model",
+    }
+    values.update(overrides)
+    settings_manager._settings = ServiceSettings(**values)
+
+
+_PROBE_OK_BODY = {"choices": [{"message": {"content": '{"ok":true,"message":"test"}'}}]}
+
+
+def test_llm_connection_sends_one_unretried_probe_with_scope_timeout(tmp_path: Path) -> None:
+    _use_probe_settings(tmp_path)
+    fake = FakeModelClient([RawBody(_PROBE_OK_BODY)])
+
+    probe_llm_connection(model_client=fake)
+
+    request = fake.requests[0]
+    assert request.usage_stage == "llm_probe_main"
+    assert request.timeout == 30
+    assert request.transport_retries == 0
+    assert calls_json(fake) == {
+        "model": "test-model",
+        "messages": [
+            {
+                "role": "system",
+                "content": "你只输出一行合法 JSON，不要 markdown 代码块，不要解释文字。",
+            },
+            {"role": "user", "content": '输出 {"ok":true,"message":"test"}'},
+        ],
+        "temperature": 0,
+        "max_tokens": 512,
+    }
+
+
+def calls_json(fake: FakeModelClient) -> dict[str, object]:
+    return _WireCalls(fake)[0]["json"]
+
+
+def test_llm_connection_maps_http_status_error(tmp_path: Path) -> None:
+    _use_probe_settings(tmp_path)
+    error_response = httpx.Response(
+        403,
+        json={"message": "quota exceeded"},
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+    )
+    fake = FakeModelClient(
+        [
+            httpx.HTTPStatusError(
+                "forbidden", request=error_response.request, response=error_response
+            )
+        ]
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        probe_llm_connection(model_client=fake)
+
+    assert caught.value.status_code == 403
+    assert caught.value.detail == "LLM 测试失败：quota exceeded"
+
+
+def test_llm_connection_maps_transport_error_to_502(tmp_path: Path) -> None:
+    _use_probe_settings(tmp_path)
+    fake = FakeModelClient([httpx.ConnectError("refused")])
+
+    with pytest.raises(HTTPException) as caught:
+        probe_llm_connection(model_client=fake)
+
+    assert caught.value.status_code == 502
+    assert caught.value.detail == "LLM 连接失败：refused"
+
+
+def test_llm_connection_reports_unreadable_body(tmp_path: Path) -> None:
+    _use_probe_settings(tmp_path)
+    fake = FakeModelClient(
+        [ModelResponseError("LLM returned a stream with no readable message content.")]
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        probe_llm_connection(model_client=fake)
+
+    assert caught.value.status_code == 502
+    assert (
+        caught.value.detail
+        == "LLM 测试失败：无法读取响应：LLM returned a stream with no readable message content."
+    )
+    assert fake.requests[0].lenient_body is True
+
+
+def test_visual_llm_connection_uses_openai_format_for_anthropic_compatible_gateway(
+    tmp_path: Path,
+) -> None:
+    _use_probe_settings(
+        tmp_path,
+        visual_multimodal_enabled=True,
+        visual_vlm_provider="anthropic",
+        visual_evidence_base_url="https://gateway.example/v1",
+        visual_evidence_api_key="visual-key",
+        visual_evidence_model="MiMo-V2.5-Pro",
+    )
+    fake = FakeModelClient(
+        [
+            RawBody(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"ok":true,"text":"BILISUM","shape":"pink circle"}'
+                            }
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+
+    response = probe_llm_connection(
+        model_client=fake, payload=SettingsUpdatePayload(llm_test_scope="visual")
+    )
+
+    assert response["visualImageRecognitionAvailable"] is True
+    assert fake.requests[0].timeout == 120
+    wire = _WireCalls(fake)[0]
+    assert wire["url"] == "https://gateway.example/v1/chat/completions"
+    assert wire["headers"]["Authorization"] == "Bearer visual-key"
+    assert wire["json"]["model"] == "mimo-v2.5-pro"
+    assert wire["json"]["thinking"] == {"type": "enabled"}
+    assert wire["json"]["messages"][1]["content"][1]["type"] == "image_url"
 
 
 def test_asr_connection_uses_unsaved_payload(monkeypatch, tmp_path: Path) -> None:

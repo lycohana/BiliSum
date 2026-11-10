@@ -135,8 +135,12 @@ export function resolveStorageRoot(environmentRoot: string | undefined, desktopP
   return path.resolve(systemDefaultRoot);
 }
 
+// Tasks whose files are in use: queued / running, and tasks waiting for an Agent
+// (agent_summarizing keeps its pending items and cached results in the task folder).
+const MIGRATION_BLOCKING_STATUSES = new Set(["queued", "running", "agent_summarizing"]);
+
 export function getActiveTaskCount(tasks: Array<{ status?: string }>) {
-  return tasks.filter((task) => task.status === "queued" || task.status === "running").length;
+  return tasks.filter((task) => MIGRATION_BLOCKING_STATUSES.has(String(task.status))).length;
 }
 
 function isExcluded(targetPath: string, excludedPaths: string[]) {

@@ -186,13 +186,13 @@
 }
 
 .settings-config-health-card.tone-critical {
-  border-color: rgba(225, 75, 90, 0.18);
-  background: color-mix(in srgb, var(--settings-panel-bg) 84%, rgba(225, 75, 90, 0.08) 16%);
+  border-color: color-mix(in srgb, var(--danger) 18%, transparent);
+  background: color-mix(in srgb, var(--settings-panel-bg) 84%, color-mix(in srgb, var(--danger) 8%, transparent) 16%);
 }
 
 .settings-config-health-card.tone-warning {
-  border-color: rgba(213, 137, 24, 0.18);
-  background: color-mix(in srgb, var(--settings-panel-bg) 86%, rgba(213, 137, 24, 0.08) 14%);
+  border-color: color-mix(in srgb, var(--warning) 18%, transparent);
+  background: color-mix(in srgb, var(--settings-panel-bg) 86%, color-mix(in srgb, var(--warning) 8%, transparent) 14%);
 }
 
 .settings-config-health-copy {
@@ -1113,7 +1113,7 @@
 
 .collection-select-selection-dock button:hover:not(:disabled),
 .collection-select-selection-dock button:focus-visible {
-  background: var(--bg-hover);
+  background: var(--bg-soft);
   color: var(--text-primary);
   outline: none;
 }

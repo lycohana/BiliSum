@@ -673,7 +673,7 @@ async function createStorageMigrationPreview(input: StorageMigrationRequest): Pr
     const tasks = await taskResponse.json() as Array<{ status?: string }>;
     const activeCount = getActiveTaskCount(tasks);
     if (activeCount > 0) {
-      blockers.push(`还有 ${activeCount} 个后台任务正在排队或运行，请等它们全部结束后再迁移。`);
+      blockers.push(`还有 ${activeCount} 个后台任务正在排队、运行或等待 Agent 处理，请等它们全部结束（或取消）后再迁移。`);
     }
   } catch (error) {
     blockers.push(`无法确认后台任务状态：${error instanceof Error ? error.message : "服务不可用。"}`);

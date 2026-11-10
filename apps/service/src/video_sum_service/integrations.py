@@ -5,25 +5,27 @@ import io
 import json
 import logging
 import os
-from pathlib import Path
 import struct
 import wave
 import zlib
+from pathlib import Path
 
 import httpx
 from fastapi import HTTPException
-
+from video_sum_core.pipeline.model_steps import extract_json_object_text
 from video_sum_infra.config import ServiceSettings
 from video_sum_infra.llm import (
-    ANTHROPIC_API_VERSION,
-    apply_openai_reasoning_settings,
-    anthropic_messages_url,
-    build_anthropic_messages_payload,
     extract_llm_message_content,
     is_anthropic_llm,
-    normalize_openai_compatible_model_name,
     normalize_llm_provider,
-    openai_chat_completions_url,
+    normalize_openai_compatible_model_name,
+)
+from video_sum_infra.model_client import (
+    ChatModelClient,
+    ModelClient,
+    ModelRequest,
+    ModelResponseError,
+    ReasoningOptions,
 )
 from video_sum_infra.runtime import service_log_path
 
@@ -227,34 +229,15 @@ def load_asr_test_audio() -> tuple[str, bytes, str]:
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
-    """Try to extract a JSON object from text that may have markdown fences or extra content."""
-    import re
-    t = text.strip()
-    # Strip markdown code fences
-    for fence in ("```json", "```"):
-        if t.startswith(fence):
-            t = t[len(fence):]
-            if t.endswith("```"):
-                t = t[:-3]
-            t = t.strip()
-            break
-    # Try direct parse first
+    """A JSON object from text that may have markdown fences or extra content (None if none)."""
+    candidate = extract_json_object_text(text or "")
+    if not candidate:
+        return None
     try:
-        result = json.loads(t)
-        if isinstance(result, dict):
-            return result
+        result = json.loads(candidate)
     except (json.JSONDecodeError, ValueError):
-        pass
-    # Try to find a JSON object with regex
-    m = re.search(r'\{[^{}]*\{[^{}]*\}[^{}]*\}|\{[^{}]*\}', t)
-    if m:
-        try:
-            result = json.loads(m.group())
-            if isinstance(result, dict):
-                return result
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return None
+        return None
+    return result if isinstance(result, dict) else None
 
 
 def build_effective_llm_test_settings(payload: SettingsUpdatePayload | None = None) -> ServiceSettings:
@@ -286,7 +269,11 @@ def build_effective_llm_test_settings(payload: SettingsUpdatePayload | None = No
     return ServiceSettings.model_validate({**current_dump, **updates})
 
 
-def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[str, object]:
+def probe_llm_connection(
+    payload: SettingsUpdatePayload | None = None,
+    *,
+    model_client: ChatModelClient | None = None,
+) -> dict[str, object]:
     effective_settings = build_effective_llm_test_settings(payload)
     test_scope = payload.llm_test_scope if payload and payload.llm_test_scope else "main"
 
@@ -357,69 +344,47 @@ def probe_llm_connection(payload: SettingsUpdatePayload | None = None) -> dict[s
     fallback_to_openai_for_images = (
         use_anthropic and test_scope == "visual" and "api.anthropic.com" not in base_url.lower()
     )
-    if fallback_to_openai_for_images:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        request_url = openai_chat_completions_url(base_url)
-        request_json = apply_openai_reasoning_settings(
-            request_payload,
+    wire_anthropic = use_anthropic and not fallback_to_openai_for_images
+    request = ModelRequest(
+        usage_stage=f"llm_probe_{test_scope}",
+        base_url=base_url,
+        api_key=api_key,
+        payload=request_payload,
+        wire_format="anthropic" if wire_anthropic else "openai",
+        provider=provider,
+        reasoning=None
+        if wire_anthropic
+        else ReasoningOptions(
             thinking_type=effective_settings.llm_thinking_type,
             reasoning_effort=effective_settings.llm_reasoning_effort,
             provider=effective_settings.llm_provider,
-            model=model,
-            base_url=base_url,
-        )
-        request_json["model"] = normalize_openai_compatible_model_name(model)
-    elif use_anthropic:
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": ANTHROPIC_API_VERSION,
-            "Content-Type": "application/json",
-        }
-        request_url = anthropic_messages_url(base_url)
-        request_json = build_anthropic_messages_payload(request_payload)
-    else:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        request_url = openai_chat_completions_url(base_url)
-        request_json = apply_openai_reasoning_settings(
-            request_payload,
-            thinking_type=effective_settings.llm_thinking_type,
-            reasoning_effort=effective_settings.llm_reasoning_effort,
-            provider=effective_settings.llm_provider,
-            model=model,
-            base_url=base_url,
-        )
+        ),
+        timeout=120 if test_scope == "visual" else 30,
+        transport_retries=0,
+        lenient_body=True,
+    )
+    client = model_client if model_client is not None else ModelClient()
 
-    probe_timeout = 120 if test_scope == "visual" else 30
+    body: object = None
     try:
-        with httpx.Client(timeout=probe_timeout, follow_redirects=True) as client:
-            response = client.post(
-                request_url,
-                headers=headers,
-                json=request_json,
-            )
+        body = client.chat(request).body
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 400:
+            detail = extract_http_error_detail(exc.response)
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail=f"LLM 测试失败：{detail}",
+            ) from exc
+        # A final non-2xx, non-error response (e.g. an unfollowed redirect) is read like any reply.
+        try:
+            body = exc.response.json()
+        except ValueError:
+            body = None
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"LLM 连接失败：{exc}") from exc
-
-    if response.status_code >= 400:
-        detail = extract_http_error_detail(response)
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"LLM 测试失败：{detail}",
-        )
-
-    from video_sum_core.llm_response import parse_llm_response_json
-    from video_sum_core.errors import VideoSumError
-
-    try:
-        body = parse_llm_response_json(response)
-    except (ValueError, VideoSumError) as exc:
+    except ModelResponseError as exc:
         raise HTTPException(status_code=502, detail=f"LLM 测试失败：无法读取响应：{exc}") from exc
+
     preview = extract_llm_message_content(body)
     if not preview:
         raise HTTPException(status_code=502, detail="LLM 测试失败：接口已连通，但没有返回可读取的消息内容。")

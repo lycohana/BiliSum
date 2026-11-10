@@ -4,7 +4,7 @@ import { toBlob } from "html-to-image";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type SVGProps } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { progressEventClass, stageLabel, taskStatusClass } from "../appModel";
+import { progressEventClass, stageLabel } from "../appModel";
 import { api } from "../api";
 import { CookieHelpDialog } from "../components/CookieHelpDialog";
 import { MarkdownContent } from "../components/MarkdownContent";
@@ -18,6 +18,7 @@ import {
   buildKnowledgeCards,
   buildTokenUsageMetrics,
   describeMindMapWorkspace,
+  describeModelSources,
   describeTaskContentState,
   describeUserFacingErrorMessage,
   filterTasksForPage,
@@ -32,7 +33,9 @@ import {
   type TokenUsageMetrics,
 } from "../detailModel";
 import type { LlmUsageRecord, MindMapNode, TaskDetail, TaskEvent, TaskMarkdownExportResponse, TaskMindMapResponse, TaskResult, TaskStatus, TaskSummary, TaskVisualEvidenceResponse, VideoAssetDetail, VideoPageBatchOption, VideoTaskBatchResponse, VisualEvidenceFrame, VisualEvidenceObservation } from "../types";
-import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents, taskStatusLabel } from "../utils";
+import { formatDateTime, formatDuration, formatTaskDuration, formatTokenCount, sanitizeMindMapLabel, summarizeEvents } from "../utils";
+import { useAgentWork } from "../useAgentWork";
+import { isTaskActive, isTaskCompleted, isTaskLlmResumable, isTaskQueued, isTaskPaused, taskStatusClass, taskStatusLabel } from "../taskStatus";
 import { buildPlayerEmbedDescriptor, withPlayerSeek } from "../videoPlayer";
 
 type TaskContext = {
@@ -304,7 +307,7 @@ function compareTasksByRecent(left: TaskSummary, right: TaskSummary) {
 }
 
 function hasGeneratedResult(task: TaskSummary) {
-  return task.status === "completed";
+  return isTaskCompleted(task.status);
 }
 
 function buildTaskSnapshot(task?: Pick<TaskSummary, "created_at" | "updated_at" | "llm_total_tokens" | "task_duration_seconds"> | null): SnapshotMetric[] {
@@ -1200,6 +1203,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   }
 
   const selectedResult = selectedTaskDetail?.result ?? null;
+  const selectedModelSources = describeModelSources(selectedResult);
   const liveProgress = useMemo(() => summarizeEvents(latestEvents), [latestEvents]);
   const contentState = useMemo(() => {
     if (isSelectedTaskLoading) {
@@ -1341,7 +1345,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   const canExportSelectedKnowledgeNote = useMemo(() => canExportKnowledgeNote(selectedTaskDetail), [selectedTaskDetail]);
   const selectedTranscript = selectedResult?.transcript_text ?? "";
   const canExportSelectedTranscript = Boolean(
-    selectedTaskDetail?.status === "completed"
+    isTaskCompleted(selectedTaskDetail?.status)
       && (selectedTranscript.trim() || selectedResult?.artifacts?.transcript_path),
   );
   const liveStatus = latestTaskDetail?.status ?? latestTaskSummary?.status ?? video?.latest_status;
@@ -1351,6 +1355,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
     ?? describeUserFacingErrorMessage(latestTaskDetail?.error_message)
     ?? (latestTaskSummary ? taskStatusLabel(latestTaskSummary.status) : "等待开始处理");
   const liveTaskCode = latestTaskId?.slice(0, 8) ?? null;
+  const liveAgentWork = useAgentWork(latestTaskId, liveStatus);
   const liveTaskTitle = latestTaskDetail?.title || latestTaskSummary?.title || video?.title || "当前任务";
   const liveTaskSnapshot = buildTaskSnapshot(latestTaskDetail ?? latestTaskSummary);
   const heroProgressSummary = latestTaskLoadError
@@ -1364,16 +1369,16 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   const selectedTaskSnapshot = buildTaskSnapshot(selectedTaskDetail ?? selectedTaskSummary);
   const selectedTaskTokenCount = selectedResult?.llm_total_tokens ?? selectedTaskDetail?.llm_total_tokens ?? selectedTaskSummary?.llm_total_tokens ?? null;
   const selectedTaskStatus = selectedTaskDetail?.status ?? selectedTaskSummary?.status;
-  const resumableTask = selectedTaskStatus === "paused" ? selectedTaskDetail
-    : latestTaskDetail?.status === "paused" ? latestTaskDetail : null;
+  const resumableTask = isTaskPaused(selectedTaskStatus) ? selectedTaskDetail
+    : isTaskPaused(latestTaskDetail?.status) ? latestTaskDetail : null;
   const canResummarize = Boolean(
     selectedTaskId
     && selectedTaskDetail?.result?.transcript_text?.trim()
-    && selectedTaskStatus !== "queued" && selectedTaskStatus !== "running",
+    && !isTaskActive(selectedTaskStatus),
   );
   const canRegenerateVisualNote = Boolean(
     selectedTaskId
-    && selectedTaskStatus === "completed"
+    && isTaskCompleted(selectedTaskStatus)
     && selectedResult?.knowledge_note_markdown?.trim()
     && !isAggregateSummaryView
     && selectedVisualEvidenceStatus !== "generating"
@@ -1817,8 +1822,41 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
   return (
     <section className="video-detail-page">
       <FloatingNoticeStack notices={[{ id: "video-detail-status", message: status }]} />
-      {latestTaskDetail?.status === "queued" && latestTaskDetail.scheduled_at ? <section className="grid-card">
+      {latestTaskDetail && isTaskQueued(latestTaskDetail.status) && latestTaskDetail.scheduled_at ? <section className="grid-card">
         定时任务：{formatDateTime(latestTaskDetail.scheduled_at)} 开始。请保持应用或服务运行。
+      </section> : null}
+      {liveAgentWork.description && latestTaskId ? <section className="grid-card detail-agent-work" role="status">
+        <h3>Agent 总结中</h3>
+        <p>
+          {liveAgentWork.description.headline}
+          {liveAgentWork.description.waiting ? ` · ${liveAgentWork.description.waiting}` : ""}
+          {liveAgentWork.description.claimedBy ? "（名称为 Agent 自报）" : ""}
+        </p>
+        <div className="detail-agent-work-actions">
+          <button className="primary-button" type="button" onClick={async () => {
+            const taskId = latestTaskId;
+            try {
+              await api.useBuiltinForAgentTask(taskId);
+              await refreshDetail({ preferredTaskId: taskId, forceTaskIds: [taskId], syncLibrary: true });
+              setStatus("剩下的 Agent 步骤将改用内置模型完成。");
+            } catch (error) {
+              setStatus(error instanceof Error ? error.message : "改用内置模型失败");
+              await liveAgentWork.refresh();
+            }
+          }}>改用内置模型</button>
+          <button className="tertiary-button danger" type="button" onClick={async () => {
+            const taskId = latestTaskId;
+            if (!window.confirm("确定要取消这个任务吗？已保存的转写会保留。")) return;
+            try {
+              await api.cancelTask(taskId);
+              await refreshDetail({ preferredTaskId: taskId, forceTaskIds: [taskId], syncLibrary: true });
+              setStatus("任务已取消。");
+            } catch (error) {
+              setStatus(error instanceof Error ? error.message : "取消任务失败");
+              await liveAgentWork.refresh();
+            }
+          }}>取消</button>
+        </div>
       </section> : null}
       {resumableTask ? <section className="grid-card">
         <h3>转写已保存，等待续跑</h3>
@@ -1931,7 +1969,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                     <span className="detail-page-select-value">
                       {isAggregateSummaryView ? "全集总结" : currentPage?.title || "选择分 P"}
                       {currentPage && pageGeneratedMap.get(currentPage.page) ? <span className="detail-page-select-check">✓</span> : null}
-                      {isAggregateSummaryView && aggregateSummaryTasks.some((task) => task.status === "completed") ? <span className="detail-page-select-check">✓</span> : null}
+                      {isAggregateSummaryView && aggregateSummaryTasks.some((task) => isTaskCompleted(task.status)) ? <span className="detail-page-select-check">✓</span> : null}
                     </span>
                     <IconChevronDown className="detail-page-select-caret" />
                   </button>
@@ -2076,7 +2114,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                                 setActionMenuSection(null);
                                 setStatus("正在基于当前版本重新生成摘要...");
                                 try {
-                                  if ((selectedTaskStatus === "paused" || selectedTaskStatus === "failed") && selectedTaskIdRef.current) {
+                                  if (isTaskLlmResumable(selectedTaskStatus) && selectedTaskIdRef.current) {
                                     await api.resumeTask(selectedTaskIdRef.current);
                                   } else {
                                     await api.resummarizeVideoTask(video.video_id, {
@@ -2093,7 +2131,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                               }}
                             >
                               <IconSummaryRefresh className="detail-action-icon" />
-                              <span>{selectedTaskStatus === "paused" || selectedTaskStatus === "failed" ? "仅重跑 LLM（复用转写）" : "重跑文本笔记"}</span>
+                              <span>{isTaskLlmResumable(selectedTaskStatus) ? "仅重跑 LLM（复用转写）" : "重跑文本笔记"}</span>
                             </button>
                             <button
                               className="detail-action-subitem"
@@ -2115,7 +2153,7 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                               role="menuitem"
                               type="button"
                               tabIndex={actionMenuSection === "regenerate" ? 0 : -1}
-                              disabled={!selectedTaskId || selectedTaskStatus !== "completed" || Boolean(selectedTaskId && mindMapLoading[selectedTaskId])}
+                              disabled={!selectedTaskId || !isTaskCompleted(selectedTaskStatus) || Boolean(selectedTaskId && mindMapLoading[selectedTaskId])}
                               onClick={async () => {
                                 setActionMenuOpen(false);
                                 setActionMenuSection(null);
@@ -2462,6 +2500,18 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                                 <strong>{selectedTaskSummary.title || video.title}</strong>
                                 <small>{formatDateTime(selectedTaskSummary.created_at)}</small>
                               </div>
+                              {selectedResult?.extra_instructions ? (
+                                <div className="detail-history-detail-copy detail-extra-instructions">
+                                  <span>补充要求</span>
+                                  <p>{selectedResult.extra_instructions}</p>
+                                </div>
+                              ) : null}
+                              {selectedResult?.language ? (
+                                <div className="detail-history-detail-copy">
+                                  <span>输出语言</span>
+                                  <p>{selectedResult.language}</p>
+                                </div>
+                              ) : null}
                               <div className="detail-history-metrics">
                                 {selectedTaskSnapshot.map((item) => (
                                   <div className="detail-snapshot-metric detail-history-metric" key={item.label}>
@@ -2565,6 +2615,19 @@ export function VideoDetailPage({ refreshToken = 0, onRefresh, onOpenCookieSetti
                   </span>
                 ) : null}
                 {selectedTaskCode ? <span>任务 {selectedTaskCode}</span> : null}
+                {selectedModelSources.length ? (
+                  <ul className="detail-model-sources" aria-label="执行来源">
+                    {selectedModelSources.map((item) => (
+                      <li
+                        key={item.step}
+                        className={`detail-model-source detail-model-source--${item.tone}`}
+                        title={`${item.stepLabel}：${item.sourceLabel}${item.agentLabel ? ` · ${item.agentLabel}` : ""}`}
+                      >
+                        {item.stepLabel} · {item.sourceLabel}{item.agentLabel ? ` · ${item.agentLabel}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {selectedTaskTokenCount != null ? (
                   <TokenUsageTooltip
                     result={selectedResult ?? selectedTaskDetail?.result ?? { llm_total_tokens: selectedTaskTokenCount }}
@@ -3306,20 +3369,20 @@ function buildVisualEvidenceItems(taskId: string | null, response: TaskVisualEvi
     .filter((item) => Number.isFinite(item.timestampSeconds));
 }
 
-function formatVisualEvidenceStatus(status: string, frameCount: number, insertCount = 0): string {
-  if (status === "generating") {
+function formatVisualEvidenceStatus(visualStatus: string, frameCount: number, insertCount = 0): string {
+  if (visualStatus === "generating") {
     return "生成中";
   }
-  if (status === "ready") {
+  if (visualStatus === "ready") {
     return insertCount > 0 ? `${insertCount} 处插图 · ${frameCount} 张图` : `${frameCount} 张图`;
   }
-  if (status === "partial") {
+  if (visualStatus === "partial") {
     return frameCount ? `${frameCount} 张，部分降级` : "部分降级";
   }
-  if (status === "unsupported") {
+  if (visualStatus === "unsupported") {
     return "当前输入不支持";
   }
-  if (status === "failed") {
+  if (visualStatus === "failed") {
     return "生成失败";
   }
   return "按需生成";
@@ -3348,7 +3411,7 @@ function resolveVisualNoteImageSrc(taskId: string | null, src: string): string {
 
 function VisualEvidencePanel({
   frames,
-  status,
+  status: visualStatus,
   errorMessage,
   loading,
   onSeekToTimestamp,
@@ -3384,11 +3447,11 @@ function VisualEvidencePanel({
       </div>
     );
   }
-  const message = loading || status === "generating"
+  const message = loading || visualStatus === "generating"
     ? "正在后台生成图文笔记，完成后会自动刷新。"
-    : status === "unsupported"
+    : visualStatus === "unsupported"
       ? (errorMessage || "音频或纯文本任务没有可截图的视频画面。")
-    : status === "failed"
+    : visualStatus === "failed"
         ? (errorMessage || "图文笔记生成失败，可以稍后重试。")
         : "还没有生成图文笔记。";
   return <p className="detail-section-body">{message}</p>;

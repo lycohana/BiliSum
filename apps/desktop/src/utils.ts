@@ -1,4 +1,4 @@
-import type { TaskEvent, TaskStatus } from "./types";
+import type { TaskEvent } from "./types";
 
 const HTML_ENTITY_MAP: Record<string, string> = {
   amp: "&",
@@ -45,16 +45,18 @@ export function formatTokenCount(value?: number | null) {
   return Number(value).toLocaleString("zh-CN");
 }
 
-export function taskStatusLabel(status?: TaskStatus | null) {
-  const labels: Record<string, string> = {
-    queued: "排队中",
-    running: "处理中",
-    completed: "已完成",
-    failed: "失败",
-    paused: "转写已保存，等待续跑",
-    cancelled: "已取消",
-  };
-  return (status && labels[status]) || "未开始";
+/**
+ * Highest progress reported so far (failure events aside). An Agent task replays
+ * its cached steps after every round and re-reports lower stage progress; the
+ * bar never goes backwards (spec story 19).
+ */
+function highestProgress(events: TaskEvent[]) {
+  let progress = 0;
+  for (const event of events) {
+    if (event.stage === "failed" || event.stage === "mindmap_failed") continue;
+    progress = Math.max(progress, Number(event.progress) || 0);
+  }
+  return progress;
 }
 
 export function summarizeEvents(events: TaskEvent[]) {
@@ -101,7 +103,7 @@ export function summarizeEvents(events: TaskEvent[]) {
       ? failedEvent.progress
       : isCompleted
         ? 100
-        : currentEvent?.progress ?? 0;
+        : highestProgress(events);
 
   return {
     filtered,

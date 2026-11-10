@@ -30,6 +30,7 @@ import { LibraryPage } from "./pages/LibraryPage";
 import { CollectionDetailPage } from "./pages/CollectionDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { VideoDetailPage } from "./pages/VideoDetailPage";
+import { isTaskCompleted, isTaskRunning } from "./taskStatus";
 import type { CollectionGroupMode, CollectionSortMode, VideoAssetSummary, VideoCollection, VideoCollectionItem, VideoPageBatchOption, VideoProbeResult } from "./types";
 
 const PROMPT_PRESET_STORAGE_KEY = "bilisum.promptPresetId";
@@ -459,8 +460,8 @@ export function App() {
 
   const libraryCounts = useMemo(() => {
     const favorite = snapshot.videos.filter((item) => item.is_favorite).length + snapshot.collections.filter((item) => item.is_favorite).length;
-    const completed = snapshot.videos.filter((item) => item.latest_status === "completed").length;
-    const running = snapshot.videos.filter((item) => item.latest_status === "running").length;
+    const completed = snapshot.videos.filter((item) => isTaskCompleted(item.latest_status)).length;
+    const running = snapshot.videos.filter((item) => isTaskRunning(item.latest_status)).length;
     const withResult = snapshot.videos.filter((item) => item.has_result).length;
     return {
       total: snapshot.videos.length + snapshot.collections.length,
@@ -483,8 +484,8 @@ export function App() {
       .filter((video) => {
         if (libraryFilter === "collection") return false;
         if (libraryFilter === "favorite") return video.is_favorite;
-        if (libraryFilter === "completed") return video.latest_status === "completed";
-        if (libraryFilter === "running") return video.latest_status === "running";
+        if (libraryFilter === "completed") return isTaskCompleted(video.latest_status);
+        if (libraryFilter === "running") return isTaskRunning(video.latest_status);
         if (libraryFilter === "with-result") return video.has_result;
         return true;
       });

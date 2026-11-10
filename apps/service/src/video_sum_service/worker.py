@@ -1,7 +1,9 @@
-import logging
 import json
+import logging
 import time
 from collections import deque
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,19 +11,44 @@ from threading import Condition, Lock, Thread, current_thread
 from typing import Literal
 
 from video_sum_core.models.tasks import (
+    AgentIdentity,
     InputType,
     TaskInput,
     TaskResult,
     TaskStatus,
     merge_llm_usage_records,
 )
-from video_sum_core.pipeline.base import PipelineContext, PipelineRunner, PipelineTranscription
+from video_sum_core.pipeline.base import (
+    TRANSCRIPTION_FILENAME,
+    PipelineContext,
+    PipelineRunner,
+    PipelineTranscription,
+)
+from video_sum_core.pipeline.model_steps import (
+    VISUAL_STEPS,
+    AgentContentRejected,
+    AgentSignal,
+    AgentWorkRequired,
+    PendingItem,
+    agent_session,
+    record_routes,
+)
 from video_sum_infra.config import ServiceSettings, normalize_visual_note_mode
+
+from video_sum_service import agent_work
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import TaskRecord
 from video_sum_service.video_assets import resolve_video_page
 
 logger = logging.getLogger("video_sum_service.worker")
+
+AfterCompletedPolicy = Literal["async", "inline"]
+"""``async``: mindmap/visual evidence are queued after completion (default mode).
+``inline``: the mindmap runs inside the summary unit before completion (Agent mode)."""
+
+# Exceptions that must cross every broad ``except`` inside the summary unit and
+# reach ``_run_llm_job`` untouched.
+SUMMARY_UNIT_SIGNALS: tuple[type[BaseException], ...] = (AgentSignal,)
 
 
 @dataclass(frozen=True)
@@ -118,6 +145,8 @@ class TaskWorker:
         self._mindmap_state = _TaskQueueState("mindmap", mindmap_concurrency)
         self._visual_state = _TaskQueueState("visual", 1)
         self._staged_transcriptions: dict[str, PipelineTranscription] = {}
+        # task_id -> highest progress recorded; set only while an Agent task's LLM job runs.
+        self._progress_floor: dict[str, int] = {}
         self._active_runner: object = None
         self._lock = Lock()
         self._condition = Condition(self._lock)
@@ -144,6 +173,38 @@ class TaskWorker:
         )
         result = self._enqueue_summary(task)
         return result
+
+    def recover(self, task: TaskRecord) -> Literal["accepted", "already_queued", "rejected"]:
+        """Re-queue a task found incomplete at startup.
+
+        A ``running`` task whose transcription was already persisted goes
+        straight to the LLM queue, so a restart between the transcription and
+        summary stages does not download or transcribe again. Everything else
+        restarts from the transcription queue via :meth:`submit`.
+        """
+
+        if (
+            task.status == TaskStatus.RUNNING
+            and self._load_persisted_transcription(task.task_id) is not None
+        ):
+            logger.info(
+                "recover task into LLM queue from persisted transcription task_id=%s", task.task_id
+            )
+            result = self._enqueue_summary(task, resume_llm=True)
+            if result == "accepted":
+                self._repository.append_event(
+                    task_id=task.task_id,
+                    stage="llm_queued",
+                    progress=87,
+                    message="已恢复转写结果，进入 LLM 队列",
+                    payload={
+                        "recovered": True,
+                        "transcription_concurrency": self._transcription_state.concurrency,
+                        "llm_concurrency": self._llm_state.concurrency,
+                    },
+                )
+            return result
+        return self.submit(task)
 
     def submit_mindmap(self, task_id: str, *, force: bool = False) -> None:
         logger.info("queue mindmap generation task_id=%s force=%s", task_id, force)
@@ -304,7 +365,12 @@ class TaskWorker:
             "running": len(state.running_ids),
         }
 
-    def _enqueue_summary(self, task: TaskRecord) -> Literal["accepted", "already_queued", "rejected"]:
+    def _enqueue_summary(
+        self,
+        task: TaskRecord,
+        *,
+        resume_llm: bool = False,
+    ) -> Literal["accepted", "already_queued", "rejected"]:
         job_id = self._task_state.job_id_for(task)
         with self._condition:
             if not self._accept_new_work:
@@ -331,21 +397,35 @@ class TaskWorker:
                     started_monotonic=time.monotonic(),
                 )
 
-            self._repository.update_status(task.task_id, TaskStatus.QUEUED)
-            self._repository.append_event(
-                task_id=task.task_id, stage="queued", progress=0,
-                message=(f"定时任务：将在 {task.task_input.options.scheduled_at.isoformat()} 开始；需保持服务运行"
-                         if task.task_input.options.scheduled_at else "任务已进入后台队列"),
-            )
-            self._task_state.pending.append(task)
-            self._task_state.pending_ids.add(job_id)
+            if resume_llm:
+                # Restart recovery: the transcription is already on disk, so the
+                # task skips the transcription queue (and any schedule).
+                self._llm_state.pending.append(_LLMJob(task_id=job_id))
+                self._llm_state.pending_ids.add(job_id)
+            else:
+                self._repository.update_status(task.task_id, TaskStatus.QUEUED)
+                self._repository.append_event(
+                    task_id=task.task_id,
+                    stage="queued",
+                    progress=0,
+                    message=(
+                        f"定时任务：将在 {task.task_input.options.scheduled_at.isoformat()} 开始；"
+                        "需保持服务运行"
+                        if task.task_input.options.scheduled_at
+                        else "任务已进入后台队列"
+                    ),
+                )
+                self._task_state.pending.append(task)
+                self._task_state.pending_ids.add(job_id)
             self._summary_batch.total_tasks += 1
             self._summary_batch.items[job_id] = {
                 "task_id": job_id,
                 "title": task.page_title or task.task_input.title or job_id,
-                "status": TaskStatus.QUEUED.value,
-                "progress": 0,
-                "message": "任务已进入后台队列",
+                "status": TaskStatus.RUNNING.value if resume_llm else TaskStatus.QUEUED.value,
+                "progress": 87 if resume_llm else 0,
+                "message": "已恢复转写结果，等待 LLM 并发槽位"
+                if resume_llm
+                else "任务已进入后台队列",
             }
             self._condition.notify_all()
             return "accepted"
@@ -523,6 +603,8 @@ class TaskWorker:
             return status, "转写已保存，等待续跑", task_tokens
         if status == TaskStatus.CANCELLED.value:
             return status, "任务已取消", task_tokens
+        if status == TaskStatus.AGENT_SUMMARIZING.value:
+            return status, "等待 Agent 处理", task_tokens
         if status == TaskStatus.FAILED.value:
             return status, record.error_message or "任务执行失败", task_tokens
         return TaskStatus.FAILED.value, "任务执行失败", task_tokens
@@ -556,6 +638,43 @@ class TaskWorker:
             batch.completed_at = datetime.now(timezone.utc)
             batch.completed_monotonic = time.monotonic()
 
+    def _persisted_task_dir(self, task_id: str) -> Path | None:
+        if not self._supports_staged_execution():
+            return None
+        resolve = getattr(self._pipeline_runner, "task_dir", None)
+        if not callable(resolve):
+            return None
+        try:
+            task_dir = resolve(task_id)
+        except Exception:
+            logger.exception("failed to resolve task directory task_id=%s", task_id)
+            return None
+        return Path(task_dir) if task_dir is not None else None
+
+    def _load_persisted_transcription(self, task_id: str) -> PipelineTranscription | None:
+        task_dir = self._persisted_task_dir(task_id)
+        if task_dir is None:
+            return None
+        return PipelineTranscription.load(task_dir)
+
+    def _discard_persisted_transcription(self, task_id: str) -> None:
+        task_dir = self._persisted_task_dir(task_id)
+        if task_dir is None:
+            return
+        try:
+            (task_dir / TRANSCRIPTION_FILENAME).unlink(missing_ok=True)
+        except OSError:
+            logger.exception("failed to discard stale transcription task_id=%s", task_id)
+
+    def _discard_agent_state(self, task_id: str) -> None:
+        task_dir = self._persisted_task_dir(task_id)
+        if task_dir is None:
+            return
+        try:
+            agent_work.clear_agent_state(task_dir)
+        except OSError:
+            logger.exception("failed to discard stale agent results task_id=%s", task_id)
+
     def _supports_staged_execution(self) -> bool:
         supports = getattr(self._pipeline_runner, "supports_staged_execution", None)
         if not callable(supports):
@@ -582,17 +701,17 @@ class TaskWorker:
                 else:
                     self._repository.save_result(task_id, partial_result)
 
-            self._update_summary_item(
+            self._append_progress_event(
                 task_id,
-                progress=event.progress,
-                message=event.message,
-            )
-            self._repository.append_event(
-                task_id=task_id,
                 stage=event.stage,
                 progress=event.progress,
                 message=event.message,
                 payload=payload,
+                before_append=lambda: self._update_summary_item(
+                    task_id,
+                    progress=event.progress,
+                    message=event.message,
+                ),
             )
 
         return handle_pipeline_event
@@ -623,7 +742,48 @@ class TaskWorker:
             payload={"error": str(exc)},
         )
 
-    def _finalize_summary_task(self, record: TaskRecord, result: TaskResult) -> None:
+    def _summary_policy(self, record: TaskRecord) -> AfterCompletedPolicy:
+        """Pick how a task's optional artifacts run: Agent tasks use ``inline``."""
+
+        return "inline" if record.task_input.options.routing.is_agent else "async"
+
+    def _run_summary_unit(
+        self,
+        record: TaskRecord,
+        context: PipelineContext,
+        transcription: PipelineTranscription,
+        *,
+        on_event,
+        policy: AfterCompletedPolicy,
+    ) -> TaskResult:
+        """Run the replayable summary unit: ``run_summary`` (with its inline
+        visual note) and, under the ``inline`` policy, the optional mindmap.
+
+        The unit has no side effects outside the pipeline's own task directory
+        and the task's result row, so it can be run again from the top; any
+        signal it raises reaches the single ``except`` in ``_run_llm_job``.
+        """
+
+        result = self._pipeline_runner.run_summary(  # type: ignore[attr-defined]
+            context,
+            transcription,
+            on_event=on_event,
+        )
+        final_result = result if isinstance(result, TaskResult) else TaskResult()
+        if policy == "inline" and self._should_auto_generate_mindmap(final_result):
+            self._repository.save_result(record.task_id, final_result)
+            mindmap_result = self._generate_mindmap(record, force=False)
+            if mindmap_result is not None:
+                final_result = mindmap_result
+        return final_result
+
+    def _finalize_summary_task(
+        self,
+        record: TaskRecord,
+        result: TaskResult,
+        *,
+        policy: AfterCompletedPolicy = "async",
+    ) -> None:
         task_id = record.task_id
         final_result = result if isinstance(result, TaskResult) else TaskResult()
         self._repository.save_result(task_id, final_result)
@@ -648,16 +808,38 @@ class TaskWorker:
             len(final_result.timeline),
             len(final_result.transcript_text or ""),
         )
-        if self._auto_generate_mindmap and self._can_auto_generate_mindmap(final_result):
-            self.submit_mindmap(task_id)
+        self._after_completed(record, final_result, policy)
+
+    def _after_completed(
+        self, record: TaskRecord, result: TaskResult, policy: AfterCompletedPolicy
+    ) -> None:
+        """Automatic follow-ups once a task is ``completed``.
+
+        ``async``: mindmap and visual evidence go to their own queues (default mode).
+        ``inline``: they already ran inside the summary unit, so nothing is queued.
+        Knowledge indexing runs under both policies.
+        """
+
+        task_id = record.task_id
+        if policy == "async":
+            if self._should_auto_generate_mindmap(result):
+                self.submit_mindmap(task_id)
+            if (
+                self._auto_generate_visual_evidence
+                and result.visual_note_status
+                not in {"generating", "ready", "partial", "unsupported", "failed"}
+                and self._can_generate_visual_evidence(record, result)
+            ):
+                self.submit_visual_evidence(task_id)
+        # Indexing embeds the note (a model call); transcript_only tasks make none.
         if (
-            self._auto_generate_visual_evidence
-            and final_result.visual_note_status not in {"generating", "ready", "partial", "unsupported", "failed"}
-            and self._can_generate_visual_evidence(record, final_result)
+            self._knowledge_index_auto_rebuild == "on_task_completed"
+            and not record.task_input.options.transcript_only
         ):
-            self.submit_visual_evidence(task_id)
-        if self._knowledge_index_auto_rebuild == "on_task_completed":
             self._index_completed_task(record.video_id, task_id)
+
+    def _should_auto_generate_mindmap(self, result: TaskResult) -> bool:
+        return self._auto_generate_mindmap and self._can_auto_generate_mindmap(result)
 
     def _run_transcription_job(self, task: TaskRecord) -> bool:
         """Run only the download/ASR stage and release its slot on success."""
@@ -687,6 +869,10 @@ class TaskWorker:
             message="开始转写阶段",
         )
 
+        # A transcription persisted by an earlier run of this task is stale now,
+        # and so is everything an Agent task cached on top of it.
+        self._discard_persisted_transcription(task_id)
+        self._discard_agent_state(task_id)
         self._active_runner = self._pipeline_runner
         try:
             context = PipelineContext(task_id=task_id, task_input=record.task_input)
@@ -717,6 +903,10 @@ class TaskWorker:
                 )
             if not isinstance(transcription, PipelineTranscription):
                 raise TypeError("staged transcription must return PipelineTranscription")
+            if record.task_input.options.transcript_only:
+                result = self._pipeline_runner.build_transcript_result(transcription)
+                self._finalize_summary_task(record, result)
+                return False
             # Persist the stage boundary even if a runner did not emit a snapshot.
             if not record.result or not record.result.transcript_text.strip():
                 self._repository.save_result(task_id, TaskResult(
@@ -724,6 +914,10 @@ class TaskWorker:
                     artifacts={"transcript_path": str(transcription.task_dir / "transcript.txt"),
                                "summary_path": str(transcription.task_dir / "summary.json")},
                 ))
+            try:
+                transcription.save()
+            except OSError:
+                logger.exception("failed to persist staged transcription task_id=%s", task_id)
             with self._condition:
                 self._staged_transcriptions[task_id] = transcription
             return True
@@ -745,40 +939,236 @@ class TaskWorker:
         with self._condition:
             transcription = self._staged_transcriptions.pop(task_id, None)
         if transcription is None:
+            transcription = self._load_persisted_transcription(task_id)
+        if transcription is None:
             exc = RuntimeError("转写阶段结果不存在，无法进入 LLM 阶段")
             logger.error("missing staged transcription task_id=%s", task_id)
             self._mark_task_failed(task_id, exc)
             return
 
+        agent_task_dir = self._persisted_task_dir(task_id) if record.task_input.options.routing.is_agent else None
+        if agent_task_dir is not None:
+            # Replays re-emit the progress of finished steps: keep it monotonic.
+            self._start_progress_floor(task_id)
         self._update_summary_item(
             task_id,
             status=TaskStatus.RUNNING.value,
             progress=88,
             message="正在进入 LLM 摘要阶段",
         )
-        self._repository.append_event(
-            task_id=task_id,
+        self._append_progress_event(
+            task_id,
             stage="llm_started",
             progress=88,
             message="正在进入 LLM 摘要阶段",
             payload={"llm_concurrency": self._llm_state.concurrency},
         )
         self._active_runner = self._pipeline_runner
+        policy = self._summary_policy(record)
         try:
             context = PipelineContext(task_id=task_id, task_input=record.task_input)
             event_handler = self._pipeline_event_handler(task_id)
-            self._pipeline_runner.preflight(context, on_event=event_handler)
-            result = self._pipeline_runner.run_summary(  # type: ignore[attr-defined]
-                context,
-                transcription,
-                on_event=event_handler,
+            with self._agent_session(record, agent_task_dir):
+                self._pipeline_runner.preflight(context, on_event=event_handler)
+                result = self._run_summary_unit(
+                    record,
+                    context,
+                    transcription,
+                    on_event=event_handler,
+                    policy=policy,
+                )
+            if agent_task_dir is not None:
+                identities = agent_work.agent_identities(agent_task_dir)
+                result = result.model_copy(
+                    update={
+                        "agent_identities": {
+                            stage: AgentIdentity(**value) for stage, value in identities.items()
+                        }
+                    }
+                )
+            self._finalize_summary_task(record, result, policy=policy)
+        # Single catch point for everything the summary unit raises. Agent
+        # signals park the task; they never reach ``_mark_task_failed``.
+        except AgentWorkRequired as signal:
+            self._wait_for_agent(
+                record, agent_task_dir or self._persisted_task_dir(task_id), signal.items
             )
-            self._finalize_summary_task(record, result)
+        except AgentContentRejected as signal:
+            self._wait_for_agent(
+                record,
+                agent_task_dir or self._persisted_task_dir(task_id),
+                [signal.item] if signal.item is not None else [],
+                rejected=(signal.item_id, signal.reason),
+            )
         except Exception as exc:
             logger.exception("LLM stage failed task_id=%s error=%s", task_id, exc)
             self._mark_task_failed(task_id, exc)
         finally:
             self._active_runner = None
+            self._stop_progress_floor(task_id)
+
+    # -- Agent tasks -------------------------------------------------------
+    def resume_agent_task(self, task_id: str) -> bool:
+        """Replay an Agent task whose results were submitted: ``agent_summarizing -> running``
+        and back into the LLM queue. ``False`` when the task was not waiting (lost race)."""
+
+        record = self._repository.transition(
+            task_id, TaskStatus.AGENT_SUMMARIZING, TaskStatus.RUNNING
+        )
+        if record is None:
+            return False
+        result = self._enqueue_summary(record, resume_llm=True)
+        if result == "rejected":
+            logger.warning(
+                "replay not queued (worker closed) task_id=%s; recovered on next start", task_id
+            )
+        return True
+
+    def cancel_agent_task(self, task_id: str) -> bool:
+        """User cancel of a task waiting for the Agent: ``agent_summarizing -> cancelled``.
+        ``False`` when the task was not waiting."""
+
+        record = self._repository.transition(
+            task_id, TaskStatus.AGENT_SUMMARIZING, TaskStatus.CANCELLED
+        )
+        if record is None:
+            return False
+        task_dir = self._persisted_task_dir(task_id)
+        if task_dir is not None:
+            agent_work.release_lease(task_dir)
+        self._update_summary_item(task_id, status=TaskStatus.CANCELLED.value, message="任务已取消")
+        progress = 0
+        try:
+            progress = max(
+                (int(event.progress) for event in self._repository.list_events(task_id)), default=0
+            )
+        except Exception:
+            logger.exception("failed to read task progress task_id=%s", task_id)
+        self._repository.append_event(
+            task_id=task_id, stage="cancelled", progress=progress, message="任务已取消"
+        )
+        return True
+
+    def agent_task_dir(self, task_id: str) -> Path | None:
+        """Task directory holding ``agent_work.json`` / ``agent_results/``.
+
+        None without staged execution.
+        """
+
+        return self._persisted_task_dir(task_id)
+
+    @contextmanager
+    def _agent_session(self, record: TaskRecord, task_dir: Path | None) -> Iterator[None]:
+        if task_dir is None:
+            yield
+            return
+        routing = record.task_input.options.routing
+        if agent_work.builtin_override(task_dir):
+            # "改用内置模型": every step left takes the default chain; cached results still replay.
+            routing = routing.model_copy(update={"agent_steps": []})
+        with agent_session(routing, agent_work.AgentResultFiles(task_dir)):
+            yield
+
+    def _wait_for_agent(
+        self,
+        record: TaskRecord,
+        task_dir: Path | None,
+        items: list[PendingItem],
+        *,
+        rejected: tuple[str, str] | None = None,
+    ) -> None:
+        """Save this round's pending items, park the task in ``agent_summarizing``
+        and give the LLM slot back (the job simply returns)."""
+
+        task_id = record.task_id
+        if task_dir is None:
+            self._mark_task_failed(task_id, RuntimeError("Agent 任务缺少任务目录，无法保存待办项"))
+            return
+        document = agent_work.save_pending_items(
+            task_dir, items, rejected=None if rejected is None else {rejected[0]: rejected[1]}
+        )
+        # An inline mindmap aborted by the signal is not "generating" any more.
+        self._repository.update_result(
+            task_id,
+            lambda existing: existing.model_copy(update={"mindmap_status": "idle"})
+            if existing.mindmap_status == "generating"
+            else existing,
+        )
+        if (
+            self._repository.transition(task_id, TaskStatus.RUNNING, TaskStatus.AGENT_SUMMARIZING)
+            is None
+        ):
+            logger.warning("task left running while waiting for agent task_id=%s", task_id)
+            return
+        item_ids = [item.item_id for item in items]
+        progress = self._progress_floor_value(task_id)
+        if rejected is not None:
+            self._repository.append_event(
+                task_id=task_id,
+                stage="agent_work_rejected",
+                progress=progress,
+                message=f"Agent 提交的 {rejected[0]} 无法使用，等待重新提交",
+                payload={"item_id": rejected[0], "reason": rejected[1], "round": document["round"]},
+            )
+        self._repository.append_event(
+            task_id=task_id,
+            stage="agent_work_required",
+            progress=progress,
+            message=f"等待 Agent 处理 {len(item_ids)} 项",
+            payload={"items": item_ids, "round": document["round"]},
+        )
+        self._update_summary_item(
+            task_id,
+            status=TaskStatus.AGENT_SUMMARIZING.value,
+            message="等待 Agent 处理",
+        )
+
+    # -- monotonic progress for replays -------------------------------------
+    def _start_progress_floor(self, task_id: str) -> None:
+        latest = 0
+        try:
+            latest = max(
+                (int(event.progress) for event in self._repository.list_events(task_id)), default=0
+            )
+        except Exception:
+            logger.exception("failed to read task progress task_id=%s", task_id)
+        with self._condition:
+            self._progress_floor[task_id] = latest
+
+    def _stop_progress_floor(self, task_id: str) -> None:
+        with self._condition:
+            self._progress_floor.pop(task_id, None)
+
+    def _progress_floor_value(self, task_id: str) -> int:
+        with self._condition:
+            return int(self._progress_floor.get(task_id, 0))
+
+    def _append_progress_event(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        progress: int,
+        message: str,
+        payload: dict[str, object] | None = None,
+        before_append: Callable[[], None] | None = None,
+    ) -> bool:
+        """``append_event`` that, while a floor is active, drops events not above it.
+
+        ``before_append`` runs only for kept events (e.g. the queue snapshot update)."""
+
+        with self._condition:
+            floor = self._progress_floor.get(task_id)
+            if floor is not None:
+                if int(progress) <= floor:
+                    return False
+                self._progress_floor[task_id] = int(progress)
+        if before_append is not None:
+            before_append()
+        self._repository.append_event(
+            task_id=task_id, stage=stage, progress=progress, message=message, payload=payload
+        )
+        return True
 
     def _run_task_job(self, task: TaskRecord) -> None:
         self._run_task(task.task_id)
@@ -813,78 +1203,10 @@ class TaskWorker:
         self._active_runner = self._pipeline_runner
         try:
             context = PipelineContext(task_id=task_id, task_input=record.task_input)
-
-            def handle_pipeline_event(event) -> None:
-                payload = dict(event.payload or {})
-                result_payload = payload.get("result")
-                if isinstance(result_payload, dict):
-                    try:
-                        partial_result = TaskResult.model_validate(result_payload)
-                    except Exception:
-                        logger.warning(
-                            "skip invalid partial result task_id=%s stage=%s",
-                            task_id,
-                            event.stage,
-                        )
-                    else:
-                        self._repository.save_result(task_id, partial_result)
-
-                self._update_summary_item(
-                    task_id,
-                    progress=event.progress,
-                    message=event.message,
-                )
-                self._repository.append_event(
-                    task_id=task_id,
-                    stage=event.stage,
-                    progress=event.progress,
-                    message=event.message,
-                    payload=payload,
-                )
-
-            self._pipeline_runner.preflight(
-                context,
-                on_event=handle_pipeline_event,
-            )
-
-            _, result = self._pipeline_runner.run(
-                context,
-                on_event=handle_pipeline_event,
-            )
-
-            final_result = result if isinstance(result, TaskResult) else TaskResult()
-            self._repository.save_result(task_id, final_result)
-            self._repository.update_status(task_id, TaskStatus.COMPLETED)
-            self._update_summary_item(
-                task_id,
-                status=TaskStatus.COMPLETED.value,
-                progress=100,
-                message="任务已完成",
-            )
-            self._repository.append_event(
-                task_id=task_id,
-                stage="completed",
-                progress=100,
-                message="任务已完成",
-                payload={"completed_at": datetime.now(timezone.utc).isoformat()},
-            )
-            logger.info(
-                "task completed task_id=%s key_points=%d timeline=%d transcript_chars=%d",
-                task_id,
-                len(final_result.key_points),
-                len(final_result.timeline),
-                len(final_result.transcript_text or ""),
-            )
-            if self._auto_generate_mindmap and self._can_auto_generate_mindmap(final_result):
-                self.submit_mindmap(task_id)
-            if (
-                self._auto_generate_visual_evidence
-                and final_result.visual_note_status not in {"generating", "ready", "partial", "unsupported", "failed"}
-                and self._can_generate_visual_evidence(record, final_result)
-            ):
-                self.submit_visual_evidence(task_id)
-            if self._knowledge_index_auto_rebuild == "on_task_completed":
-                self._index_completed_task(record.video_id, task_id)
+            event_handler = self._pipeline_event_handler(task_id)
+            self._pipeline_runner.preflight(context, on_event=event_handler)
+            _, result = self._pipeline_runner.run(context, on_event=event_handler)
+            self._finalize_summary_task(record, result)
         except Exception as exc:
             logger.exception("task failed task_id=%s error=%s", task_id, exc)
             self._mark_task_failed(task_id, exc)
@@ -1004,15 +1326,19 @@ class TaskWorker:
                     payload=payload,
                 )
 
-            context, note_path, context_path = self._pipeline_runner.build_and_export_visual_evidence(  # type: ignore[attr-defined]
-                task_id=task_id,
-                task_input=self._resolve_visual_task_input(record),
-                title=record.page_title or record.task_input.title or "图文笔记",
-                result=current_result,
-                mode=normalized_mode,
-                force=force,
-                on_event=handle_visual_event,
-            )
+            with record_routes() as route_log:
+                context, note_path, context_path = (
+                    self._pipeline_runner.build_and_export_visual_evidence(  # type: ignore[attr-defined]
+                        task_id=task_id,
+                        task_input=self._resolve_visual_task_input(record),
+                        title=record.page_title or record.task_input.title or "图文笔记",
+                        result=current_result,
+                        mode=normalized_mode,
+                        force=force,
+                        on_event=handle_visual_event,
+                    )
+                )
+            visual_sources = route_log.model_sources(VISUAL_STEPS)
             status_value = str(context.get("status") or "partial")
             error_message = "\n".join(str(item) for item in context.get("warnings", []) if str(item).strip()) or None
             updated_record = self._repository.update_result(
@@ -1038,6 +1364,7 @@ class TaskWorker:
                         "visual_note_mode": str(context.get("mode") or normalized_mode),
                         "visual_frame_count": int(context.get("frame_count") or 0),
                         "visual_insert_count": int(context.get("insert_count") or 0),
+                        "model_sources": {**existing.model_sources, **visual_sources},
                     }
                 ),
             )
@@ -1116,9 +1443,21 @@ class TaskWorker:
         if record.status != TaskStatus.COMPLETED:
             logger.warning("skip non-completed task mindmap task_id=%s status=%s", task_id, record.status.value)
             return
+        self._generate_mindmap(record, force=force)
+
+    def _generate_mindmap(self, record: TaskRecord, *, force: bool) -> TaskResult | None:
+        """Generate the mindmap into the task's stored result.
+
+        Shared by the async mindmap job and the inline summary unit. Returns
+        the stored result afterwards (``mindmap_status`` ready or failed), or
+        ``None`` when the runner cannot build mindmaps or the task vanished.
+        Exceptions in ``SUMMARY_UNIT_SIGNALS`` are re-raised, not recorded.
+        """
+
+        task_id = record.task_id
         if not hasattr(self._pipeline_runner, "build_and_export_mindmap"):
             logger.warning("pipeline runner does not support mindmap generation task_id=%s", task_id)
-            return
+            return None
 
         started_record = self._repository.update_result(
             task_id,
@@ -1130,10 +1469,10 @@ class TaskWorker:
             ),
         )
         if started_record is None or started_record.result is None:
-            return
+            return None
         current_result = started_record.result
-        self._repository.append_event(
-            task_id=task_id,
+        self._append_progress_event(
+            task_id,
             stage="mindmap_llm_request",
             progress=90,
             message="正在调用 LLM 生成思维导图",
@@ -1141,18 +1480,20 @@ class TaskWorker:
         )
 
         try:
-            mindmap_result = self._pipeline_runner.build_and_export_mindmap(  # type: ignore[attr-defined]
-                task_id=task_id,
-                title=record.task_input.title or "思维导图",
-                result=current_result,
-            )
+            with record_routes() as route_log:
+                mindmap_result = self._pipeline_runner.build_and_export_mindmap(  # type: ignore[attr-defined]
+                    task_id,
+                    title=record.task_input.title or "思维导图",
+                    result=current_result,
+                )
+            mindmap_sources = route_log.model_sources(("mindmap",))
             if isinstance(mindmap_result, tuple) and len(mindmap_result) == 3:
                 mindmap, mindmap_path, usage_breakdown = mindmap_result
             else:
                 mindmap, mindmap_path = mindmap_result
                 usage_breakdown = []
-            self._repository.append_event(
-                task_id=task_id,
+            self._append_progress_event(
+                task_id,
                 stage="mindmap_generating",
                 progress=96,
                 message="正在整理导图结构并写入结果",
@@ -1169,14 +1510,15 @@ class TaskWorker:
                         "mindmap_error_message": None,
                         "mindmap_artifact_path": str(Path(mindmap_path)),
                         "mindmap_updated_at": datetime.now(timezone.utc),
+                        "model_sources": {**existing.model_sources, **mindmap_sources},
                     }
                 ),
             )
             if updated_record is None or updated_record.result is None:
-                return
+                return None
             final_result = updated_record.result
-            self._repository.append_event(
-                task_id=task_id,
+            self._append_progress_event(
+                task_id,
                 stage="mindmap_completed",
                 progress=100,
                 message="思维导图生成完成",
@@ -1191,6 +1533,9 @@ class TaskWorker:
                 mindmap.root,
                 len(mindmap.nodes[0].children) if mindmap.nodes else 0,
             )
+            return final_result
+        except SUMMARY_UNIT_SIGNALS:
+            raise
         except Exception as exc:
             logger.exception("mindmap generation failed task_id=%s error=%s", task_id, exc)
             failed_record = self._repository.update_result(
@@ -1203,11 +1548,12 @@ class TaskWorker:
                 ),
             )
             if failed_record is None:
-                return
-            self._repository.append_event(
-                task_id=task_id,
+                return None
+            self._append_progress_event(
+                task_id,
                 stage="mindmap_failed",
                 progress=100,
                 message="思维导图生成失败",
                 payload={"error": str(exc), "force": force},
             )
+            return failed_record.result

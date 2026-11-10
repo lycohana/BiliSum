@@ -828,12 +828,12 @@
 
 [data-theme="dark"] .nav-item.active .nav-icon {
   color: var(--brand-500);
-  background: rgba(251, 114, 153, 0.2);
+  background: color-mix(in srgb, var(--brand-500) 20%, transparent);
 }
 
 [data-theme="dark"] .nav-item.active {
   color: var(--brand-500);
-  box-shadow: inset 0 0 0 1px rgba(251, 114, 153, 0.3);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand-500) 30%, transparent);
 }
 
 /* 收起侧边栏时只高亮图标本身，避免选中项多出一层不同尺寸的外框。 */
@@ -963,7 +963,7 @@
 
 .sidebar-status-item.is-success .status-dot {
   background: var(--success);
-  box-shadow: 0 0 8px rgba(34, 168, 102, 0.4);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 40%, transparent);
 }
 
 .content {

@@ -1,6 +1,7 @@
 import { type KeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ConfigHealth, UpdateState } from "../appModel";
+import { isQueueItemFinished, isQueueItemPending, isQueueItemRunning, queueItemOutcome } from "../taskStatus";
 import type { WorkerQueueItem, WorkerQueueSnapshot, WorkerSnapshot } from "../types";
 
 type QueueStatusView = {
@@ -68,9 +69,9 @@ function queueSnapshot(worker: WorkerSnapshot | null | undefined): QueueStatusVi
     isActive,
     isCompleted,
     completionVisible,
-    runningItems: batch?.items?.filter((item) => item.status === "running") ?? taskQueue.items?.filter((item) => item.status === "running") ?? [],
-    pendingItems: batch?.items?.filter((item) => item.status === "queued" || item.status === "pending") ?? taskQueue.items?.filter((item) => item.status === "queued" || item.status === "pending") ?? [],
-    completedItems: batch?.items?.filter((item) => ["completed", "done", "failed", "cancelled"].includes(item.status || "")) ?? taskQueue.items?.filter((item) => ["completed", "done", "failed", "cancelled"].includes(item.status || "")) ?? [],
+    runningItems: batch?.items?.filter((item) => isQueueItemRunning(item.status)) ?? taskQueue.items?.filter((item) => isQueueItemRunning(item.status)) ?? [],
+    pendingItems: batch?.items?.filter((item) => isQueueItemPending(item.status)) ?? taskQueue.items?.filter((item) => isQueueItemPending(item.status)) ?? [],
+    completedItems: batch?.items?.filter((item) => isQueueItemFinished(item.status)) ?? taskQueue.items?.filter((item) => isQueueItemFinished(item.status)) ?? [],
   };
 }
 
@@ -252,9 +253,9 @@ export function TitleBar({
   const queueModeLabel = queueView.isParallel ? `并发 · ${queueView.running} 个运行中` : `非并发 · ${queueView.running} 个运行中`;
 
   function renderQueueTask(item: WorkerQueueItem, fallbackStatus: string) {
-    const status = String(item.status || "").toLowerCase();
-    const isFailed = status === "failed" || status === "cancelled" || status === "error";
-    const isCompleted = status === "completed" || status === "done";
+    const outcome = queueItemOutcome(item.status);
+    const isFailed = outcome === "failed";
+    const isCompleted = outcome === "completed";
     const progress = isFailed ? 0 : isCompleted ? 100 : Math.max(0, Math.min(100, Math.round(item.progress ?? 0)));
     const statusClass = isFailed ? " is-failed" : isCompleted ? " is-completed" : "";
     return (

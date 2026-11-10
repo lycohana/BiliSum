@@ -213,6 +213,13 @@ body {
   transition: background-color var(--transition-base), color var(--transition-base);
 }
 
+/* Global keyboard focus ring (UI spec 6.2). Components with their own focus
+   style override it with a more specific :focus-visible rule. */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
 body::before {
   content: "";
   position: fixed;

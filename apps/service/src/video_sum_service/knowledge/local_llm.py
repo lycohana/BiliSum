@@ -8,17 +8,20 @@ from dataclasses import dataclass
 
 import httpx
 from fastapi import HTTPException
-
 from video_sum_infra.config import ServiceSettings
 from video_sum_infra.llm import (
-    ANTHROPIC_API_VERSION,
-    anthropic_messages_url,
-    build_anthropic_messages_payload,
+    extract_llm_finish_reason,
     is_anthropic_llm,
     normalize_openai_compatible_model_name,
-    openai_chat_completions_url,
-    extract_llm_finish_reason,
 )
+from video_sum_infra.model_client import (
+    ChatModelClient,
+    ModelClient,
+    ModelRequest,
+    ModelResponseError,
+    build_http_request,
+)
+
 from video_sum_service.integrations import extract_http_error_detail, extract_llm_message_content
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,8 @@ KNOWLEDGE_LLM_TIMEOUT = httpx.Timeout(connect=15.0, read=45.0, write=30.0, pool=
 KNOWLEDGE_LLM_STREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=12.0, write=30.0, pool=30.0)
 KNOWLEDGE_LLM_FIRST_CONTENT_TIMEOUT_SECONDS = 18.0
 KNOWLEDGE_LLM_MAX_REASONING_PREVIEW_CHARS = 4000
+KNOWLEDGE_LLM_USAGE_STAGE = "knowledge_chat"
+KNOWLEDGE_LLM_STREAM_USAGE_STAGE = "knowledge_chat_stream"
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,62 @@ def merge_llm_continuation(existing: str, continuation: str, *, max_overlap: int
         if left[-size:] == right[:size]:
             return left + right[size:]
     return left + right
+
+
+def _build_knowledge_model_request(
+    *,
+    usage_stage: str,
+    base_url: str,
+    model: str,
+    api_key: str,
+    provider: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    temperature: float,
+    timeout: httpx.Timeout,
+    stream: bool = False,
+) -> ModelRequest:
+    """Assemble the OpenAI-shaped knowledge chat request; ModelClient owns the wire format."""
+    use_anthropic = is_anthropic_llm(provider, base_url)
+    request_model = model if use_anthropic else normalize_openai_compatible_model_name(model)
+    payload: dict[str, object] = {
+        "model": request_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if stream:
+        payload["stream"] = True
+    # 说明：有意不传 response_format（json_object）
+    # 本地 LLM 后端（Ollama/llama.cpp/vLLM 等）不支持该参数，会返回 400
+    # 输出格式靠 system prompt 中“只输出合法 JSON”约束
+    if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
+        payload["thinking"] = {"type": "disabled"}
+    return ModelRequest(
+        usage_stage=usage_stage,
+        base_url=base_url,
+        api_key=api_key,
+        payload=payload,
+        wire_format="anthropic" if use_anthropic else "openai",
+        provider=provider,
+        timeout=timeout,
+        transport_retries=0,
+        lenient_body=True,
+    )
+
+
+def _log_chat_response(model: str, status_code: int | None, started_at: float) -> None:
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    logger.info(
+        "knowledge llm response received mode=chat model=%s status_code=%s elapsed_ms=%s",
+        model,
+        status_code,
+        elapsed_ms,
+    )
 
 
 def resolve_knowledge_llm_settings(settings: ServiceSettings) -> tuple[bool, str, str, str, str]:
@@ -95,6 +156,7 @@ def chat_knowledge_llm(
     max_tokens: int = 800,
     temperature: float = 0.2,
     require_json: bool = False,
+    model_client: ChatModelClient | None = None,
     _allow_empty_retry: bool = True,
 ) -> tuple[str, dict[str, object] | None]:
     """调用知识库 LLM。
@@ -104,38 +166,45 @@ def chat_knowledge_llm(
     输出格式靠 system prompt 指示模型只输出合法 JSON。
     """
     base_url, model, api_key, provider = ensure_knowledge_llm_settings(settings)
-    use_anthropic = is_anthropic_llm(provider, base_url)
-    request_model = model if use_anthropic else normalize_openai_compatible_model_name(model)
-    headers = {"Content-Type": "application/json"}
-    if use_anthropic:
-        if api_key:
-            headers["x-api-key"] = api_key
-        headers["anthropic-version"] = ANTHROPIC_API_VERSION
-    elif api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    payload: dict[str, object] = {
-        "model": request_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    # 说明：有意不传 response_format（json_object）
-    # 本地 LLM 后端（Ollama/llama.cpp/vLLM 等）不支持该参数，会返回 400
-    # 输出格式靠 system prompt 中"只输出合法 JSON"约束
-    if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
-        payload["thinking"] = {"type": "disabled"}
-    request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)
-    request_payload = build_anthropic_messages_payload(payload) if use_anthropic else payload
+    client = model_client if model_client is not None else ModelClient()
+    request = _build_knowledge_model_request(
+        usage_stage=KNOWLEDGE_LLM_USAGE_STAGE,
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        provider=provider,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=KNOWLEDGE_LLM_TIMEOUT,
+    )
 
     started_at = time.monotonic()
     logger.info("knowledge llm request start mode=chat base_url=%s model=%s max_tokens=%s", base_url, model, max_tokens)
+    body: object = None
     try:
-        with httpx.Client(timeout=KNOWLEDGE_LLM_TIMEOUT, follow_redirects=True) as client:
-            response = client.post(request_url, headers=headers, json=request_payload)
+        response = client.chat(request)
+        body = response.body
+        _log_chat_response(model, response.status_code, started_at)
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        _log_chat_response(model, status_code, started_at)
+        if status_code >= 400:
+            detail = extract_http_error_detail(exc.response)
+            raise HTTPException(
+                status_code=status_code, detail=f"知识库 LLM 调用失败：{detail}"
+            ) from exc
+        # A final non-2xx, non-error response (e.g. an unfollowed redirect) is read like any reply.
+        try:
+            body = exc.response.json()
+        except ValueError:
+            body = None
+    except ModelResponseError as exc:
+        _log_chat_response(model, 200, started_at)
+        raise HTTPException(
+            status_code=502, detail=f"知识库 LLM 返回了无法读取的响应：{exc}"
+        ) from exc
     except httpx.ReadTimeout as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.warning("knowledge llm request timeout mode=chat model=%s elapsed_ms=%s", model, elapsed_ms)
@@ -148,25 +217,6 @@ def chat_knowledge_llm(
         logger.warning("knowledge llm request failed mode=chat model=%s elapsed_ms=%s error=%s", model, elapsed_ms, exc)
         raise HTTPException(status_code=502, detail=f"知识库 LLM 连接失败：{exc}") from exc
 
-    elapsed_ms = int((time.monotonic() - started_at) * 1000)
-    logger.info(
-        "knowledge llm response received mode=chat model=%s status_code=%s elapsed_ms=%s",
-        model,
-        response.status_code,
-        elapsed_ms,
-    )
-
-    if response.status_code >= 400:
-        detail = extract_http_error_detail(response)
-        raise HTTPException(status_code=response.status_code, detail=f"知识库 LLM 调用失败：{detail}")
-
-    from video_sum_core.llm_response import parse_llm_response_json
-    from video_sum_core.errors import VideoSumError
-
-    try:
-        body = parse_llm_response_json(response)
-    except (ValueError, VideoSumError) as exc:
-        raise HTTPException(status_code=502, detail=f"知识库 LLM 返回了无法读取的响应：{exc}") from exc
     content = extract_llm_message_content(body)
     if not content and _allow_empty_retry and not require_json:
         return chat_knowledge_llm(
@@ -179,6 +229,7 @@ def chat_knowledge_llm(
             max_tokens=max(max_tokens + 600, 1600),
             temperature=temperature,
             require_json=require_json,
+            model_client=client,
             _allow_empty_retry=False,
         )
     if not content:
@@ -201,6 +252,7 @@ def chat_knowledge_llm(
             max_tokens=max(max_tokens, 3000),
             temperature=temperature,
             require_json=False,
+            model_client=client,
             _allow_empty_retry=False,
         )
         return merge_llm_continuation(content, continuation), continuation_body
@@ -339,30 +391,23 @@ def stream_knowledge_llm(
     should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[KnowledgeLlmStreamEvent]:
     base_url, model, api_key, provider = ensure_knowledge_llm_settings(settings)
-    use_anthropic = is_anthropic_llm(provider, base_url)
-    request_model = model if use_anthropic else normalize_openai_compatible_model_name(model)
-    headers = {"Content-Type": "application/json"}
-    if use_anthropic:
-        if api_key:
-            headers["x-api-key"] = api_key
-        headers["anthropic-version"] = ANTHROPIC_API_VERSION
-    elif api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    payload: dict[str, object] = {
-        "model": request_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": True,
-    }
-    if not use_anthropic and _should_disable_deepseek_thinking(base_url, request_model):
-        payload["thinking"] = {"type": "disabled"}
-    request_url = anthropic_messages_url(base_url) if use_anthropic else openai_chat_completions_url(base_url)
-    request_payload = build_anthropic_messages_payload(payload) if use_anthropic else payload
+    # ModelClient has no streaming call yet: reuse its request rendering so the
+    # protocol adaptation lives in one place; only the stream transport stays here.
+    spec = build_http_request(
+        _build_knowledge_model_request(
+            usage_stage=KNOWLEDGE_LLM_STREAM_USAGE_STAGE,
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            provider=provider,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=KNOWLEDGE_LLM_STREAM_TIMEOUT,
+            stream=True,
+        )
+    )
     should_stop = should_cancel or (lambda: False)
 
     started_at = time.monotonic()
@@ -374,8 +419,8 @@ def stream_knowledge_llm(
     stream_finish_reason = ""
     logger.info("knowledge llm request start mode=stream base_url=%s model=%s max_tokens=%s", base_url, model, max_tokens)
     try:
-        with httpx.Client(timeout=KNOWLEDGE_LLM_STREAM_TIMEOUT, follow_redirects=True) as client:
-            with client.stream("POST", request_url, headers=headers, json=request_payload) as response:
+        with httpx.Client(timeout=spec.timeout, follow_redirects=True) as client:
+            with client.stream("POST", spec.url, headers=spec.headers, json=spec.json) as response:
                 opened_at = time.monotonic()
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 logger.info(

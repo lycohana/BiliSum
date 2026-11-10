@@ -1,10 +1,12 @@
 import { Link, useLocation } from "react-router-dom";
 import type { MouseEvent, PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
 
-import { platformLabel, taskStatusClass } from "../appModel";
+import { platformLabel } from "../appModel";
 import { GripVerticalIcon, PinIcon } from "./AppIcons";
 import type { VideoAssetSummary } from "../types";
-import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
+import { taskResultStateLabel, taskStatusClass, taskStatusLabel } from "../taskStatus";
+import { formatDateTime, formatDuration } from "../utils";
+import { useAgentWork } from "../useAgentWork";
 
 export function VideoCard({
   video,
@@ -59,7 +61,10 @@ export function VideoCard({
     await onToggleFolderPin?.(video.video_id, !video.folder_pinned);
   }
 
-  const resultStateLabel = getResultStateLabel(video);
+  const agentWork = useAgentWork(video.latest_task_id, video.latest_status).description;
+  const resultStateLabel = agentWork
+    ? [agentWork.headline, agentWork.waiting].filter(Boolean).join(" · ")
+    : getResultStateLabel(video);
 
   function handleImageError(event: SyntheticEvent<HTMLImageElement>) {
     const target = event.target as HTMLImageElement;
@@ -194,20 +199,7 @@ function getResultStateLabel(video: VideoAssetSummary) {
     return "摘要已生成";
   }
 
-  switch (video.latest_status) {
-    case "running":
-      return "正在生成摘要";
-    case "queued":
-      return "等待开始处理";
-    case "failed":
-      return "本次生成失败";
-    case "cancelled":
-      return "已取消生成";
-    case "completed":
-      return "未产出摘要";
-    default:
-      return "尚未生成摘要";
-  }
+  return taskResultStateLabel(video.latest_status);
 }
 
 function IconFavorite() {

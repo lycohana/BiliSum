@@ -1,11 +1,10 @@
+import functools
 import json
 import os
 from pathlib import Path
 
 import httpx
 import pytest
-from yt_dlp.utils import DownloadError
-
 from video_sum_core.errors import (
     LLMAuthenticationError,
     TranscriptionAuthenticationError,
@@ -15,10 +14,16 @@ from video_sum_core.errors import (
 )
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult
 from video_sum_core.pipeline.base import PipelineContext
+from video_sum_core.pipeline.model_steps import require_step_router
 from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
+from video_sum_infra.model_client_fake import FakeModelClient, RawBody
+from yt_dlp.utils import DownloadError
+
+# Pipeline tests: any model call that bypasses StepRouter fails.
+RoutedFake = functools.partial(FakeModelClient, guard=require_step_router)
 
 
-def _build_runner() -> RealPipelineRunner:
+def _build_runner(model_client: FakeModelClient | None = None) -> RealPipelineRunner:
     return RealPipelineRunner(
         PipelineSettings(
             tasks_dir=Path("tests/tmp_tasks"),
@@ -26,8 +31,21 @@ def _build_runner() -> RealPipelineRunner:
             llm_api_key="test-key",
             llm_base_url="https://example.com/v1",
             llm_model="test-model",
-        )
+        ),
+        model_client=model_client,
     )
+
+
+def _llm_runner(tmp_path: Path, fake: FakeModelClient, **overrides: object) -> RealPipelineRunner:
+    settings: dict[str, object] = {
+        "tasks_dir": tmp_path,
+        "llm_enabled": True,
+        "llm_api_key": "test-key",
+        "llm_base_url": "https://api.example.com/v1",
+        "llm_model": "test-model",
+    }
+    settings.update(overrides)
+    return RealPipelineRunner(PipelineSettings(**settings), model_client=fake)  # type: ignore[arg-type]
 
 
 def test_summarize_falls_back_to_rules_when_llm_auth_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,6 +64,7 @@ def test_summarize_falls_back_to_rules_when_llm_auth_fails(monkeypatch: pytest.M
         title: str,
         emit,
         source_kind: str | None = None,
+        directives=None,
     ) -> dict[str, object]:
         raise LLMAuthenticationError("token 已失效")
 
@@ -116,6 +135,7 @@ def test_summarize_emits_partial_result_payloads() -> None:
         title: str,
         emit,
         source_kind: str | None = None,
+        directives=None,
     ) -> dict[str, object]:
         return {
             "title": title,
@@ -195,31 +215,26 @@ def test_build_fallback_segments_from_long_comma_only_transcript_splits_into_mul
     assert "[01:" not in rendered or float(segments[-1]["end"]) <= 75.0
 
 
-def test_mindmap_uses_local_fallback_when_repair_request_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = _build_runner()
-    calls: list[str] = []
-
-    def fake_request(*, usage_stage: str, **_kwargs):
-        calls.append(usage_stage)
-        if usage_stage == "mindmap":
-            return {
-                "title": "示例导图",
-                "root": "root",
-                "nodes": [
-                    {
-                        "id": "root",
-                        "label": "示例导图",
-                        "type": "root",
-                        "summary": "概览",
-                        "children": [
-                            {"id": "theme-1", "label": "单一分支", "type": "theme", "summary": "内容"}
-                        ],
-                    }
+def test_mindmap_uses_local_fallback_when_repair_request_fails() -> None:
+    thin_mindmap = {
+        "title": "示例导图",
+        "root": "root",
+        "nodes": [
+            {
+                "id": "root",
+                "label": "示例导图",
+                "type": "root",
+                "summary": "概览",
+                "children": [
+                    {"id": "theme-1", "label": "单一分支", "type": "theme", "summary": "内容"}
                 ],
             }
-        raise RuntimeError("repair timeout")
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+        ],
+    }
+    fake = RoutedFake(
+        by_stage={"mindmap": [thin_mindmap], "mindmap_repair": [RuntimeError("repair timeout")]}
+    )
+    runner = _build_runner(fake)
     mindmap, usage = runner._generate_mindmap_with_llm(
         title="示例视频",
         result=TaskResult(
@@ -235,7 +250,7 @@ def test_mindmap_uses_local_fallback_when_repair_request_fails(monkeypatch: pyte
 
     root = next(node for node in mindmap.nodes if node.id == mindmap.root)
     assert len(root.children) >= 3
-    assert calls == ["mindmap", "mindmap_repair"]
+    assert fake.stages == ["mindmap", "mindmap_repair"]
     assert usage == []
 
 
@@ -742,191 +757,88 @@ def test_probe_video_maps_browser_dpapi_failure_to_actionable_error(
 
 
 def test_preflight_llm_timeout_fails_quickly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="test-model",
-        )
-    )
-
-    def fake_request(**kwargs: object) -> dict[str, object]:
-        assert kwargs["timeout"] == 20
-        assert kwargs["retry_count"] == 0
-        raise httpx.ReadTimeout("slow preflight")
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    fake = RoutedFake(default=httpx.ReadTimeout("slow preflight"))
+    runner = _llm_runner(tmp_path, fake, summary_chunk_retry_count=0)
     monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
 
     with pytest.raises(VideoSumError, match="LLM API 检查超时"):
         runner._preflight_llm_availability()
+
+    assert fake.requests[0].timeout == 20
+    assert fake.requests[0].transport_retries == 0
 
 
 def test_preflight_llm_retries_unreadable_response_using_configured_count(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="test-model",
-            summary_chunk_retry_count=5,
-        )
-    )
-    calls = 0
-
-    def fake_request(**_kwargs: object) -> dict[str, object]:
-        nonlocal calls
-        calls += 1
-        if calls <= 5:
-            raise VideoSumError("LLM returned no readable message content.")
-        return {}
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    fake = RoutedFake(["", "", "", "", "", '{"ok":true}'])
+    runner = _llm_runner(tmp_path, fake, summary_chunk_retry_count=5)
     monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
 
     runner._preflight_llm_availability()
 
-    assert calls == 6
+    assert len(fake.requests) == 6
 
 
 def test_non_chunk_llm_request_retries_unreadable_response_using_configured_count(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="test-model",
-            summary_chunk_retry_count=5,
-        )
-    )
-    calls = 0
-
-    def fake_request(**_kwargs: object) -> dict[str, object]:
-        nonlocal calls
-        calls += 1
-        if calls <= 5:
-            raise VideoSumError("LLM returned no readable message content.")
-        return {"overview": "ok"}
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    fake = RoutedFake(["", "", "", "", "", '{"overview":"ok"}'])
+    runner = _llm_runner(tmp_path, fake, summary_chunk_retry_count=5)
     monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _seconds: None)
 
     result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://api.example.com/v1",
         payload={"model": "test-model", "messages": []},
     )
 
-    assert result == {"overview": "ok"}
-    assert calls == 6
+    assert result["overview"] == "ok"
+    assert len(fake.requests) == 6
 
 
-def test_llm_json_request_normalizes_mimo_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="MiMo-V2.5-Pro",
-            llm_thinking_type="disabled",
-            llm_reasoning_effort="max",
-        )
+def test_llm_json_request_normalizes_mimo_model(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        ['{"overview":"ok"}'],
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "prompt_cache_hit_tokens": 6,
+            "prompt_cache_miss_tokens": 4,
+        },
     )
-    calls: list[dict[str, object]] = []
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        llm_model="MiMo-V2.5-Pro",
+        llm_thinking_type="disabled",
+        llm_reasoning_effort="max",
+    )
 
-    class FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {
-                "choices": [{"message": {"content": '{"overview":"ok"}'}}],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 2,
-                    "total_tokens": 12,
-                    "prompt_cache_hit_tokens": 6,
-                    "prompt_cache_miss_tokens": 4,
-                },
-            }
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
-
-    result = runner._request_llm_json(
+    result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://api.example.com/v1",
         payload={"model": "MiMo-V2.5-Pro", "messages": []},
     )
 
+    sent = fake.wire_requests()[0].json
     assert result["overview"] == "ok"
-    assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
-    assert calls[0]["json"]["thinking"] == {"type": "disabled"}
-    assert calls[0]["json"]["reasoning_effort"] == "max"
+    assert sent["model"] == "mimo-v2.5-pro"
+    assert sent["thinking"] == {"type": "disabled"}
+    assert sent["reasoning_effort"] == "max"
     assert result["llm_prompt_cache_hit_tokens"] == 6
     assert result["llm_prompt_cache_miss_tokens"] == 4
 
 
-def test_llm_json_request_accepts_choice_text_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="test-model",
-        )
-    )
+def test_llm_json_request_accepts_choice_text_response(tmp_path: Path) -> None:
+    fake = RoutedFake([RawBody({"choices": [{"text": '{"overview":"ok from text"}'}]})])
+    runner = _llm_runner(tmp_path, fake)
 
-    class FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"text": '{"overview":"ok from text"}'}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
-
-    result = runner._request_llm_json(
+    result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://api.example.com/v1",
         payload={"model": "test-model", "messages": []},
     )
@@ -934,53 +846,20 @@ def test_llm_json_request_accepts_choice_text_response(monkeypatch: pytest.Monke
     assert result["overview"] == "ok from text"
 
 
-def test_llm_json_request_reads_openai_nested_cached_tokens(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://api.example.com/v1",
-            llm_model="test-model",
-        )
+def test_llm_json_request_reads_openai_nested_cached_tokens(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        ['{"overview":"ok"}'],
+        usage={
+            "prompt_tokens": 20,
+            "completion_tokens": 2,
+            "total_tokens": 22,
+            "prompt_tokens_details": {"cached_tokens": 12, "cache_creation_input_tokens": 5},
+        },
     )
+    runner = _llm_runner(tmp_path, fake)
 
-    class FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {
-                "choices": [{"message": {"content": '{"overview":"ok"}'}}],
-                "usage": {
-                    "prompt_tokens": 20,
-                    "completion_tokens": 2,
-                    "total_tokens": 22,
-                    "prompt_tokens_details": {"cached_tokens": 12, "cache_creation_input_tokens": 5},
-                },
-            }
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, *args, **kwargs) -> FakeResponse:
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
-
-    result = runner._request_llm_json(
+    result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://api.example.com/v1",
         payload={"model": "test-model", "messages": []},
     )
@@ -1005,47 +884,17 @@ def test_llm_summary_payload_keeps_legacy_thinking_options_for_compatibility(tmp
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_gemini_openai_compatible_request_omits_legacy_thinking_options(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            llm_model="gemini-2.5-pro",
-        )
+def test_gemini_openai_compatible_request_omits_legacy_thinking_options(tmp_path: Path) -> None:
+    fake = RoutedFake(['{"overview":"ok"}'])
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        llm_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        llm_model="gemini-2.5-pro",
     )
-    calls: list[dict[str, object]] = []
 
-    class FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": '{"overview":"ok"}'}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
-
-    result = runner._request_llm_json(
+    result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         payload={
             "model": "gemini-2.5-pro",
@@ -1056,8 +905,7 @@ def test_gemini_openai_compatible_request_omits_legacy_thinking_options(
     )
 
     assert result["overview"] == "ok"
-    sent_payload = calls[0]["json"]
-    assert isinstance(sent_payload, dict)
+    sent_payload = fake.wire_requests()[0].json
     assert sent_payload["model"] == "gemini-2.5-pro"
     assert "enable_thinking" not in sent_payload
     assert "chat_template_kwargs" not in sent_payload
@@ -1066,23 +914,10 @@ def test_gemini_openai_compatible_request_omits_legacy_thinking_options(
 def test_full_summary_context_uses_canonical_transcript_and_anchor_only_segments(
     tmp_path: Path,
 ) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://example.com/v1",
-            llm_model="test-model",
-            summary_context_mode="full",
-        )
+    fake = RoutedFake([{"title": "标题", "overview": "概览", "bulletPoints": [], "chapters": []}])
+    runner = _llm_runner(
+        tmp_path, fake, llm_base_url="https://example.com/v1", summary_context_mode="full"
     )
-    captured: dict[str, object] = {}
-
-    def fake_request(**kwargs: object) -> dict[str, object]:
-        captured["payload"] = kwargs["payload"]
-        return {"title": "标题", "overview": "概览", "bulletPoints": [], "chapters": []}
-
-    runner._request_llm_json = fake_request  # type: ignore[method-assign]
     summary = runner._summarize_with_llm(
         transcript="旧转写不应作为第二份正文发送",
         segments=[
@@ -1094,8 +929,8 @@ def test_full_summary_context_uses_canonical_transcript_and_anchor_only_segments
     )
 
     assert summary["overview"] == "概览"
-    payload = captured["payload"]
-    assert isinstance(payload, dict)
+    assert fake.stages == ["summary_full"]
+    payload = fake.requests[0].payload
     user_message = next(message for message in payload["messages"] if message["role"] == "user")
     assert "[00:00] 第一段正文" in user_message["content"]
     assert "[00:02] 第二段正文" in user_message["content"]
@@ -1103,35 +938,18 @@ def test_full_summary_context_uses_canonical_transcript_and_anchor_only_segments
     assert '"text"' not in user_message["content"].split("分段数据节选：", 1)[-1]
 
 
-def test_auto_summary_context_falls_back_to_chunks_when_transcript_is_long(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_api_key="test-key",
-            llm_base_url="https://example.com/v1",
-            llm_model="test-model",
-            summary_context_mode="auto",
-            summary_full_context_max_chars=800,
-            summary_chunk_target_chars=800,
-        )
+def test_auto_summary_context_falls_back_to_chunks_when_transcript_is_long(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        by_stage={"summary_merge": [{"overview": "合并"}]},
+        default={"overview": "分块"},
     )
-    calls: list[str] = []
-
-    def fake_chunk(*args: object, **kwargs: object) -> dict[str, object]:
-        calls.append("chunk")
-        chunk = args[2]
-        assert isinstance(chunk, dict)
-        return {"chunk_index": chunk["index"], "overview": "分块"}
-
-    monkeypatch.setattr(runner, "_request_llm_summary_chunk", fake_chunk)
-    monkeypatch.setattr(
-        runner,
-        "_request_llm_json",
-        lambda **kwargs: (calls.append("aggregate") or {"overview": "合并"}),
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        llm_base_url="https://example.com/v1",
+        summary_context_mode="auto",
+        summary_full_context_max_chars=800,
+        summary_chunk_target_chars=800,
     )
     segments = [{"start": index, "end": index + 1, "text": "长字幕内容" * 100} for index in range(3)]
 
@@ -1143,57 +961,36 @@ def test_auto_summary_context_falls_back_to_chunks_when_transcript_is_long(
     )
 
     assert result["overview"] == "合并"
-    assert "chunk" in calls
-    assert "aggregate" in calls
+    assert "summary_chunk" in fake.stages
+    assert fake.stages[-1] == "summary_merge"
 
 
-def test_llm_json_request_accepts_anthropic_messages_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            llm_enabled=True,
-            llm_provider="anthropic",
-            llm_api_key="test-key",
-            llm_base_url="https://api.anthropic.com/v1",
-            llm_model="claude-3-5-haiku-latest",
-        )
+def test_llm_json_request_accepts_anthropic_messages_response(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        [
+            RawBody(
+                {
+                    "content": [{"type": "text", "text": '{"overview":"ok"}'}],
+                    "usage": {
+                        "input_tokens": 6,
+                        "output_tokens": 2,
+                        "cache_read_input_tokens": 4,
+                        "cache_creation_input_tokens": 3,
+                    },
+                }
+            )
+        ]
     )
-    calls: list[dict[str, object]] = []
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        llm_provider="anthropic",
+        llm_base_url="https://api.anthropic.com/v1",
+        llm_model="claude-3-5-haiku-latest",
+    )
 
-    class FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {
-                "content": [{"type": "text", "text": '{"overview":"ok"}'}],
-                "usage": {
-                    "input_tokens": 6,
-                    "output_tokens": 2,
-                    "cache_read_input_tokens": 4,
-                    "cache_creation_input_tokens": 3,
-                },
-            }
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", FakeClient)
-
-    result = runner._request_llm_json(
+    result = runner._request_llm_json_with_retries(
+        usage_stage="summary_full",
         base_url="https://api.anthropic.com/v1",
         payload={
             "model": "claude-3-5-haiku-latest",
@@ -1205,16 +1002,17 @@ def test_llm_json_request_accepts_anthropic_messages_response(monkeypatch: pytes
         },
     )
 
+    wire = fake.wire_requests()[0]
     assert result["overview"] == "ok"
-    assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
-    assert calls[0]["headers"]["x-api-key"] == "test-key"
-    assert calls[0]["headers"]["anthropic-version"] == "2023-06-01"
-    assert calls[0]["json"]["system"] == "system"
+    assert wire.url == "https://api.anthropic.com/v1/messages"
+    assert wire.headers["x-api-key"] == "test-key"
+    assert wire.headers["anthropic-version"] == "2023-06-01"
+    assert wire.json["system"] == "system"
     assert result["llm_prompt_tokens"] == 13
     assert result["llm_prompt_cache_hit_tokens"] == 4
     assert result["llm_prompt_cache_miss_tokens"] == 9
     assert result["llm_prompt_cache_creation_tokens"] == 3
-    assert "response_format" not in calls[0]["json"]
+    assert "response_format" not in wire.json
 
 
 def test_export_transcript_snapshot_creates_resummary_artifacts(tmp_path: Path) -> None:
@@ -1236,10 +1034,12 @@ def test_export_transcript_snapshot_creates_resummary_artifacts(tmp_path: Path) 
 
 
 def test_visual_frame_insert_mode_composes_note_without_vlm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path, visual_note_mode="frame_insert"))
+    fake = RoutedFake()
+    runner = RealPipelineRunner(
+        PipelineSettings(tasks_dir=tmp_path, visual_note_mode="frame_insert"), model_client=fake
+    )
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
-    describe_called = False
 
     monkeypatch.setattr(runner, "_prepare_visual_source", lambda task_input, task_dir, title: (source, "local_video", []))
     monkeypatch.setattr(
@@ -1281,13 +1081,7 @@ def test_visual_frame_insert_mode_composes_note_without_vlm(tmp_path: Path, monk
         ),
     )
 
-    def fail_describe(*args, **kwargs):
-        nonlocal describe_called
-        describe_called = True
-        raise AssertionError("frame_insert mode must not call VLM description")
-
     monkeypatch.setattr(runner, "_visual_llm_available", lambda: True)
-    monkeypatch.setattr(runner, "_describe_visual_frames", fail_describe)
 
     context, note_path, _ = runner.build_and_export_visual_evidence(
         task_id="task-frame",
@@ -1307,7 +1101,7 @@ def test_visual_frame_insert_mode_composes_note_without_vlm(tmp_path: Path, monk
     assert "结合截图理解主题。" in markdown
     assert "> 结合截图理解主题。" in markdown
     assert "## 图文笔记素材" not in markdown
-    assert not describe_called
+    assert fake.requests == []
 
 
 def test_visual_evidence_force_rebuild_clears_previous_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1339,10 +1133,44 @@ def test_visual_evidence_force_rebuild_clears_previous_artifacts(tmp_path: Path,
 
 
 def test_visual_vlm_integrated_mode_uses_observations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path, visual_note_mode="vlm_integrated"))
+    fake = RoutedFake(
+        by_stage={
+            "visual_frame": [
+                {
+                    "caption": "模型解析的结构图",
+                    "semantic_summary": "图中展示三层任务链。",
+                    "key_facts": ["这张结构图说明任务链如何串联。"],
+                    "should_insert": True,
+                    "importance": 0.9,
+                    "suggested_anchor": "任务链",
+                }
+            ],
+            "visual_note_compose": [RuntimeError("compose unavailable")],
+        }
+    )
+    runner = RealPipelineRunner(
+        PipelineSettings(tasks_dir=tmp_path, visual_note_mode="vlm_integrated"), model_client=fake
+    )
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
-    describe_called = False
+
+    def fake_extract(source_path, timestamps, frames_dir):
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        (frames_dir / "f0001.jpg").write_bytes(b"jpeg")
+        return (
+            [
+                {
+                    "frame_id": "f0001",
+                    "timestamp_seconds": 42.0,
+                    "timestamp": "00:42",
+                    "file_name": "f0001.jpg",
+                    "image_path": "frames/f0001.jpg",
+                    "_absolute_path": str(frames_dir / "f0001.jpg"),
+                    "sha256": "abc",
+                }
+            ],
+            [],
+        )
 
     monkeypatch.setattr(runner, "_prepare_visual_source", lambda task_input, task_dir, title: (source, "local_video", []))
     monkeypatch.setattr(
@@ -1365,43 +1193,8 @@ def test_visual_vlm_integrated_mode_uses_observations(tmp_path: Path, monkeypatc
             ],
         },
     )
-    monkeypatch.setattr(
-        runner,
-        "_extract_visual_frames",
-        lambda source_path, timestamps, frames_dir: (
-            [
-                {
-                    "frame_id": "f0001",
-                    "timestamp_seconds": 42.0,
-                    "timestamp": "00:42",
-                    "file_name": "f0001.jpg",
-                    "image_path": "frames/f0001.jpg",
-                    "_absolute_path": str(frames_dir / "f0001.jpg"),
-                    "sha256": "abc",
-                }
-            ],
-            [],
-        ),
-    )
+    monkeypatch.setattr(runner, "_extract_visual_frames", fake_extract)
     monkeypatch.setattr(runner, "_visual_llm_available", lambda: True)
-
-    def fake_describe(*args, **kwargs):
-        nonlocal describe_called
-        describe_called = True
-        return [
-            {
-                "frame_id": "f0001",
-                "timestamp_seconds": 42.0,
-                "caption": "模型解析的结构图",
-                "semantic_summary": "图中展示三层任务链。",
-                "key_facts": ["这张结构图说明任务链如何串联。"],
-                "should_insert": True,
-                "importance": 0.9,
-                "suggested_anchor": "任务链",
-            }
-        ]
-
-    monkeypatch.setattr(runner, "_describe_visual_frames", fake_describe)
 
     context, note_path, _ = runner.build_and_export_visual_evidence(
         task_id="task-vlm",
@@ -1415,7 +1208,7 @@ def test_visual_vlm_integrated_mode_uses_observations(tmp_path: Path, monkeypatc
     )
 
     markdown = note_path.read_text(encoding="utf-8")
-    assert describe_called
+    assert fake.stages == ["visual_frame", "visual_note_compose"]
     assert context["mode"] == "vlm_integrated"
     assert context["insert_count"] == 1
     assert "模型解析的结构图" in markdown
@@ -1424,6 +1217,7 @@ def test_visual_vlm_integrated_mode_uses_observations(tmp_path: Path, monkeypatc
 
 
 def test_visual_keyframe_plan_prefers_llm_selected_timestamps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = RoutedFake()
     runner = RealPipelineRunner(
         PipelineSettings(
             tasks_dir=tmp_path,
@@ -1432,17 +1226,16 @@ def test_visual_keyframe_plan_prefers_llm_selected_timestamps(tmp_path: Path, mo
             llm_api_key="key",
             llm_base_url="https://llm.example/v1",
             llm_model="test-model",
-        )
+        ),
+        model_client=fake,
     )
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
     captured_timestamps: list[float] = []
 
     monkeypatch.setattr(runner, "_prepare_visual_source", lambda task_input, task_dir, title: (source, "local_video", []))
-    monkeypatch.setattr(
-        runner,
-        "_request_llm_json",
-        lambda *args, **kwargs: {
+    fake.push(
+        {
             "keyframes": [
                 {
                     "timestamp_seconds": 88.0,
@@ -1455,6 +1248,7 @@ def test_visual_keyframe_plan_prefers_llm_selected_timestamps(tmp_path: Path, mo
                 }
             ]
         },
+        stage="visual_keyframe_plan",
     )
 
     def fake_extract(source_path, timestamps, frames_dir):
@@ -1494,38 +1288,32 @@ def test_visual_keyframe_plan_prefers_llm_selected_timestamps(tmp_path: Path, mo
     assert json.loads(plan_path.read_text(encoding="utf-8"))["planner"] == "llm"
 
 
-def test_visual_frame_planning_prompt_renders_default_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            visual_note_mode="frame_insert",
-            llm_enabled=True,
-            llm_api_key="key",
-            llm_base_url="https://llm.example/v1",
-            llm_model="test-model",
-            visual_evidence_max_frames=4,
-        )
+def test_visual_frame_planning_prompt_renders_default_variables(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        [
+            {
+                "keyframes": [
+                    {
+                        "timestamp_seconds": 12.0,
+                        "anchor_heading": "关键设置",
+                        "concept": "配置界面",
+                        "reason": "解释设置入口",
+                        "caption_hint": "设置入口",
+                        "note_hint": "截图展示入口",
+                        "priority": 0.9,
+                    }
+                ]
+            }
+        ]
     )
-    captured_prompt = ""
-
-    def fake_request(*, base_url, payload, timeout, retry_count, **_kwargs):
-        nonlocal captured_prompt
-        captured_prompt = str(payload["messages"][1]["content"])
-        return {
-            "keyframes": [
-                {
-                    "timestamp_seconds": 12.0,
-                    "anchor_heading": "关键设置",
-                    "concept": "配置界面",
-                    "reason": "解释设置入口",
-                    "caption_hint": "设置入口",
-                    "note_hint": "截图展示入口",
-                    "priority": 0.9,
-                }
-            ]
-        }
-
-    monkeypatch.setattr(runner, "_request_llm_json", fake_request)
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        visual_note_mode="frame_insert",
+        llm_api_key="key",
+        llm_base_url="https://llm.example/v1",
+        visual_evidence_max_frames=4,
+    )
 
     plan = runner._build_visual_keyframe_plan_with_llm(
         "视频",
@@ -1537,36 +1325,38 @@ def test_visual_frame_planning_prompt_renders_default_variables(tmp_path: Path, 
         "frame_insert",
     )
 
+    request = fake.requests[0]
+    captured_prompt = str(request.payload["messages"][1]["content"])
+    assert request.usage_stage == "visual_keyframe_plan"
+    assert request.timeout == 90
+    assert request.transport_retries == 1
     assert plan["planner"] == "llm"
     assert "{max_frames}" not in captured_prompt
     assert "最多选择 4 张" in captured_prompt
     assert '"start": 12.0' in captured_prompt
 
 
-def test_visual_keyframe_plan_accepts_legacy_frames_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = RealPipelineRunner(
-        PipelineSettings(
-            tasks_dir=tmp_path,
-            visual_note_mode="frame_insert",
-            llm_enabled=True,
-            llm_api_key="key",
-            llm_base_url="https://llm.example/v1",
-            llm_model="test-model",
-        )
+def test_visual_keyframe_plan_accepts_legacy_frames_schema(tmp_path: Path) -> None:
+    fake = RoutedFake(
+        [
+            {
+                "frames": [
+                    {
+                        "seconds": 18.0,
+                        "reason": "出现配置画面",
+                        "expected_visual_type": "settings",
+                        "importance": 4,
+                    }
+                ]
+            }
+        ]
     )
-    monkeypatch.setattr(
-        runner,
-        "_request_llm_json",
-        lambda *args, **kwargs: {
-            "frames": [
-                {
-                    "seconds": 18.0,
-                    "reason": "出现配置画面",
-                    "expected_visual_type": "settings",
-                    "importance": 4,
-                }
-            ]
-        },
+    runner = _llm_runner(
+        tmp_path,
+        fake,
+        visual_note_mode="frame_insert",
+        llm_api_key="key",
+        llm_base_url="https://llm.example/v1",
     )
 
     plan = runner._build_visual_keyframe_plan_with_llm(
@@ -1581,9 +1371,11 @@ def test_visual_keyframe_plan_accepts_legacy_frames_schema(tmp_path: Path, monke
 
 
 def test_visual_note_rejects_image_gallery_model_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path, visual_note_mode="vlm_integrated"))
+    fake = RoutedFake(by_stage={"visual_note_compose": ["![图](visual://f0001)"]})
+    runner = RealPipelineRunner(
+        PipelineSettings(tasks_dir=tmp_path, visual_note_mode="vlm_integrated"), model_client=fake
+    )
     monkeypatch.setattr(runner, "_visual_llm_available", lambda: True)
-    monkeypatch.setattr(runner, "_compose_visual_note_with_llm", lambda *args, **kwargs: "![图](visual://f0001)")
 
     note = runner._compose_visual_enhanced_note(
         title="视频",
@@ -1603,6 +1395,236 @@ def test_visual_note_rejects_image_gallery_model_output(tmp_path: Path, monkeypa
         mode="vlm_integrated",
     )
 
+    assert fake.stages == ["visual_note_compose"]
     assert note.startswith("# 文本主体")
     assert "![图](visual://f0001)" in note
     assert "> 图片只补充说明这段文字。" in note
+
+
+class _VisualAssetFakes:
+    """Fakes the external boundaries of the visual path: yt-dlp downloads and ffmpeg frame grabs."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        self.downloads: list[str] = []
+        self.frame_grabs: list[float] = []
+        ffmpeg_exe = tmp_path / "ffmpeg.exe"
+        ffmpeg_exe.write_text("", encoding="utf-8")
+        fakes = self
+
+        class FakeYoutubeDL:
+            def __init__(self, options: dict[str, object]) -> None:
+                self.template = str(options["outtmpl"])
+
+            def __enter__(self) -> "FakeYoutubeDL":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def download(self, urls: list[str]) -> None:
+                fakes.downloads.extend(urls)
+                Path(self.template.replace("%(ext)s", "mp4")).write_bytes(b"video")
+
+        class FakeCompletedProcess:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(command, *args, **kwargs):
+            command = [str(item) for item in command]
+            if "-ss" in command:
+                timestamp = float(command[command.index("-ss") + 1])
+                fakes.frame_grabs.append(timestamp)
+                Path(command[-1]).write_bytes(f"frame-{timestamp}".encode())
+            else:
+                Path(command[-1]).write_bytes(
+                    Path(command[command.index("-i") + 1]).read_bytes() + b"-small"
+                )
+            return FakeCompletedProcess()
+
+        monkeypatch.setattr(
+            "video_sum_core.pipeline.real._get_ytdlp_classes",
+            lambda: (FakeYoutubeDL, DownloadError),
+        )
+        monkeypatch.setattr("video_sum_core.pipeline.real.ffmpeg_location", lambda: ffmpeg_exe)
+        monkeypatch.setattr("video_sum_core.pipeline.real.subprocess.run", fake_run)
+
+
+def _plan_keyframes(
+    monkeypatch: pytest.MonkeyPatch, runner: RealPipelineRunner, timestamps: list[float]
+) -> None:
+    monkeypatch.setattr(
+        runner,
+        "_build_visual_keyframe_plan",
+        lambda title, result, mode: {
+            "schema_version": 1,
+            "mode": mode,
+            "planner": "test",
+            "keyframes": [
+                {
+                    "timestamp_seconds": value,
+                    "anchor_heading": "主题",
+                    "concept": f"点{value}",
+                    "priority": 0.9,
+                }
+                for value in timestamps
+            ],
+        },
+    )
+
+
+def _build_url_visual_evidence(runner: RealPipelineRunner, task_id: str, force: bool = False):
+    return runner.build_and_export_visual_evidence(
+        task_id=task_id,
+        task_input=TaskInput(
+            input_type=InputType.URL, source="https://example.com/video", title="视频"
+        ),
+        title="视频",
+        result=TaskResult(
+            knowledge_note_markdown="# 主题\n\n正文段落。",
+            timeline=[{"title": "主题", "start": 0.0}],
+        ),
+        mode="frame_insert",
+        force=force,
+    )
+
+
+def test_visual_evidence_rebuild_reuses_downloaded_video_and_extracted_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path / "tasks",
+            visual_note_mode="frame_insert",
+            visual_evidence_vlm_image_width=480,
+        )
+    )
+    fakes = _VisualAssetFakes(monkeypatch, tmp_path)
+    _plan_keyframes(monkeypatch, runner, [12.0, 40.0])
+
+    first, _, _ = _build_url_visual_evidence(runner, "task-reuse")
+    second, _, _ = _build_url_visual_evidence(runner, "task-reuse")
+
+    assert fakes.downloads == ["https://example.com/video"]
+    assert sorted(fakes.frame_grabs) == [12.0, 40.0]
+    assert [frame["timestamp_seconds"] for frame in second["frames"]] == [12.0, 40.0]
+    assert second["frames"] == first["frames"]
+
+
+def test_visual_evidence_changed_keyframe_plan_extracts_only_new_timestamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(tasks_dir=tmp_path / "tasks", visual_note_mode="frame_insert")
+    )
+    fakes = _VisualAssetFakes(monkeypatch, tmp_path)
+    _plan_keyframes(monkeypatch, runner, [12.0, 40.0])
+    _build_url_visual_evidence(runner, "task-plan")
+
+    _plan_keyframes(monkeypatch, runner, [5.0, 40.0])
+    context, _, _ = _build_url_visual_evidence(runner, "task-plan")
+
+    assert fakes.frame_grabs == [12.0, 40.0, 5.0]
+    assert [frame["timestamp_seconds"] for frame in context["frames"]] == [5.0, 40.0]
+    frame_files = {frame["frame_id"]: frame["file_name"] for frame in context["frames"]}
+    frames_dir = tmp_path / "tasks" / "task-plan" / "visual_evidence" / "frames"
+    assert (frames_dir / frame_files["f0001"]).read_bytes() == b"frame-5.0"
+    assert (frames_dir / frame_files["f0002"]).read_bytes() == b"frame-40.0"
+
+
+def test_visual_evidence_force_rebuild_keeps_source_video_and_reextracts_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = RealPipelineRunner(
+        PipelineSettings(tasks_dir=tmp_path / "tasks", visual_note_mode="frame_insert")
+    )
+    fakes = _VisualAssetFakes(monkeypatch, tmp_path)
+    _plan_keyframes(monkeypatch, runner, [12.0])
+    _build_url_visual_evidence(runner, "task-force-keep")
+    visual_dir = tmp_path / "tasks" / "task-force-keep" / "visual_evidence"
+    stale_note = visual_dir / "visual_enhanced_note.md"
+    stale_note.write_text("stale", encoding="utf-8")
+
+    context, note_path, _ = _build_url_visual_evidence(runner, "task-force-keep", force=True)
+
+    assert fakes.downloads == ["https://example.com/video"]
+    assert (visual_dir / "视频.visual.mp4").read_bytes() == b"video"
+    assert fakes.frame_grabs == [12.0, 12.0]
+    assert note_path.read_text(encoding="utf-8") != "stale"
+    assert [frame["timestamp_seconds"] for frame in context["frames"]] == [12.0]
+
+
+def _visual_runner(tmp_path: Path) -> RealPipelineRunner:
+    return RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path,
+            visual_evidence_frame_interval_seconds=10,
+            visual_evidence_max_frames=12,
+        )
+    )
+
+
+def test_frames_keep_their_own_plan_when_close_timestamps_are_dropped(tmp_path: Path) -> None:
+    # Plan order follows priority; 142s is within the frame interval of 136s and gets dropped,
+    # and the 216s frame fails to extract. Every remaining frame must carry its own plan.
+    planned = [
+        {"timestamp_seconds": 199, "concept": "LFO to pitch", "anchor_heading": "A4"},
+        {"timestamp_seconds": 136, "concept": "add LFO", "anchor_heading": "A3"},
+        {"timestamp_seconds": 114, "concept": "init patch", "anchor_heading": "A3"},
+        {"timestamp_seconds": 216, "concept": "effects chain", "anchor_heading": "A5"},
+        {"timestamp_seconds": 142, "concept": "fine pitch", "anchor_heading": "A3"},
+        {"timestamp_seconds": 285, "concept": "low-pass filter", "anchor_heading": "A6"},
+    ]
+    runner = _visual_runner(tmp_path)
+    timestamps = runner._visual_timestamps_from_keyframe_plan({"keyframes": planned}, TaskResult())
+    assert 142.0 not in timestamps
+    frames = [
+        {"frame_id": f"f{index:04d}", "timestamp_seconds": ts}
+        for index, ts in enumerate(timestamps, start=1)
+        if ts != 216.0
+    ]
+
+    runner._attach_visual_keyframe_plan(frames, planned)
+
+    concepts = {frame["timestamp_seconds"]: frame["planned_concept"] for frame in frames}
+    assert concepts == {
+        199.0: "LFO to pitch",
+        136.0: "add LFO",
+        114.0: "init patch",
+        285.0: "low-pass filter",
+    }
+    assert {frame["timestamp_seconds"]: frame["anchor_heading"] for frame in frames}[285.0] == "A6"
+
+
+def test_insert_plan_skips_frames_the_vision_step_marked_not_to_insert(tmp_path: Path) -> None:
+    # The frame prompt asks for importance on a 1-10 scale (low-value frames: 1-3).
+    runner = _visual_runner(tmp_path)
+    frames = [
+        {"frame_id": f"f000{index}", "timestamp_seconds": 60.0 * index} for index in range(1, 5)
+    ]
+    observations = [
+        {"frame_id": "f0001", "caption": "kept", "importance": 8, "should_insert": True},
+        {"frame_id": "f0002", "caption": "talking head", "importance": 2, "should_insert": False},
+        {"frame_id": "f0003", "caption": "duplicate", "importance": 3, "should_insert": False},
+        {"frame_id": "f0004", "caption": "important", "importance": 9, "should_insert": False},
+    ]
+
+    plan = runner._build_visual_insert_plan(TaskResult(), frames, observations, "vlm_integrated")
+
+    assert [item["frame_id"] for item in plan["insertions"]] == ["f0001", "f0004"]
+
+
+def test_insert_plan_still_reads_importance_given_on_a_0_to_1_scale(tmp_path: Path) -> None:
+    runner = _visual_runner(tmp_path)
+    frames = [
+        {"frame_id": "f0001", "timestamp_seconds": 10.0},
+        {"frame_id": "f0002", "timestamp_seconds": 70.0},
+    ]
+    observations = [
+        {"frame_id": "f0001", "importance": 0.4, "should_insert": False},
+        {"frame_id": "f0002", "importance": 0.9, "should_insert": False},
+    ]
+
+    plan = runner._build_visual_insert_plan(TaskResult(), frames, observations, "vlm_integrated")
+
+    assert [item["frame_id"] for item in plan["insertions"]] == ["f0002"]

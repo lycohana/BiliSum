@@ -1,10 +1,16 @@
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from threading import Event
 
 from video_sum_core.models.tasks import InputType, TaskInput, TaskResult, TaskStatus
-from video_sum_core.pipeline.base import PipelineContext, PipelineEvent, PipelineRunner, PipelineTranscription
+from video_sum_core.pipeline.base import (
+    PipelineContext,
+    PipelineEvent,
+    PipelineRunner,
+    PipelineTranscription,
+)
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.schemas import VideoAssetRecord, VideoPageOptionResponse
 from video_sum_service.worker import TaskWorker
@@ -68,7 +74,8 @@ class ProgressBlockingPipelineRunner(BlockingPipelineRunner):
 
 
 class StagedBlockingPipelineRunner(PipelineRunner):
-    def __init__(self) -> None:
+    def __init__(self, tasks_dir: Path | None = None) -> None:
+        self._tasks_dir = tasks_dir or Path(tempfile.mkdtemp(prefix="bilisum-staged-"))
         self.transcription_started: list[str] = []
         self.summary_started: list[str] = []
         self._transcription_release_by_task: dict[str, Event] = {}
@@ -77,16 +84,22 @@ class StagedBlockingPipelineRunner(PipelineRunner):
     def supports_staged_execution(self) -> bool:
         return True
 
+    def task_dir(self, task_id: str) -> Path:
+        return self._tasks_dir / task_id
+
     def run_transcription(self, context: PipelineContext, on_event=None) -> PipelineTranscription:
         task_id = context.task_id
         self.transcription_started.append(task_id)
         gate = self._transcription_release_by_task.setdefault(task_id, Event())
         gate.wait(timeout=5)
+        task_dir = self.task_dir(task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
         return PipelineTranscription(
             title=context.task_input.title or task_id,
             transcript=f"转写-{task_id}",
-            segments=[],
-            task_dir=Path(f"C:/tmp/{task_id}"),
+            segments=[{"start": 0.0, "end": 1.5, "text": f"转写-{task_id}"}],
+            task_dir=task_dir,
+            source_kind="url",
         )
 
     def run_summary(self, context: PipelineContext, transcription: PipelineTranscription, on_event=None) -> TaskResult:
@@ -690,3 +703,330 @@ def test_worker_shutdown_cancels_pending_jobs() -> None:
     time.sleep(0.1)
 
     assert runner.started == [records[0].task_id]
+
+
+def test_restart_between_transcription_and_summary_resumes_summary(tmp_path: Path) -> None:
+    from video_sum_service.app import recover_incomplete_tasks
+
+    repository = create_repository()
+    record = create_task(repository)
+    task_id = record.task_id
+    first_runner = StagedBlockingPipelineRunner(tmp_path)
+    first_worker = TaskWorker(repository, first_runner, auto_generate_mindmap=False)
+    first_worker.submit(record)
+    first_runner.release_transcription(task_id)
+    # The service "dies" while the LLM stage is running: the summary never returns.
+    wait_for(lambda: first_runner.summary_started == [task_id])
+    assert repository.get_task(task_id).status == TaskStatus.RUNNING
+
+    restarted_runner = StagedBlockingPipelineRunner(tmp_path)
+    restarted_worker = TaskWorker(repository, restarted_runner, auto_generate_mindmap=False)
+    restarted_runner.release_summary(task_id)
+    try:
+        assert recover_incomplete_tasks(repository, restarted_worker) == 1
+        wait_for(lambda: repository.get_task(task_id).status == TaskStatus.COMPLETED)
+        assert restarted_runner.transcription_started == []
+        assert restarted_runner.summary_started == [task_id]
+        result = repository.get_task(task_id).result
+        assert result.transcript_text == f"转写-{task_id}"
+    finally:
+        first_runner.release_summary(task_id)
+        first_worker.shutdown(wait=True, timeout=5)
+        restarted_worker.shutdown(wait=True, timeout=5)
+
+
+def test_restart_during_transcription_transcribes_again(tmp_path: Path) -> None:
+    from video_sum_service.app import recover_incomplete_tasks
+
+    repository = create_repository()
+    record = create_task(repository)
+    task_id = record.task_id
+    repository.update_status(task_id, TaskStatus.RUNNING)
+
+    runner = StagedBlockingPipelineRunner(tmp_path)
+    worker = TaskWorker(repository, runner, auto_generate_mindmap=False)
+    runner.release_transcription(task_id)
+    runner.release_summary(task_id)
+    try:
+        assert recover_incomplete_tasks(repository, worker) == 1
+        wait_for(lambda: repository.get_task(task_id).status == TaskStatus.COMPLETED)
+        assert runner.transcription_started == [task_id]
+        assert runner.summary_started == [task_id]
+    finally:
+        worker.shutdown(wait=True, timeout=5)
+
+
+class EventfulPipelineRunner(PipelineRunner):
+    """Emits one progress event per stage, staged or not, optionally failing."""
+
+    def __init__(
+        self,
+        *,
+        staged: bool,
+        fail_in: str | None = None,
+        tasks_dir: Path | None = None,
+        mindmap_error: Exception | None = None,
+    ) -> None:
+        self._staged = staged
+        self._fail_in = fail_in
+        self._tasks_dir = tasks_dir or Path(tempfile.mkdtemp(prefix="bilisum-eventful-"))
+        self._mindmap_error = mindmap_error
+        self.calls: list[str] = []
+
+    def supports_staged_execution(self) -> bool:
+        return self._staged
+
+    def task_dir(self, task_id: str) -> Path:
+        return self._tasks_dir / task_id
+
+    def preflight(self, context: PipelineContext, on_event=None):  # type: ignore[override]
+        on_event(PipelineEvent(stage="preflight", progress=3, message="预检通过"))
+        if self._fail_in == "preflight":
+            raise RuntimeError("preflight boom")
+
+    def run_transcription(self, context: PipelineContext, on_event=None) -> PipelineTranscription:
+        on_event(PipelineEvent(stage="transcribing", progress=40, message="正在转写"))
+        if self._fail_in == "transcription":
+            raise RuntimeError("asr boom")
+        task_dir = self.task_dir(context.task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        return PipelineTranscription(
+            title="t",
+            transcript="转写",
+            segments=[{"start": 0.0, "end": 1.0, "text": "转写"}],
+            task_dir=task_dir,
+            source_kind="url",
+        )
+
+    def run_summary(
+        self, context: PipelineContext, transcription: PipelineTranscription, on_event=None
+    ) -> TaskResult:
+        self.calls.append("summary")
+        on_event(PipelineEvent(stage="summarizing", progress=90, message="正在总结"))
+        if self._fail_in == "summary":
+            raise RuntimeError("llm boom")
+        return self._summary_result(transcription.transcript)
+
+    def run(self, context: PipelineContext, on_event=None):  # type: ignore[override]
+        on_event(PipelineEvent(stage="transcribing", progress=40, message="正在转写"))
+        if self._fail_in == "transcription":
+            raise RuntimeError("asr boom")
+        on_event(PipelineEvent(stage="summarizing", progress=90, message="正在总结"))
+        if self._fail_in == "summary":
+            raise RuntimeError("llm boom")
+        return [], self._summary_result("转写")
+
+    def build_and_export_mindmap(self, task_id: str, title: str, result: TaskResult):
+        self.calls.append("mindmap")
+        if self._mindmap_error is not None:
+            raise self._mindmap_error
+        mindmap = type(
+            "MindMap", (), {"root": "root", "nodes": [type("Node", (), {"children": [1, 2]})()]}
+        )()
+        return (
+            mindmap,
+            self._tasks_dir / task_id / "mindmap.json",
+            [{"stage": "mindmap", "total_tokens": 7}],
+        )
+
+    @staticmethod
+    def _summary_result(transcript: str) -> TaskResult:
+        return TaskResult(
+            overview="概览",
+            transcript_text=transcript,
+            knowledge_note_markdown="# 笔记",
+            artifacts={"summary_path": "C:/tmp/summary.json"},
+        )
+
+
+def run_to_terminal(
+    repository: SqliteTaskRepository,
+    runner: PipelineRunner,
+    *,
+    worker_factory=TaskWorker,
+    **worker_kwargs,
+) -> tuple[str, list[tuple[str, int]]]:
+    record = create_task(repository)
+    worker_kwargs.setdefault("auto_generate_mindmap", False)
+    worker = worker_factory(repository, runner, **worker_kwargs)
+    try:
+        worker.submit(record)
+        wait_for(lambda: worker.snapshot()["batch"]["completed_tasks"] == 1)
+    finally:
+        worker.shutdown(wait=True, timeout=5)
+    events = [(event.stage, event.progress) for event in repository.list_events(record.task_id)]
+    return repository.get_task(record.task_id).status.value, events
+
+
+def test_unstaged_path_event_sequence_on_success() -> None:
+    status, events = run_to_terminal(create_repository(), EventfulPipelineRunner(staged=False))
+
+    assert status == "completed"
+    assert events == [
+        ("queued", 0),
+        ("running", 5),
+        ("preflight", 3),
+        ("transcribing", 40),
+        ("summarizing", 90),
+        ("completed", 100),
+    ]
+
+
+def test_staged_path_event_sequence_on_success() -> None:
+    status, events = run_to_terminal(create_repository(), EventfulPipelineRunner(staged=True))
+
+    assert status == "completed"
+    assert events == [
+        ("queued", 0),
+        ("transcription_started", 5),
+        ("transcribing", 40),
+        ("llm_queued", 87),
+        ("llm_started", 88),
+        ("preflight", 3),
+        ("summarizing", 90),
+        ("completed", 100),
+    ]
+
+
+# The staged path saves the transcript at the stage boundary, so an LLM failure
+# there pauses the task for "仅重跑 LLM"; the single-pass path has no saved
+# transcript and fails as before.
+END_STATE = {False: ("failed", "TASK_EXECUTION_FAILED"), True: ("paused", "LLM_RESUMABLE")}
+
+
+def test_both_paths_end_with_their_failure_event_on_partial_failure() -> None:
+    for staged in (False, True):
+        repository = create_repository()
+        status, events = run_to_terminal(
+            repository, EventfulPipelineRunner(staged=staged, fail_in="summary")
+        )
+
+        expected_status, expected_code = END_STATE[staged]
+        assert status == expected_status
+        assert events[-2:] == [("summarizing", 90), (expected_status, 0)]
+        task_id = repository.list_tasks()[0].task_id
+        failed = repository.list_events(task_id)[-1]
+        assert failed.message.startswith("llm boom")
+        assert ("转写已保存" in failed.message) is staged
+        assert failed.payload == {"error": "llm boom"}
+        assert repository.get_task(task_id).error_code == expected_code
+
+
+def test_both_paths_fail_before_summary_when_preflight_fails() -> None:
+    for staged in (False, True):
+        status, events = run_to_terminal(
+            create_repository(), EventfulPipelineRunner(staged=staged, fail_in="preflight")
+        )
+
+        expected_status, _code = END_STATE[staged]
+        assert status == expected_status
+        assert events[-2:] == [("preflight", 3), (expected_status, 0)]
+        assert ("summarizing", 90) not in events
+
+
+def test_both_paths_queue_async_mindmap_after_completion() -> None:
+    for staged in (False, True):
+        runner = EventfulPipelineRunner(staged=staged)
+        status, events = run_to_terminal(create_repository(), runner, auto_generate_mindmap=True)
+
+        assert status == "completed"
+        stages = [stage for stage, _ in events]
+        assert stages.index("completed") < stages.index("mindmap_queued")
+
+
+class InlinePolicyTaskWorker(TaskWorker):
+    """Opts every task into the ``inline`` after-completion policy (Agent mode uses it)."""
+
+    def _summary_policy(self, record):  # type: ignore[override]
+        return "inline"
+
+
+def test_inline_policy_runs_mindmap_inside_summary_unit_before_completion() -> None:
+    repository = create_repository()
+    runner = EventfulPipelineRunner(staged=True)
+
+    status, events = run_to_terminal(
+        repository,
+        runner,
+        worker_factory=InlinePolicyTaskWorker,
+        auto_generate_mindmap=True,
+        auto_generate_visual_evidence=True,
+    )
+
+    assert status == "completed"
+    assert runner.calls == ["summary", "mindmap"]
+    stages = [stage for stage, _ in events]
+    assert stages[-4:] == [
+        "mindmap_llm_request",
+        "mindmap_generating",
+        "mindmap_completed",
+        "completed",
+    ]
+    assert "mindmap_queued" not in stages
+    assert "visual_queued" not in stages
+    result = repository.list_tasks()[0].result
+    assert result.mindmap_status == "ready"
+    assert result.artifacts["mindmap_path"].endswith("mindmap.json")
+    assert result.overview == "概览"
+
+
+def test_inline_policy_skips_mindmap_when_auto_mindmap_is_disabled() -> None:
+    runner = EventfulPipelineRunner(staged=True)
+
+    status, events = run_to_terminal(
+        create_repository(), runner, worker_factory=InlinePolicyTaskWorker
+    )
+
+    assert status == "completed"
+    assert runner.calls == ["summary"]
+    assert not [stage for stage, _ in events if stage.startswith("mindmap")]
+
+
+def test_inline_policy_mindmap_failure_still_completes_task_like_async() -> None:
+    repository = create_repository()
+    runner = EventfulPipelineRunner(staged=True, mindmap_error=RuntimeError("mindmap boom"))
+
+    status, events = run_to_terminal(
+        repository, runner, worker_factory=InlinePolicyTaskWorker, auto_generate_mindmap=True
+    )
+
+    assert status == "completed"
+    stages = [stage for stage, _ in events]
+    assert stages[-2:] == ["mindmap_failed", "completed"]
+    result = repository.list_tasks()[0].result
+    assert result.mindmap_status == "failed"
+    assert result.mindmap_error_message == "mindmap boom"
+
+
+def test_summary_failure_under_inline_policy_skips_mindmap() -> None:
+    runner = EventfulPipelineRunner(staged=True, fail_in="summary")
+
+    status, events = run_to_terminal(
+        create_repository(),
+        runner,
+        worker_factory=InlinePolicyTaskWorker,
+        auto_generate_mindmap=True,
+    )
+
+    assert status == "paused"  # staged path: transcript saved
+    assert runner.calls == ["summary"]
+    assert events[-1] == ("paused", 0)
+
+
+def test_summary_unit_signal_crosses_inline_mindmap_fallback() -> None:
+    from video_sum_core.pipeline.model_steps import AgentWorkRequired
+
+    repository = create_repository()
+    runner = EventfulPipelineRunner(staged=True, mindmap_error=AgentWorkRequired("needs agent"))
+
+    status, events = run_to_terminal(
+        repository, runner, worker_factory=InlinePolicyTaskWorker, auto_generate_mindmap=True
+    )
+
+    stages = [stage for stage, _ in events]
+    assert "mindmap_failed" not in stages
+    assert "completed" not in stages
+    # The signal is not a failure: the task waits for the Agent.
+    assert status == "agent_summarizing"
+    assert "paused" not in stages and "failed" not in stages
+    assert events[-1][0] == "agent_work_required"

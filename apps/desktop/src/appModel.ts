@@ -1,5 +1,5 @@
 import type { UpdateInfo } from "./components/UpdateDialog";
-import type { EnvironmentInfo, ServiceSettings, SystemInfo, TaskStatus, VideoAssetSummary, VideoCollection, VideoFolder, VideoLibraryPreferences } from "./types";
+import type { EnvironmentInfo, ServiceSettings, SystemInfo, VideoAssetSummary, VideoCollection, VideoFolder, VideoLibraryPreferences } from "./types";
 
 export type Snapshot = {
   serviceOnline: boolean;
@@ -437,13 +437,6 @@ export function stageLabel(stage?: string | null) {
     failed: "失败",
   };
   return (stage && labels[stage]) || "待开始";
-}
-
-export function taskStatusClass(status?: TaskStatus | null) {
-  if (status === "completed") return "status-success";
-  if (status === "running") return "status-running";
-  if (status === "failed") return "status-failed";
-  return "status-pending";
 }
 
 export function progressEventClass(stage?: string | null) {

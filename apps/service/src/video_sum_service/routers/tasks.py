@@ -8,11 +8,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
-
-from video_sum_core.models.tasks import InputType, TaskStatus
+from video_sum_core.models.tasks import TERMINAL_STATUSES, InputType, TaskStatus
 from video_sum_core.utils import normalize_video_url
 from video_sum_infra.config import normalize_visual_note_mode
 
+from video_sum_service.context import settings_manager
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.runtime_startup import submit_mindmap_or_queue, submit_task_or_queue
 from video_sum_service.schemas import (
@@ -27,7 +27,6 @@ from video_sum_service.schemas import (
     TaskTranscriptExportRequest,
     TaskVisualEvidenceResponse,
 )
-from video_sum_service.context import settings_manager
 from video_sum_service.task_artifacts import (
     cleanup_task_files,
     load_task_mindmap,
@@ -37,8 +36,11 @@ from video_sum_service.task_artifacts import (
 )
 from video_sum_service.task_exports import (
     export_task_markdown as export_task_markdown_artifact,
+)
+from video_sum_service.task_exports import (
     export_task_transcript as export_task_transcript_artifact,
 )
+from video_sum_service.task_routing import apply_task_routing, new_batch_id
 from video_sum_service.video_assets import probe_video_asset
 
 router = APIRouter(prefix="/api/v1/tasks")
@@ -75,8 +77,16 @@ def create_task(body: TaskCreateRequest, request: Request) -> TaskDetailResponse
     normalized = normalize_video_url(body.source) if body.input_type is InputType.URL else None
     page_number = normalized.page_number if normalized and normalized.platform == "bilibili" else None
 
+    task_input = body.to_task_input()
+    routing = body.routing_request()
+    apply_task_routing(
+        task_input.options,
+        settings_manager.current,
+        routing,
+        batch_id=routing.batch_id or new_batch_id(),
+    )
     record = task_store.create_task(
-        body,
+        task_input,
         video_id=video_id,
         page_number=page_number,
         page_title=body.title,
@@ -393,7 +403,6 @@ async def stream_task_events(request: Request, task_id: str, after: str | None =
     async def event_generator():
         last_seen = after
         idle_ticks = 0
-        terminal_statuses = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.PAUSED}
 
         while True:
             if await request.is_disconnected():
@@ -422,7 +431,7 @@ async def stream_task_events(request: Request, task_id: str, after: str | None =
                 idle_ticks += 1
 
             current_record = task_store.get_task(task_id)
-            if current_record is None or current_record.status in terminal_statuses:
+            if current_record is None or current_record.status in TERMINAL_STATUSES:
                 if idle_ticks >= 2:
                     return
 

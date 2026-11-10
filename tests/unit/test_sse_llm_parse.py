@@ -1,11 +1,10 @@
-"""Unit tests for _parse_llm_response_json SSE tolerance."""
+"""Unit tests for ModelClient response-body parsing (SSE/NDJSON tolerance)."""
 
 import json
 
 import httpx
 import pytest
-
-from video_sum_core.pipeline.real import _parse_llm_response_json
+from video_sum_infra.model_client import parse_response_body as _parse_llm_response_json
 
 
 def _fake_response(text: str) -> httpx.Response:

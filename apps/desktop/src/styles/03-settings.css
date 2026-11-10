@@ -198,30 +198,30 @@
   width: 100%;
   justify-content: center;
   background: var(--brand-500);
-  box-shadow: 0 8px 20px rgba(251, 114, 153, 0.16);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand-500) 16%, transparent);
 }
 
 .settings-page-wrapper .primary-button {
   background: var(--brand-500);
-  box-shadow: 0 8px 20px rgba(251, 114, 153, 0.16);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand-500) 16%, transparent);
 }
 
 .settings-page-wrapper .primary-button:hover {
   background: var(--brand-600);
-  box-shadow: 0 10px 24px rgba(251, 114, 153, 0.2);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--brand-500) 20%, transparent);
 }
 
 .settings-page-wrapper .primary-button.danger-button {
   color: var(--text-inverse);
   background: var(--danger);
   border-color: var(--danger);
-  box-shadow: 0 8px 20px rgba(225, 75, 90, 0.18);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .settings-page-wrapper .primary-button.danger-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 86%, black 14%);
   border-color: color-mix(in srgb, var(--danger) 86%, black 14%);
-  box-shadow: 0 10px 24px rgba(225, 75, 90, 0.22);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 .settings-page-wrapper .primary-button.danger-button:disabled {
@@ -471,20 +471,20 @@
 
 .settings-hero-chip.is-success {
   color: var(--success);
-  border-color: rgba(34, 168, 102, 0.16);
-  background: rgba(34, 168, 102, 0.08);
+  border-color: color-mix(in srgb, var(--success) 16%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
 }
 
 .settings-hero-chip.is-danger {
   color: var(--danger);
-  border-color: rgba(225, 75, 90, 0.16);
-  background: rgba(225, 75, 90, 0.08);
+  border-color: color-mix(in srgb, var(--danger) 16%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .settings-hero-chip.is-warning {
   color: var(--warning);
-  border-color: rgba(213, 137, 24, 0.18);
-  background: rgba(213, 137, 24, 0.1);
+  border-color: color-mix(in srgb, var(--warning) 18%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
 }
 
 .settings-category-section {
@@ -932,9 +932,9 @@
 .settings-strategy-current {
   flex: 0 0 auto;
   padding: 6px 10px;
-  border: 1px solid rgba(251, 114, 153, 0.24);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 24%, transparent);
   border-radius: 999px;
-  background: rgba(251, 114, 153, 0.09);
+  background: color-mix(in srgb, var(--brand-500) 9%, transparent);
   color: var(--brand-600);
   font-size: 0.76rem;
   font-weight: 750;
@@ -975,14 +975,14 @@
 }
 
 .settings-strategy-card:focus-visible {
-  outline: 3px solid rgba(251, 114, 153, 0.26);
+  outline: 3px solid color-mix(in srgb, var(--brand-500) 26%, transparent);
   outline-offset: 2px;
 }
 
 .settings-strategy-card.is-selected {
   border-color: var(--brand-500);
-  background: rgba(251, 114, 153, 0.08);
-  box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.08);
+  background: color-mix(in srgb, var(--brand-500) 8%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 8%, transparent);
 }
 
 .settings-strategy-card-top {
@@ -1060,9 +1060,9 @@
   min-height: 26px;
   gap: 1px;
   padding: 3px 8px;
-  border: 1px solid rgba(251, 114, 153, 0.24);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 24%, transparent);
   border-radius: 8px;
-  background: rgba(251, 114, 153, 0.08);
+  background: color-mix(in srgb, var(--brand-500) 8%, transparent);
   color: var(--brand-600);
   font-size: 0.84rem;
   font-variant-numeric: tabular-nums;
@@ -1107,11 +1107,11 @@
   border: 3px solid var(--settings-panel-bg);
   border-radius: 50%;
   background: var(--brand-500);
-  box-shadow: 0 0 0 1px rgba(251, 114, 153, 0.58), 0 3px 8px rgba(11, 12, 14, 0.26);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand-500) 58%, transparent), 0 3px 8px rgba(11, 12, 14, 0.26);
 }
 
 .settings-range-input:focus-visible {
-  outline: 3px solid rgba(251, 114, 153, 0.22);
+  outline: 3px solid color-mix(in srgb, var(--brand-500) 22%, transparent);
   outline-offset: 4px;
 }
 
@@ -1133,7 +1133,7 @@
   border: 3px solid var(--settings-panel-bg);
   border-radius: 50%;
   background: var(--brand-500);
-  box-shadow: 0 0 0 1px rgba(251, 114, 153, 0.58), 0 3px 8px rgba(11, 12, 14, 0.26);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand-500) 58%, transparent), 0 3px 8px rgba(11, 12, 14, 0.26);
 }
 
 .settings-range-scale {
@@ -1629,7 +1629,7 @@
   height: 44px;
   border-radius: 50%;
   border: 1px solid var(--settings-border);
-  background: var(--bg);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -1761,7 +1761,7 @@
   border: 1px solid var(--settings-border);
   border-radius: 12px;
   background: var(--settings-elevated-bg);
-  color: var(--settings-text);
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
@@ -1769,7 +1769,7 @@
 
 .settings-visual-note-preset:hover {
   border-color: var(--settings-border-strong);
-  box-shadow: var(--settings-card-shadow);
+  box-shadow: var(--settings-shadow);
   transform: translateY(-1px);
 }
 
@@ -1849,14 +1849,14 @@
 
 .settings-status-pill.success {
   color: var(--success);
-  border-color: rgba(34, 168, 102, 0.2);
-  background: rgba(34, 168, 102, 0.08);
+  border-color: color-mix(in srgb, var(--success) 20%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
 }
 
 .settings-status-pill.warning {
   color: var(--warning);
-  border-color: rgba(213, 137, 24, 0.24);
-  background: rgba(213, 137, 24, 0.09);
+  border-color: color-mix(in srgb, var(--warning) 24%, transparent);
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
 }
 
 .settings-status-pill.danger {
@@ -1958,7 +1958,7 @@
 .settings-input-field:focus,
 .settings-select-field:focus {
   border-color: var(--brand-500);
-  box-shadow: 0 0 0 4px rgba(251, 114, 153, 0.1);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand-500) 10%, transparent);
 }
 
 .settings-input-field::placeholder {
@@ -2052,13 +2052,13 @@
 }
 
 .settings-inline-alert.warning {
-  border-color: rgba(213, 137, 24, 0.22);
-  background: rgba(213, 137, 24, 0.08);
+  border-color: color-mix(in srgb, var(--warning) 22%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
 .settings-inline-alert.success {
-  border-color: rgba(34, 168, 102, 0.18);
-  background: rgba(34, 168, 102, 0.07);
+  border-color: color-mix(in srgb, var(--success) 18%, transparent);
+  background: color-mix(in srgb, var(--success) 7%, transparent);
 }
 
 .settings-inline-actions .secondary-button {
@@ -2071,9 +2071,9 @@
   gap: 16px;
   align-items: center;
   padding: 16px 18px;
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 16%, transparent);
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.08), rgba(59, 130, 246, 0.07));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand-500) 8%, transparent), rgba(59, 130, 246, 0.07));
 }
 
 .settings-guide-card > div {
@@ -2151,9 +2151,9 @@
 
 .knowledge-prompt-guide-section.warning {
   padding: 14px 16px;
-  border: 1px solid rgba(213, 137, 24, 0.22);
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, transparent);
   border-radius: 16px;
-  background: rgba(213, 137, 24, 0.08);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
 .knowledge-prompt-guide-grid {
@@ -2297,7 +2297,7 @@
   display: grid;
   gap: 10px;
   background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(251, 114, 153, 0.18);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 18%, transparent);
   border-radius: 16px;
   box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
   color: var(--text-primary);
@@ -2337,8 +2337,8 @@
 .settings-performance-tasklist-entry {
   padding: 18px 20px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.09), rgba(59, 130, 246, 0.08));
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand-500) 9%, transparent), rgba(59, 130, 246, 0.08));
+  border: 1px solid color-mix(in srgb, var(--brand-500) 16%, transparent);
 }
 
 .settings-tasklist-float {
@@ -2357,7 +2357,7 @@
   gap: 14px;
   overflow: hidden;
   border-radius: 24px;
-  border: 1px solid rgba(251, 114, 153, 0.16);
+  border: 1px solid color-mix(in srgb, var(--brand-500) 16%, transparent);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 28px 72px rgba(15, 23, 42, 0.2);
   backdrop-filter: blur(18px);
@@ -2445,18 +2445,18 @@
 
 [data-theme="dark"] .settings-help-popover-card {
   background: rgba(24, 24, 27, 0.98);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: color-mix(in srgb, var(--brand-500) 24%, transparent);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
 }
 
 [data-theme="dark"] .settings-performance-tasklist-entry {
-  background: linear-gradient(135deg, rgba(251, 114, 153, 0.14), rgba(59, 130, 246, 0.14));
-  border-color: rgba(251, 114, 153, 0.22);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand-500) 14%, transparent), rgba(59, 130, 246, 0.14));
+  border-color: color-mix(in srgb, var(--brand-500) 22%, transparent);
 }
 
 [data-theme="dark"] .settings-tasklist-panel {
   background: rgba(24, 24, 27, 0.94);
-  border-color: rgba(251, 114, 153, 0.24);
+  border-color: color-mix(in srgb, var(--brand-500) 24%, transparent);
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.42);
 }
 
