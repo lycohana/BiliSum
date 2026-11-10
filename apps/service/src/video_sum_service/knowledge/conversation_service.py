@@ -6,17 +6,21 @@ import re
 from collections.abc import Callable, Iterator
 
 from fastapi import HTTPException
-
-from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
+from video_sum_core.models.tasks import TERMINAL_STATUSES, InputType, TaskInput, TaskStatus
 from video_sum_core.utils import normalize_video_url
 from video_sum_infra.config import ServiceSettings
-from video_sum_service.knowledge.local_llm import chat_knowledge_llm, knowledge_llm_available, parse_json_payload
+
+from video_sum_service.knowledge.local_llm import (
+    chat_knowledge_llm,
+    knowledge_llm_available,
+    parse_json_payload,
+)
 from video_sum_service.knowledge.rag_service import RagService
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.runtime_startup import submit_task_or_queue
 from video_sum_service.schemas import (
-    KnowledgeConversationMessagesResponse,
     KnowledgeChatHistoryItem,
+    KnowledgeConversationMessagesResponse,
     KnowledgeConversationResponse,
     KnowledgeJobItemResponse,
     KnowledgeJobResponse,
@@ -71,7 +75,7 @@ def _job_item(item: dict[str, object]) -> KnowledgeJobItemResponse:
         title = str(item.get("task_id") or "")
     error_message = item.get("error_message") or item.get("task_error_message")
     progress = max(0, min(100, int(item.get("progress") or 0)))
-    if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+    if status in TERMINAL_STATUSES:
         progress = 100
     return KnowledgeJobItemResponse(
         task_id=str(item.get("task_id") or ""),
@@ -89,7 +93,7 @@ def get_job(repository: SqliteTaskRepository, job_id: str) -> KnowledgeJobRespon
     if payload is None:
         raise HTTPException(status_code=404, detail="任务不存在。")
     items = [_job_item(item) for item in payload.get("items", []) if isinstance(item, dict)]
-    completed = sum(1 for item in items if item.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED})
+    completed = sum(1 for item in items if item.status in TERMINAL_STATUSES)
     progress = round(completed / len(items) * 100) if items else 0
     try:
         agent_state = json.loads(str(payload.get("agent_state_json") or "{}"))

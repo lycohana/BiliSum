@@ -6,7 +6,8 @@ import type {
   VideoPageBatchOption,
   VideoTaskBatchResponse,
 } from "../types";
-import { formatDateTime, formatDuration, taskStatusLabel } from "../utils";
+import { taskStatusLabel } from "../taskStatus";
+import { formatDateTime, formatDuration } from "../utils";
 
 type MultiPageSelectDialogProps = {
   isOpen: boolean;
@@ -17,17 +18,17 @@ type MultiPageSelectDialogProps = {
   onSubmit(input: { pageNumbers: number[]; confirm: boolean }): Promise<VideoTaskBatchResponse>;
 };
 
-function aggregateStatusLabel(status?: PageAggregateStatus) {
-  if (status === "completed") return "已完成";
-  if (status === "in_progress") return "进行中";
-  if (status === "failed") return "失败";
+function aggregateStatusLabel(aggregateStatus?: PageAggregateStatus) {
+  if (aggregateStatus === "completed") return "已完成";
+  if (aggregateStatus === "in_progress") return "进行中";
+  if (aggregateStatus === "failed") return "失败";
   return "未开始";
 }
 
-function aggregateStatusClass(status?: PageAggregateStatus) {
-  if (status === "completed") return "status-success";
-  if (status === "in_progress") return "status-running";
-  if (status === "failed") return "status-failed";
+function aggregateStatusClass(aggregateStatus?: PageAggregateStatus) {
+  if (aggregateStatus === "completed") return "status-success";
+  if (aggregateStatus === "in_progress") return "status-running";
+  if (aggregateStatus === "failed") return "status-failed";
   return "status-pending";
 }
 

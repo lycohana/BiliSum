@@ -208,3 +208,15 @@ run("current-view queue order follows the grouped render order", () => {
     order: "current_view",
   }), ["video-4", "video-2", "video-3", "video-1"]);
 });
+
+run("collection items waiting for an Agent count as processing, not completed", () => {
+  const waiting = item(9, { latest_status: "agent_summarizing" });
+  assert.equal(getCollectionItemStatus(waiting), "processing");
+  assert.deepEqual(countCollectionStatuses([waiting, item(10, { has_result: true, latest_status: "completed" })]), {
+    all: 2,
+    completed: 1,
+    processing: 1,
+    pending: 0,
+    failed: 0,
+  });
+});

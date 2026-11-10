@@ -63,7 +63,7 @@ def _watchdog_loop(timeout_seconds: int, repository) -> None:
         if seconds_since_activity() < timeout_seconds:
             continue
         try:
-            active = repository is not None and len(repository.list_recoverable_tasks()) > 0
+            active = repository is not None and repository.has_active_tasks()
         except Exception:
             logger.exception("cli idle watchdog failed to check task queue")
             active = True  # Be conservative: do not shut down on a check failure.

@@ -6,31 +6,37 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
-from video_sum_core.models.tasks import InputType, TaskInput, TaskStatus
+from video_sum_core.models.tasks import InputType, TaskInput, TaskOptions, TaskStatus
 
-from video_sum_service.context import COVER_CACHE_DIR, LOCAL_MEDIA_UPLOAD_DIR, logger, settings_manager
+from video_sum_service.context import (
+    COVER_CACHE_DIR,
+    LOCAL_MEDIA_UPLOAD_DIR,
+    logger,
+    settings_manager,
+)
 from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.runtime_startup import submit_task_or_queue
 from video_sum_service.schemas import (
     AggregateSummaryRequest,
     ResummaryRequest,
+    ReusableTaskResponse,
     TaskDetailResponse,
     TaskRecord,
     TaskSummaryResponse,
     VideoAssetDetailResponse,
     VideoAssetRecord,
     VideoAssetSummaryResponse,
-    VideoCollectionItemsOrderRequest,
-    VideoCollectionItemsRequest,
     VideoCollectionDeleteRequest,
     VideoCollectionFavoriteRequest,
+    VideoCollectionItemsOrderRequest,
+    VideoCollectionItemsRequest,
     VideoCollectionMoveRequest,
     VideoCollectionPinRequest,
+    VideoCollectionResponse,
     VideoCollectionSettingsRequest,
     VideoCollectionTaskCreateRequest,
-    VideoCollectionTaskDispatchFailure,
     VideoCollectionTaskCreateResponse,
-    VideoCollectionResponse,
+    VideoCollectionTaskDispatchFailure,
     VideoFolderCreateRequest,
     VideoFolderResponse,
     VideoFolderUpdateRequest,
@@ -49,13 +55,20 @@ from video_sum_service.schemas import (
     VideoTaskCreateRequest,
 )
 from video_sum_service.task_artifacts import cleanup_video_files, load_task_segments
+from video_sum_service.task_reuse import ReuseQuery, find_reusable_task
+from video_sum_service.task_routing import (
+    DESKTOP_ROUTING,
+    TaskRoutingRequest,
+    apply_task_routing,
+    new_batch_id,
+)
 from video_sum_service.video_assets import (
+    fetch_bilibili_collection_payload,
     infer_local_input_type,
     is_supported_local_media_file,
     localize_video_cover,
     merge_video_asset_metadata,
     probe_local_video_asset,
-    fetch_bilibili_collection_payload,
     probe_video_asset,
     resolve_video_page,
 )
@@ -366,6 +379,10 @@ def _create_video_task_record(
     visual_note_mode: str | None = None,
     prompt_preset_id: str | None = None,
     summary_scope: str | None = None,
+    extra_instructions: str | None = None,
+    language: str | None = None,
+    routing: TaskRoutingRequest = DESKTOP_ROUTING,
+    batch_id: str,
     scheduled_at=None,
 ):
     record = _build_video_task_record(
@@ -374,6 +391,10 @@ def _create_video_task_record(
         visual_note_mode=visual_note_mode,
         prompt_preset_id=prompt_preset_id,
         summary_scope=summary_scope,
+        extra_instructions=extra_instructions,
+        language=language,
+        routing=routing,
+        batch_id=batch_id,
         scheduled_at=scheduled_at,
     )
     record = task_store.create_task_record(record)
@@ -390,6 +411,10 @@ def _build_video_task_record(
     visual_note_mode: str | None = None,
     prompt_preset_id: str | None = None,
     summary_scope: str | None = None,
+    extra_instructions: str | None = None,
+    language: str | None = None,
+    routing: TaskRoutingRequest = DESKTOP_ROUTING,
+    batch_id: str,
     scheduled_at=None,
 ) -> TaskRecord:
     page = resolve_video_page(video, page_number)
@@ -419,6 +444,11 @@ def _build_video_task_record(
         task_input.options.prompt_preset_id = prompt_preset_id
     if summary_scope is not None:
         task_input.options.summary_scope = summary_scope
+    if extra_instructions is not None:
+        task_input.options.extra_instructions = extra_instructions
+    if language is not None:
+        task_input.options.language = language
+    apply_task_routing(task_input.options, settings_manager.current, routing, batch_id=batch_id)
     return TaskRecord(
         task_input=task_input,
         video_id=video.video_id,
@@ -433,6 +463,7 @@ def _create_resummary_task_record(
     task_store: SqliteTaskRepository,
     video: VideoAssetRecord,
     source_task,
+    batch_id: str,
 ):
     if source_task.video_id != video.video_id:
         raise HTTPException(status_code=400, detail="所选任务不属于当前视频。")
@@ -462,7 +493,12 @@ def _create_resummary_task_record(
             source=payload,
             title=source_task.task_input.title or video.title,
             platform_hint=source_task.task_input.platform_hint,
-            options=source_task.task_input.options.model_copy(update={"scheduled_at": None}),
+            options=apply_task_routing(
+                source_task.task_input.options.model_copy(deep=True, update={"scheduled_at": None}),
+                settings_manager.current,
+                DESKTOP_ROUTING,
+                batch_id=batch_id,
+            ),
         ),
         video_id=video.video_id,
         page_number=source_task.page_number,
@@ -884,6 +920,7 @@ def create_video_collection_tasks(
             visual_note_mode=payload.visual_note_mode,
             prompt_preset_id=payload.prompt_preset_id,
             summary_scope=payload.summary_scope,
+            batch_id=batch_id,
             scheduled_at=payload.scheduled_at,
         )
         for video in videos
@@ -1263,6 +1300,40 @@ def get_video_tasks(video_id: str, request: Request) -> list[TaskSummaryResponse
     return [task.to_summary() for task in task_store.list_tasks_for_video(video_id)]
 
 
+@router.get("/{video_id}/reusable-task", response_model=ReusableTaskResponse)
+def get_reusable_video_task(
+    video_id: str,
+    request: Request,
+    page_number: int | None = None,
+    summary_scope: str | None = None,
+    prompt_preset_id: str | None = None,
+    language: str | None = None,
+    extra_instructions: str | None = None,
+    engine: str | None = None,
+    visual_note_mode: str | None = None,
+) -> ReusableTaskResponse:
+    """Find a task whose options answer this request (rules in task_reuse.py), else 404."""
+    task_store: SqliteTaskRepository = request.app.state.task_repository
+    if task_store.get_video_asset(video_id) is None:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    query = ReuseQuery(
+        page_number=page_number,
+        summary_scope=summary_scope,
+        prompt_preset_id=prompt_preset_id,
+        language=language,
+        extra_instructions=extra_instructions,
+        engine=engine,
+        visual_note_mode=visual_note_mode,
+    )
+    found = find_reusable_task(task_store.list_tasks_for_video(video_id), query)
+    if found is None:
+        raise HTTPException(status_code=404, detail="没有可复用的任务。")
+    task, match = found
+    return ReusableTaskResponse(
+        match=match, task=task.to_detail(), batch_id=task.task_input.options.batch_id
+    )
+
+
 @router.post("/{video_id}/tasks", response_model=TaskDetailResponse, status_code=status.HTTP_201_CREATED)
 def create_video_task(
     request: Request,
@@ -1273,14 +1344,21 @@ def create_video_task(
     video = task_store.get_video_asset(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Video not found.")
+    routing = request_body if isinstance(request_body, TaskRoutingRequest) else DESKTOP_ROUTING
     refreshed = _create_video_task_record(
         app_state=request.app.state,
         task_store=task_store,
         video=video,
+        routing=routing,
+        batch_id=routing.batch_id or new_batch_id(),
         page_number=getattr(request_body, "page_number", None) if request_body else None,
         visual_note_mode=getattr(request_body, "visual_note_mode", None) if request_body else None,
         prompt_preset_id=getattr(request_body, "prompt_preset_id", None) if request_body else None,
         summary_scope=getattr(request_body, "summary_scope", None) if request_body else None,
+        extra_instructions=getattr(request_body, "extra_instructions", None)
+        if request_body
+        else None,
+        language=getattr(request_body, "language", None) if request_body else None,
         scheduled_at=getattr(request_body, "scheduled_at", None) if request_body else None,
     )
     return refreshed.to_detail()
@@ -1302,6 +1380,7 @@ def create_video_resummary_task(video_id: str, body: ResummaryRequest, request: 
         task_store=task_store,
         video=video,
         source_task=source_task,
+        batch_id=new_batch_id(),
     )
     return refreshed.to_detail()
 
@@ -1351,6 +1430,9 @@ def create_video_aggregate_summary_task(
             source=payload,
             title=title,
             platform_hint=video.platform,
+            options=apply_task_routing(
+                TaskOptions(), settings_manager.current, DESKTOP_ROUTING, batch_id=new_batch_id()
+            ),
         ),
         video_id=video.video_id,
         page_number=AGGREGATE_SUMMARY_PAGE_NUMBER,
@@ -1411,6 +1493,7 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
         skipped_pages.extend(conflict_pages)
 
     prompt_preset_id = getattr(body, "prompt_preset_id", None)
+    batch_id = new_batch_id()
     for page_number in creatable_page_numbers:
         refreshed = _create_video_task_record(
             app_state=request.app.state,
@@ -1418,6 +1501,7 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
             video=video,
             page_number=page_number,
             prompt_preset_id=prompt_preset_id,
+            batch_id=batch_id,
             scheduled_at=getattr(body, "scheduled_at", None),
         )
         created_tasks.append(refreshed.to_detail())
@@ -1426,6 +1510,7 @@ def create_video_tasks_batch(video_id: str, body: VideoTaskBatchRequest, request
         operation="create",
         requested_page_numbers=page_numbers,
         requires_confirmation=False,
+        batch_id=batch_id if created_tasks else None,
         created_tasks=created_tasks,
         skipped_pages=skipped_pages,
         conflict_pages=[],
@@ -1491,6 +1576,7 @@ def create_video_resummary_tasks_batch(video_id: str, body: VideoTaskBatchReques
             conflict_pages=conflict_pages,
         )
 
+    batch_id = new_batch_id()
     for page_number in page_numbers:
         source_task = source_tasks_by_page[page_number]
         if source_task is None:
@@ -1500,6 +1586,7 @@ def create_video_resummary_tasks_batch(video_id: str, body: VideoTaskBatchReques
             task_store=task_store,
             video=video,
             source_task=source_task,
+            batch_id=batch_id,
         )
         created_tasks.append(refreshed.to_detail())
 
@@ -1507,6 +1594,7 @@ def create_video_resummary_tasks_batch(video_id: str, body: VideoTaskBatchReques
         operation="resummary",
         requested_page_numbers=page_numbers,
         requires_confirmation=False,
+        batch_id=batch_id if created_tasks else None,
         created_tasks=created_tasks,
         skipped_pages=skipped_pages,
         conflict_pages=[],

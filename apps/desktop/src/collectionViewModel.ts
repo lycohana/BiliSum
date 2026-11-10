@@ -1,4 +1,5 @@
 import type { CollectionGroupMode, CollectionSortMode, VideoCollectionItem } from "./types";
+import { isTaskActive, isTaskFailedOrCancelled } from "./taskStatus.ts";
 
 export type CollectionStatusFilter = "all" | "completed" | "processing" | "pending" | "failed";
 export type CollectionItemStatus = Exclude<CollectionStatusFilter, "all">;
@@ -57,8 +58,8 @@ export const COLLECTION_QUEUE_ORDER_LABELS: Record<CollectionQueueOrder, string>
 
 export function getCollectionItemStatus(item: VideoCollectionItem): CollectionItemStatus {
   if (item.has_result) return "completed";
-  if (item.latest_status === "queued" || item.latest_status === "running") return "processing";
-  if (item.latest_status === "failed" || item.latest_status === "cancelled" || item.latest_status === "paused") return "failed";
+  if (isTaskActive(item.latest_status)) return "processing";
+  if (isTaskFailedOrCancelled(item.latest_status)) return "failed";
   return "pending";
 }
 

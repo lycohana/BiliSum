@@ -39,5 +39,10 @@
   "license": "MIT",
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "~1.32.2",
+    "jpeg-js": "~0.4.4",
+    "zod": "~4.6.7"
   }
 }

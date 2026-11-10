@@ -2,42 +2,47 @@
 
 "use strict";
 
+/**
+ * CLI shell: parse arguments -> call a lib/commands/ function -> format the
+ * returned data with lib/output.js. Commands report progress through a
+ * reporter that writes stderr; only this file writes stdout or exits.
+ */
+
 const { spawn } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { readFileSync } = require("node:fs");
 
 const {
-  baseUrlFor,
-  getTask,
-  getTaskProgress,
-  listTasks,
-  probeVideo,
-  uploadLocalMedia,
-  createVideoTask,
-  ApiError,
-} = require("../lib/api");
-const { UsageError, parseTaskCommandArgs } = require("../lib/args");
-const { formatTasks, emit } = require("../lib/output");
-const { readVersion, locateBilisumDataRoot, findPython, cliHomeDir, ensureCliVenv, cliVenvPython, findSystemPython } = require("../lib/runtime");
+  UsageError,
+  parseAgentCommandArgs,
+  parseResultCommandArgs,
+  parseTaskCommandArgs,
+  resolveSummaryScope,
+} = require("../lib/args");
+const {
+  emit,
+  formatDoctorText,
+  formatEnvStatusText,
+  formatProgressLine,
+  formatStatusText,
+  formatTaskListText,
+  formatTasks,
+} = require("../lib/output");
+const { readVersion, locateBilisumDataRoot, cliHomeDir } = require("../lib/runtime");
 const { runSkillCommand } = require("../lib/skill");
-const { readToken } = require("../lib/token");
-const {
-  ensureService,
-  stopService,
-  spawnService,
-} = require("../lib/server");
-const {
-  resolveEnvironment,
-  readConfig,
-  writeConfig,
-  ENV_NAMES,
-  isDesktopReachable,
-} = require("../lib/env");
+const { stopService, spawnService } = require("../lib/server");
+const { resolveEnvironment, ENV_NAMES } = require("../lib/env");
+const { ensureAuthenticatedService, resolveServiceToken } = require("../lib/commands/connection");
+const { runTaskCommand } = require("../lib/commands/task");
+const { getTaskStatus } = require("../lib/commands/status");
+const { getTaskResult } = require("../lib/commands/result");
+const { listTaskSummaries } = require("../lib/commands/tasks");
+const { getEnvStatus, useEnvironment, setupCliEnvironment } = require("../lib/commands/env");
+const { runDoctor } = require("../lib/commands/doctor");
+const { nextAgentWork, submitAgentWork, startLeaseHeartbeat } = require("../lib/commands/agent");
 
 const RELEASES_URL = "https://github.com/lycohana/BiliSum/releases/latest";
 const REPO_URL = "https://github.com/lycohana/BiliSum";
 const DEFAULT_PORT = "3838";
-
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "paused"]);
 
 function printHelp() {
   const version = readVersion();
@@ -48,15 +53,18 @@ function printHelp() {
   console.log("Usage:");
   console.log("  npx bilisum summarize <url|file> [options]  Summarize a video (knowledge note)");
   console.log("  npx bilisum brief <url|file> [options]      Fast summary card only (skips note)");
-  console.log("  npx bilisum transcribe <url|file> [options] Print the transcript of a video");
+  console.log("  npx bilisum transcribe <url|file> [options] Transcript only (no summary; --with-summary to add one)");
   console.log("  npx bilisum status <task-id> [--json]       Show task status");
+  console.log("  npx bilisum result <task-id> [options]      Read a finished task's result");
   console.log("  npx bilisum tasks [--limit N] [--json]      List tasks");
+  console.log("  npx bilisum agent next|submit [options]     Agent mode: claim / submit pending items (agent --help)");
   console.log("  npx bilisum env [use <name>|setup]          Environment status / switch / setup");
   console.log("  npx bilisum desktop|cli|custom|auto         Switch environment (shortcut)");
   console.log("  npx bilisum --setting                       Open the web settings page");
   console.log("  npx bilisum start [options]                 Start the service");
   console.log("  npx bilisum stop                            Stop the CLI-started BiliSum service");
   console.log("  npx bilisum doctor                          Check environment/service/Python setup");
+  console.log("  npx bilisum mcp [--print-config]            Run the MCP server (stdio) for chat clients");
   console.log("  npx bilisum skill [path|install]            Install the Agent video-understanding skill");
   console.log("  npx bilisum --version                       Print package version");
   console.log("  npx bilisum release                         Open the latest GitHub release");
@@ -78,9 +86,16 @@ function printHelp() {
   console.log("  --all-pages                          Process every P of a multi-P video");
   console.log("  --visual-note <mode>                 text | frame_insert | vlm_integrated");
   console.log("  --prompt-preset <id>                 Use a summary prompt preset");
+  console.log("  --instructions <text>                补充要求 for this summary (content focus only, max 1000 chars)");
+  console.log("  --language <code>                    Output language, e.g. zh / en / ja (default: not set, prompts unchanged)");
   console.log("  --format <fmt>                       json | markdown | transcript (default markdown)");
   console.log("  --output <path> / -o <path>          Write result to a file instead of stdout");
   console.log("  --with-transcript                    Append the full transcript to markdown output");
+  console.log("  --with-summary                       transcribe: also generate the summary (default: transcript only)");
+  console.log("  --force                              Always create a new task (default: reuse a matching one)");
+  console.log("  --engine <engine>                    builtin | agent (default: BiliSum's default_engine)");
+  console.log("  --agent-capabilities <list>          Agent mode: text,vision (default: agent_default_capabilities)");
+  console.log("  --agent-name <name>                  Declare an Agent caller (or BILISUM_AGENT_NAME)");
   console.log("  --no-wait                            Create the task and exit immediately");
   console.log("  --idle-timeout <sec>                 CLI 后台服务无任务自动关闭秒数，默认 600");
   console.log("  --timeout <sec>                      Max wait for completion, default 3600");
@@ -89,6 +104,14 @@ function printHelp() {
   console.log("");
   console.log("默认输出为元数据 + 总结内容（不含字幕），需要字幕请加 --with-transcript。");
   console.log("brief 只生成摘要卡片（跳过知识笔记 LLM 调用，更快）。");
+  console.log("Options (result):");
+  console.log("  --format <fmt>                       markdown | brief | transcript | json (default markdown)");
+  console.log("  --time <start-end>                   transcript within a time range, e.g. 12:00-15:30");
+  console.log("  --grep <keyword>                     transcript segments containing the keyword (+ context)");
+  console.log("  --context <n>                        segments of context around each --grep hit, default 2");
+  console.log("  --offset <n> / --max-chars <n>       Read the output in pages");
+  console.log("  --json                               Print the paged envelope (content, next_offset, ...)");
+  console.log("");
   console.log("Options (start):");
   console.log("  --no-open                            Do not open the browser");
   console.log("");
@@ -165,219 +188,166 @@ function parseConnectionOptions(args, { allowTaskId = false } = {}) {
   return { options, positional };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Reporter for the CLI: log and progress lines go to stderr. */
+function stderrReporter({ quiet = false } = {}) {
+  if (quiet) {
+    return { log: () => {}, progress: () => {} };
+  }
+  return {
+    log: console.error,
+    progress: (event) => console.error(formatProgressLine(event)),
+  };
 }
 
-function extractUrlPageParam(source) {
-  try {
-    const parsed = new URL(source);
-    const raw = parsed.searchParams.get("p");
-    if (!raw) {
-      return null;
-    }
-    const page = Number.parseInt(raw, 10);
-    return Number.isFinite(page) && page > 0 ? page : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveServiceToken(options) {
-  // Resolve a token to inject into a CLI-spawned service. The standalone cli
-  // environment has no desktop token file, so generate one (same pattern as
-  // the desktop app) to avoid depending on auth.json creation timing; desktop
-  // mode reuses the desktop token / auth.json so both sides always agree.
-  let token = readToken(options);
-  if (!token && options.environment === "cli") {
-    token = require("node:crypto").randomBytes(32).toString("hex");
-  }
-  return token;
-}
-
-async function ensureAuthenticatedService(options, log) {
-  // Resolve the token first (desktop token / auth.json / --token / env) and
-  // inject it into a service the CLI spawns, so both always agree.
-  let token = resolveServiceToken(options);
-  await ensureService(options, { log, accessToken: token });
-  if (!token) {
-    // The CLI just spawned the service, which may have created {data}/auth.json.
-    token = readToken(options);
-  }
-  if (!token) {
-    throw new UsageError(
-      "无法获取访问令牌：请用 --token 指定，或设置 VIDEO_SUM_ACCESS_TOKEN，" +
-      "或先启动一次桌面端 BiliSum 生成令牌；没有桌面端时可使用 --environment cli。",
-      { showHelp: false },
-    );
-  }
-  return token;
-}
-
-async function resolveAndCreateTasks(source, options, token, baseUrl, log) {
-  const isUrl = /^https?:\/\//i.test(source);
-  let video;
-  if (isUrl) {
-    log(`探测视频信息：${source}`);
-    const probe = await probeVideo(baseUrl, token, source);
-    video = probe.video;
-  } else {
-    if (!existsSync(source)) {
-      throw new UsageError(`本地文件不存在：${source}`);
-    }
-    log(`上传本地媒体：${source}`);
-    const probe = await uploadLocalMedia(baseUrl, token, source);
-    video = probe.video;
-  }
-
-  const pages = video.pages || [];
-  const pageNumbers = [];
-  if (options.allPages) {
-    if (!pages.length) {
-      log("当前视频没有分 P，按单个任务处理。");
-      pageNumbers.push(null);
-    } else {
-      for (const page of pages) {
-        pageNumbers.push(page.page);
-      }
-    }
-  } else if (options.page !== null) {
-    if (pages.length && !pages.some((page) => page.page === options.page)) {
-      throw new UsageError(
-        `分 P ${options.page} 不存在。可选分 P：${pages.map((page) => page.page).join(", ")}`,
-      );
-    }
-    pageNumbers.push(options.page);
-  } else {
-    const urlPage = isUrl ? extractUrlPageParam(source) : null;
-    if (urlPage !== null && pages.length && !pages.some((page) => page.page === urlPage)) {
-      throw new UsageError(`URL 指定的分 P ${urlPage} 不存在。可选分 P：${pages.map((page) => page.page).join(", ")}`);
-    }
-    pageNumbers.push(urlPage);
-  }
-
-  const created = [];
-  for (const pageNumber of pageNumbers) {
-    log(`提交任务：${video.title || source}${pageNumber ? `（P${pageNumber}）` : ""}`);
-    const task = await createVideoTask(baseUrl, token, video.video_id, {
-      pageNumber,
-      visualNoteMode: options.visualNote,
-      promptPresetId: options.promptPreset,
-      summaryScope: options.brief ? "summary" : undefined,
-    });
-    created.push(task);
-    log(`任务已创建：${task.task_id}`);
-  }
-  return created;
-}
-
-async function waitForTasks(taskIds, options, token, baseUrl, log) {
-  const deadline = Date.now() + options.timeoutSeconds * 1000;
-  const seenProgress = new Set();
-  const states = new Map(taskIds.map((id) => [id, { status: "queued" }]));
-
-  while (true) {
-    const allTerminal = [];
-    for (const taskId of taskIds) {
-      const state = states.get(taskId);
-      if (TERMINAL_STATUSES.has(state.status)) {
-        allTerminal.push(true);
-        continue;
-      }
-      let progress = null;
-      try {
-        progress = await getTaskProgress(baseUrl, token, taskId);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          throw new Error(`任务不存在：${taskId}`);
-        }
-        // Fall back to the detail endpoint if progress is unavailable.
-        progress = await getTask(baseUrl, token, taskId);
-      }
-      state.status = progress.status;
-      states.set(taskId, state);
-      if (!TERMINAL_STATUSES.has(progress.status)) {
-        const marker = `${taskId}:${progress.status}:${progress.progress ?? ""}:${progress.latest_stage ?? ""}`;
-        if (!seenProgress.has(marker)) {
-          seenProgress.add(marker);
-          const pct = Number(progress.progress);
-          const pctText = Number.isFinite(pct) ? `${String(Math.max(0, Math.min(100, Math.round(pct)))).padStart(3)}%` : "  -%";
-          const stage = progress.latest_stage ? ` [${progress.latest_stage}]` : "";
-          const message = progress.latest_message ? ` ${progress.latest_message}` : "";
-          log(`[${taskId}] ${pctText}${stage}${message}`);
-        }
-      }
-      allTerminal.push(TERMINAL_STATUSES.has(progress.status));
-    }
-
-    if (allTerminal.length && allTerminal.every(Boolean)) {
-      const results = [];
-      for (const taskId of taskIds) {
-        results.push(await getTask(baseUrl, token, taskId));
-      }
-      return results;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `任务在 ${options.timeoutSeconds}s 内未完成。可运行 bilisum status ${taskIds.join(" ")} 继续查看进度。`,
-      );
-    }
-    await sleep(2000);
-  }
-}
-
-async function runTaskCommand(args, { defaultFormat, brief = false }) {
+/** `summarize` / `brief` / `transcribe`: parse options, create or reuse tasks, wait and print the result. */
+async function taskCommand(args, { defaultFormat, brief = false, transcribe = false }) {
   const { source, options } = parseTaskCommandArgs(args, { defaultFormat });
   options.brief = brief;
+  options.summaryScope = resolveSummaryScope({ brief, transcribe, withSummary: options.withSummary });
   if (options.help) {
     printHelp();
     return;
   }
-  // Validate local inputs before any service work (no pointless auto-start).
-  if (!/^https?:\/\//i.test(source) && !existsSync(source)) {
-    throw new UsageError(`本地文件不存在：${source}`);
-  }
-  const log = options.quiet ? () => {} : console.error;
-  await resolveEnvironment(options);
-  const baseUrl = baseUrlFor(options.host, options.port);
-  const token = await ensureAuthenticatedService(options, log);
-  const tasks = await resolveAndCreateTasks(source, options, token, baseUrl, log);
+  const reporter = stderrReporter({ quiet: options.quiet });
+  const outcome = await runTaskCommand(source, options, reporter);
 
-  if (!options.wait) {
-    for (const task of tasks) {
-      log(`任务已创建（不等待）：${task.task_id}`);
-    }
-    emit(
-      formatTasks(
-        tasks.map((task) => ({ ...task, result: null })),
-        "json",
-      ),
-      options,
-    );
+  if (!outcome.waited) {
+    emit(formatTasks(outcome.tasks.map((task) => ({ ...task, result: null })), "json"), options);
     return;
   }
-
-  const completed = await waitForTasks(
-    tasks.map((task) => task.task_id),
-    options,
-    token,
-    baseUrl,
-    log,
-  );
-  const failed = completed.filter((task) => task.status === "failed" || task.status === "cancelled" || task.status === "paused");
-  for (const task of failed) {
-    log(`[${task.task_id}] ${task.status}：${task.error_message || "未知错误"}`);
+  if (outcome.failed.length) {
+    emit(formatTasks(outcome.tasks, "json"), options);
+    throw new Error(`${outcome.failed.length} 个任务失败。`);
   }
-  if (failed.length) {
-    emit(formatTasks(completed, "json"), options);
-    throw new Error(`${failed.length} 个任务失败。`);
+  if (outcome.awaitingAgent && outcome.awaitingAgent.length) {
+    // Agent mode: the work now waits for an Agent; print the tasks and how to claim them.
+    emit(formatTasks(outcome.tasks, "json"), options);
+    reporter.log(agentClaimHint(outcome.awaitingAgent, options));
+    return;
   }
   const written = emit(
-    formatTasks(completed, options.format, { includeTranscript: options.withTranscript, brief }),
+    formatTasks(outcome.tasks, options.format, { includeTranscript: options.withTranscript, brief }),
     options,
   );
   if (written) {
-    log(written);
+    reporter.log(written);
+  }
+}
+
+/** Quote a value for a copy-paste shell command; simple tokens stay bare. */
+function shellQuote(value) {
+  return /^[\w.@:/-]+$/.test(value) ? value : `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+/** Next-step hint printed when tasks wait for an Agent: the `bilisum agent next` command to run. */
+function agentClaimHint(tasks, options) {
+  const batches = [...new Set(tasks.map((task) => task.batch_id).filter(Boolean))];
+  const name = options.agentName ? ` --agent-name ${shellQuote(options.agentName)}` : " --agent-name <名称>";
+  const scopes = batches.length
+    ? batches.map((batch) => `--batch ${batch}`)
+    : tasks.map((task) => `--task ${task.task_id}`);
+  return [
+    `${tasks.length} 个任务等待 Agent 处理（agent_summarizing）。领取待办：`,
+    ...scopes.map((scope) => `  bilisum agent next ${scope}${name}`),
+  ].join("\n");
+}
+
+const HEARTBEAT_ENV = "BILISUM_AGENT_HEARTBEAT";
+const DEFAULT_MAX_HOLD_SECONDS = 7200;
+
+/**
+ * The CLI exits right after `agent next`, so the lease is renewed by a
+ * detached `bilisum agent _heartbeat` process. It stops when the service
+ * refuses the lease (submitted / expired / taken over) or after the max hold
+ * time (BILISUM_AGENT_MAX_HOLD seconds, default 7200).
+ */
+function spawnDetachedHeartbeat(connection, claim) {
+  const maxHold = Number.parseInt(process.env.BILISUM_AGENT_MAX_HOLD || "", 10);
+  const config = {
+    baseUrl: connection.baseUrl,
+    token: connection.token,
+    lease: { task_id: claim.task_id, lease_id: claim.lease_id, lease_expires_at: claim.lease_expires_at },
+    maxHoldMs: (Number.isFinite(maxHold) && maxHold > 0 ? maxHold : DEFAULT_MAX_HOLD_SECONDS) * 1000,
+  };
+  const child = spawn(process.execPath, [__filename, "agent", "_heartbeat"], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    env: { ...process.env, [HEARTBEAT_ENV]: JSON.stringify(config) },
+  });
+  child.on("error", () => {});
+  child.unref();
+}
+
+/** Internal `agent _heartbeat` process: renews the lease described in BILISUM_AGENT_HEARTBEAT until it stops. */
+async function heartbeatProcess() {
+  const config = JSON.parse(process.env[HEARTBEAT_ENV] || "null");
+  if (!config || !config.lease) {
+    throw new UsageError("agent _heartbeat 是内部命令。", { showHelp: false });
+  }
+  await startLeaseHeartbeat(config, config.lease, { maxHoldMs: config.maxHoldMs }).done;
+}
+
+/** Read the `agent submit --results` JSON from a file or stdin (`-`); strips a BOM. */
+function readResultsPayload(source) {
+  let text;
+  try {
+    text = source === "-" ? readFileSync(0, "utf8") : readFileSync(source, "utf8");
+  } catch {
+    throw new UsageError(`结果文件不存在或无法读取：${source}`, { showHelp: false });
+  }
+  try {
+    return JSON.parse(text.replace(/^﻿/, ""));
+  } catch (error) {
+    throw new UsageError(`结果文件不是合法的 JSON：${error.message}`, { showHelp: false });
+  }
+}
+
+/** Usage text for `bilisum agent`. */
+function printAgentHelp() {
+  console.log("Usage:");
+  console.log("  bilisum agent next (--batch <id> | --all | --task <id>) --agent-name <name> [options]");
+  console.log("      Claim one task's pending items (JSON on stdout). The lease is renewed in the background.");
+  console.log("      --wait <sec>          Keep claiming while tasks are still processing (default 90, 0 = once)");
+  console.log("  bilisum agent submit <task-id> --lease <lease-id> --results <file|-> --agent-name <name>");
+  console.log("      Submit every item of the round: [{\"item_id\", \"content\"} | {\"item_id\", \"declined\": true, \"reason\"}]");
+  console.log("");
+  console.log("  --agent-name <name>       Agent name reported to BiliSum (or BILISUM_AGENT_NAME)");
+  console.log("  --agent-model <model>     Optional model name (self-reported)");
+  console.log("  --output <path> / -o      Write the JSON to a file instead of stdout");
+}
+
+/** `bilisum agent next | submit` (plus the internal `_heartbeat`). */
+async function agentCommand(args) {
+  if (args[0] === "_heartbeat") {
+    await heartbeatProcess();
+    return;
+  }
+  const { subcommand, taskId, options } = parseAgentCommandArgs(args);
+  if (options.help) {
+    printAgentHelp();
+    return;
+  }
+  const reporter = stderrReporter({ quiet: options.quiet });
+  if (subcommand === "next") {
+    const claim = await nextAgentWork({ ...options, onLease: spawnDetachedHeartbeat }, reporter);
+    const written = emit(JSON.stringify(claim, null, 2), options);
+    if (written) {
+      reporter.log(written);
+    }
+    if (claim && claim.task_id) {
+      reporter.log(
+        `处理完后提交：bilisum agent submit ${claim.task_id} --lease ${claim.lease_id} --results <file>`
+        + ` --agent-name ${shellQuote(options.agentName)}（做不了的项提交 declined）`,
+      );
+    }
+    return;
+  }
+  const results = readResultsPayload(options.results);
+  const accepted = await submitAgentWork(taskId, { ...options, results }, reporter);
+  const written = emit(JSON.stringify(accepted, null, 2), options);
+  if (written) {
+    reporter.log(written);
   }
 }
 
@@ -390,37 +360,29 @@ async function statusCommand(args) {
   if (positional.length === 0) {
     throw new UsageError("缺少 task-id。用法：bilisum status <task-id> [--json]");
   }
-  const log = console.error;
-  await resolveEnvironment(options);
-  const baseUrl = baseUrlFor(options.host, options.port);
-  const token = await ensureAuthenticatedService(options, log);
-  const taskId = positional[0];
-  let task;
-  try {
-    task = await getTask(baseUrl, token, taskId);
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
-      throw new Error(`任务不存在：${taskId}`);
-    }
-    throw error;
-  }
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(task, null, 2)}\n`);
+  const task = await getTaskStatus(positional[0], options, stderrReporter());
+  console.log(options.json ? JSON.stringify(task, null, 2) : formatStatusText(task));
+}
+
+/** `bilisum result <task-id>`: read an existing task's result, with transcript filters and paging. */
+async function resultCommand(args) {
+  const { taskId, options } = parseResultCommandArgs(args);
+  if (options.help) {
+    printHelp();
     return;
   }
-  console.log(`task_id:       ${task.task_id}`);
-  console.log(`status:        ${task.status}`);
-  if (task.title) {
-    console.log(`title:         ${task.title}`);
+  const reporter = stderrReporter({ quiet: options.quiet });
+  const page = await getTaskResult(taskId, options, reporter);
+  if (options.json) {
+    emit(JSON.stringify(page, null, 2), options);
+    return;
   }
-  if (task.page_number) {
-    console.log(`page_number:   ${task.page_number}`);
+  const written = emit(page.content, options);
+  if (written) {
+    reporter.log(written);
   }
-  if (task.error_message) {
-    console.log(`error:         ${task.error_message}`);
-  }
-  if (task.result && task.result.overview) {
-    console.log(`overview:      ${String(task.result.overview).slice(0, 200)}`);
+  if (page.next_offset !== null) {
+    reporter.log(`（内容未读完，共 ${page.total_chars} 字；继续读取：加上 --offset ${page.next_offset}）`);
   }
 }
 
@@ -430,27 +392,8 @@ async function tasksCommand(args) {
     printHelp();
     return;
   }
-  const log = console.error;
-  await resolveEnvironment(options);
-  const baseUrl = baseUrlFor(options.host, options.port);
-  const token = await ensureAuthenticatedService(options, log);
-  const tasks = await listTasks(baseUrl, token);
-  const limited = tasks.slice(0, options.limit);
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(limited, null, 2)}\n`);
-    return;
-  }
-  if (!limited.length) {
-    console.log("暂无任务。");
-    return;
-  }
-  for (const task of limited) {
-    const title = task.title || task.source || "";
-    console.log(`${task.task_id}  ${task.status.padEnd(10)} ${title}`);
-  }
-  if (tasks.length > limited.length) {
-    console.log(`（共 ${tasks.length} 个任务，仅显示前 ${limited.length} 个。用 --limit 调整。）`);
-  }
+  const listing = await listTaskSummaries(options, stderrReporter());
+  console.log(options.json ? JSON.stringify(listing.tasks, null, 2) : formatTaskListText(listing));
 }
 
 async function startService(args) {
@@ -476,23 +419,10 @@ async function startService(args) {
   });
 }
 
-async function doctor(args) {
+/** `bilisum doctor`: print the environment diagnosis. */
+async function doctorCommand(args) {
   const { options } = parseConnectionOptions(args);
-  await resolveEnvironment(options);
-  const python = options.environment === "cli"
-    ? { command: cliVenvPython(), args: [] }
-    : options.python
-      ? { command: options.python, args: [] }
-      : findPython(options.data);
-  console.log(`BiliSum package: ${readVersion()}`);
-  console.log(`Environment:     ${options.environment}`);
-  console.log(`Service:         http://${options.host}:${options.port}`);
-  console.log(`Data root:       ${options.data}`);
-  console.log(`Python:          ${python && python.command ? [python.command, ...python.args].join(" ") : "未找到（请安装桌面版 BiliSum、Python 3.12，或运行 bilisum env setup）"}`);
-  console.log(`Token:           ${readToken(options) ? "已找到" : "未找到（desktop 环境请先启动桌面端；cli 环境运行后自动生成）"}`);
-  if (options.environment === "cli") {
-    console.log(`CLI env status:  ${require("node:fs").existsSync(cliVenvPython()) ? "就绪" : "未初始化（运行 bilisum env setup）"}`);
-  }
+  console.log(formatDoctorText(await runDoctor(options)));
 }
 
 async function settingsCommand(args) {
@@ -514,22 +444,20 @@ async function settingsCommand(args) {
 
 async function envCommand(args) {
   const sub = (args[0] || "").toLowerCase();
-  const config = readConfig();
 
   if (sub === "use") {
-    const name = String(args[1] || "").toLowerCase();
-    if (!ENV_NAMES.includes(name) || args.length !== 2) {
+    if (args.length !== 2) {
       throw new UsageError(`用法：bilisum env use ${ENV_NAMES.join("|")}`);
     }
-    writeConfig({ ...config, env: name });
-    const suffix = name === "auto" ? "（桌面端可用时优先 desktop，否则 cli）" : "";
-    console.log(`已切换到 ${name} 环境${suffix}。`);
+    const { env } = useEnvironment(args[1]);
+    const suffix = env === "auto" ? "（桌面端可用时优先 desktop，否则 cli）" : "";
+    console.log(`已切换到 ${env} 环境${suffix}。`);
     return;
   }
 
   if (sub === "setup") {
     console.log(`初始化 CLI 独立环境（${cliHomeDir()}）...`);
-    const python = ensureCliVenv({ python: process.env.BILISUM_PYTHON || "", environment: "cli" }, console.error);
+    const { python } = setupCliEnvironment(stderrReporter());
     console.log(`CLI 独立环境就绪：${python}`);
     return;
   }
@@ -543,24 +471,7 @@ async function envCommand(args) {
     throw new UsageError(`未知 env 子命令：${sub}`);
   }
 
-  // default: status
-  const current = await resolveEnvironment({ environment: config.env || "auto" });
-  const desktopUp = await isDesktopReachable();
-  console.log(`当前环境:      ${current.env}`);
-  console.log(`服务地址:      http://${current.host}:${current.port}`);
-  console.log(`数据根:        ${current.dataRoot}`);
-  console.log("");
-  console.log("可用环境:");
-  console.log(`  desktop    ${desktopUp ? "● 桌面端服务在运行" : "○ 未检测到桌面端服务（127.0.0.1:3838）"}`);
-  const venvReady = require("node:fs").existsSync(cliVenvPython());
-  console.log(`  cli        ${venvReady ? "● 独立环境已就绪" : "○ 未初始化（bilisum env setup）"}  CLI_HOME=${cliHomeDir()}`);
-  console.log(`  custom     ${config.custom ? "● 已配置" : "○ 未配置（--host/--port/--token）"}`);
-  console.log(`  auto       desktop 优先，否则 cli`);
-  console.log("");
-  console.log("切换：bilisum env use desktop|cli|custom|auto（也可直接 bilisum desktop|cli|custom|auto）");
-  if (config.env && config.env !== "auto") {
-    console.log(`已持久化选择：${config.env}`);
-  }
+  console.log(formatEnvStatusText(await getEnvStatus()));
 }
 
 function printEnvHelp() {
@@ -606,19 +517,27 @@ async function main() {
       return;
     }
     if (command === "summarize" || command === "sum") {
-      await runTaskCommand(args, { defaultFormat: "markdown" });
+      await taskCommand(args, { defaultFormat: "markdown" });
       return;
     }
     if (command === "brief") {
-      await runTaskCommand(args, { defaultFormat: "markdown", brief: true });
+      await taskCommand(args, { defaultFormat: "markdown", brief: true });
       return;
     }
     if (command === "transcribe" || command === "trans") {
-      await runTaskCommand(args, { defaultFormat: "transcript" });
+      await taskCommand(args, { defaultFormat: "transcript", transcribe: true });
       return;
     }
     if (command === "status") {
       await statusCommand(args);
+      return;
+    }
+    if (command === "result") {
+      await resultCommand(args);
+      return;
+    }
+    if (command === "agent") {
+      await agentCommand(args);
       return;
     }
     if (command === "tasks" || command === "list") {
@@ -646,8 +565,13 @@ async function main() {
       await stopService(options);
       return;
     }
+    if (command === "mcp") {
+      // Loaded lazily: only `mcp` needs the MCP SDK dependency.
+      await require("../lib/mcp/server").runMcpCommand(args);
+      return;
+    }
     if (command === "doctor") {
-      await doctor(args);
+      await doctorCommand(args);
       return;
     }
     if (command === "skill") {

@@ -36,11 +36,30 @@ BiliSum/
 └── scripts/              # 版本管理 / 发布脚本（bump_version / detect_bump / release notes）
 ```
 
+Agent 模式相关模块：
+
+```
+packages/infra/src/video_sum_infra/
+├── model_client.py         # 模型调用统一入口（请求格式 / 重试 / 用量归一）
+└── model_client_fake.py    # 测试用 FakeModelClient（按脚本或按阶段回复）
+packages/core/src/video_sum_core/pipeline/
+└── model_steps.py          # 模型步骤注册表与 StepRouter（按步骤走 Agent / 内置模型 / 规则）
+apps/service/src/video_sum_service/
+├── agent_work.py           # Agent 待办项与步骤结果的存储（领取独占任务 / 提交 / 改用内置模型）
+├── task_routing.py         # 创建任务时决定引擎和交给 Agent 的步骤
+├── task_reuse.py           # 查找可直接复用的已有任务
+└── routers/agent_work.py   # Agent 待办 API（领取 / 心跳 / 提交 / 查看 / 改用内置 / 取消）
+packages/npx/lib/
+├── commands/               # CLI 与 MCP 共用的命令层
+└── mcp/                    # `bilisum mcp` 的 MCP 服务（工具定义 / 图片处理）；CLI 只有这个目录引用第三方依赖
+```
+
 ## 代码风格
 
 - **Python**：PEP 8 + 类型注解（`ruff` 校验：`E/F/I/B/UP`，行宽 100）
 - **TypeScript**：严格模式 + 函数式组件
 - **CLI（Node）**：CommonJS + JSDoc 注释，零依赖（Node ≥ 18）
+  - 例外：`bilisum mcp` 依赖官方 MCP SDK（`@modelcontextprotocol/sdk`）、`zod` 和 `jpeg-js`（`~` 锁定次版本号），只在 `mcp` 子命令里加载；其他命令仍然零依赖。
 - **提交信息**：Conventional Commits（`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` ...）
 
 ```bash
@@ -59,6 +78,9 @@ npm run npx:test                          # CLI 全链路（版本 + 单测 + pa
 
 - Python 测试在 `tests/unit/`，用内存 SQLite / 假 Worker 隔离外部依赖。
 - CLI 测试在 `packages/npx/test/`，覆盖参数解析 / token / 输出格式化 / 服务运行时文件，**必须跨平台**（CI 跑 Linux，勿假设 `%APPDATA%` 等 Windows 语义）。
+- 服务端行为测试走 `tests/unit/service_seam.py`：FastAPI `TestClient` + 真实 Worker 与 `RealPipelineRunner`，模型调用由 `FakeModelClient`（`video_sum_infra.model_client_fake`）按脚本回复；`routed_fake(...)` 还会让绕过 `StepRouter` 的模型调用直接失败。
+- CLI 测试走进程接缝 `packages/npx/test/helpers/process-seam.js`：`startFakeService(routes)` 起一个假的 BiliSum 服务，`runCli(args)` 在隔离的 CLI 目录里运行真实的 `bin/bilisum.js`，断言 `service.requests`。MCP 测试在此之上用 `test/helpers/mcp-seam.js`。
+- 桌面端的任务状态判断、标签、样式和文案统一用 `apps/desktop/src/taskStatus.ts` 的函数，页面和组件里不得直接比较状态字符串（`apps/desktop/test/task-status.test.ts` 会拦截）。
 
 ## PR 流程
 

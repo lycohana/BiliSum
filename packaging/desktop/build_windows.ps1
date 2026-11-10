@@ -254,6 +254,13 @@ try {
     $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
     $env:CSC_PLATFORM = "windows"
     
+    # The bundled CLI (resources/cli) needs its runtime dependencies (MCP SDK, zod, jpeg-js).
+    Write-Host "Installing CLI dependencies for bundling..."
+    npm ci --prefix (Join-Path $repoRoot "packages\npx") --omit=dev --no-audit --fund=false
+    if ($LASTEXITCODE -ne 0) {
+        throw "npm ci for packages/npx failed."
+    }
+
     npx electron-builder --config electron-builder.config.js --win nsis --x64 --publish=never
     if ($LASTEXITCODE -ne 0) {
         throw "electron-builder packaging failed."

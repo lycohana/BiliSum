@@ -18,6 +18,8 @@ class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    // Parsed JSON body of the error response (null when absent / not JSON).
+    this.payload = null;
   }
 }
 
@@ -83,11 +85,13 @@ async function apiRequest(baseUrl, path, {
     }
   }
   if (!response.ok) {
-    throw new ApiError(
+    const error = new ApiError(
       `BiliSum API ${response.status} ${response.statusText}`,
       response.status,
       extractDetail(payload),
     );
+    error.payload = payload;
+    throw error;
   }
   return payload;
 }
@@ -122,7 +126,19 @@ function uploadLocalMedia(baseUrl, token, filePath, { timeoutMs = 30 * 60_000 } 
   });
 }
 
-function createVideoTask(baseUrl, token, videoId, { pageNumber, visualNoteMode, promptPresetId, summaryScope, timeoutMs = 30_000 } = {}) {
+function createVideoTask(baseUrl, token, videoId, {
+  pageNumber,
+  visualNoteMode,
+  promptPresetId,
+  summaryScope,
+  extraInstructions,
+  language,
+  batchId,
+  engine,
+  agentCapabilities,
+  agentCaller,
+  timeoutMs = 30_000,
+} = {}) {
   const payload = {};
   if (pageNumber !== undefined && pageNumber !== null) {
     payload.page_number = pageNumber;
@@ -136,10 +152,98 @@ function createVideoTask(baseUrl, token, videoId, { pageNumber, visualNoteMode, 
   if (summaryScope) {
     payload.summary_scope = summaryScope;
   }
+  if (extraInstructions) {
+    payload.extra_instructions = extraInstructions;
+  }
+  if (language) {
+    payload.language = language;
+  }
+  if (batchId) {
+    // Join the batch of an earlier page created by the same command.
+    payload.batch_id = batchId;
+  }
+  // Agent mode routing (F2): sent only when set, so default requests are unchanged.
+  if (engine) {
+    payload.engine = engine;
+  }
+  if (agentCapabilities && agentCapabilities.length) {
+    payload.agent_capabilities = agentCapabilities;
+  }
+  if (agentCaller) {
+    payload.agent_caller = true;
+  }
   return apiRequest(baseUrl, `/api/v1/videos/${encodeURIComponent(videoId)}/tasks`, {
     method: "POST",
     token,
     json: payload,
+    timeoutMs,
+  });
+}
+
+/**
+ * GET /api/v1/videos/:id/reusable-task. Returns { reused, match, task, batch_id }
+ * or null when nothing is reusable (404). Only options that are set are sent;
+ * the service compares engine / visual-note mode only when they are sent.
+ */
+async function findReusableTask(baseUrl, token, videoId, {
+  pageNumber,
+  summaryScope,
+  promptPresetId,
+  visualNoteMode,
+  language,
+  extraInstructions,
+  engine,
+  timeoutMs = 30_000,
+} = {}) {
+  const params = new URLSearchParams();
+  const add = (key, value) => {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  };
+  add("page_number", pageNumber);
+  add("summary_scope", summaryScope);
+  add("prompt_preset_id", promptPresetId);
+  add("visual_note_mode", visualNoteMode);
+  add("language", language);
+  add("extra_instructions", extraInstructions);
+  add("engine", engine);
+  const query = params.toString();
+  try {
+    return await apiRequest(
+      baseUrl,
+      `/api/v1/videos/${encodeURIComponent(videoId)}/reusable-task${query ? `?${query}` : ""}`,
+      { token, timeoutMs },
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** POST /api/v1/agent-work/claim. body = { scope, batch_id?, task_id?, agent: { name, model? } }. */
+function claimAgentWork(baseUrl, token, body, { timeoutMs = 30_000 } = {}) {
+  return apiRequest(baseUrl, "/api/v1/agent-work/claim", { method: "POST", token, json: body, timeoutMs });
+}
+
+/** PUT /api/v1/tasks/:id/agent-work. body = { lease_id, agent, results }. */
+function submitAgentWork(baseUrl, token, taskId, body, { timeoutMs = 60_000 } = {}) {
+  return apiRequest(baseUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/agent-work`, {
+    method: "PUT",
+    token,
+    json: body,
+    timeoutMs,
+  });
+}
+
+/** POST /api/v1/tasks/:id/agent-heartbeat -> { task_id, lease_id, lease_expires_at }. */
+function agentHeartbeat(baseUrl, token, taskId, leaseId, { timeoutMs = 15_000 } = {}) {
+  return apiRequest(baseUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/agent-heartbeat`, {
+    method: "POST",
+    token,
+    json: { lease_id: leaseId },
     timeoutMs,
   });
 }
@@ -178,6 +282,10 @@ module.exports = {
   probeVideo,
   uploadLocalMedia,
   createVideoTask,
+  findReusableTask,
+  claimAgentWork,
+  submitAgentWork,
+  agentHeartbeat,
   getTask,
   getTaskProgress,
   listTasks,

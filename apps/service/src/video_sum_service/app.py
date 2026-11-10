@@ -1,18 +1,16 @@
-import httpx
-from contextlib import asynccontextmanager
 import os
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx  # noqa: F401  (tests patch service_app.httpx.Client)
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
-from video_sum_service.auth import is_auth_exempt_path, request_is_authorized, unauthorized_response
 from video_sum_core.models.tasks import TaskStatus
-from video_sum_infra.db import connect_sqlite
 from video_sum_infra.config import normalize_visual_note_mode
+from video_sum_infra.db import connect_sqlite
 from video_sum_infra.runtime import (
     activate_runtime_pythonpath,
     bootstrap_managed_runtime,
@@ -23,15 +21,33 @@ from video_sum_infra.runtime import (
     write_runtime_metadata,
 )
 
+import video_sum_service.video_assets as video_assets
 from video_sum_service import cli_idle
-from video_sum_service.context import CACHE_STATIC_DIR, WEB_STATIC_DIR, access_token_manager, app_info, logger, settings_manager
+from video_sum_service.auth import is_auth_exempt_path, request_is_authorized, unauthorized_response
+from video_sum_service.context import (
+    CACHE_STATIC_DIR,
+    WEB_STATIC_DIR,
+    access_token_manager,
+    app_info,
+    logger,
+    settings_manager,
+)
 from video_sum_service.integrations import probe_asr_connection, probe_llm_connection
-from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.knowledge.job_coordinator import KnowledgeJobCoordinator
-from video_sum_service.routers.system import router as system_router
+from video_sum_service.repository import SqliteTaskRepository
+from video_sum_service.routers.agent_work import router as agent_work_router
 from video_sum_service.routers.knowledge import router as knowledge_router
+from video_sum_service.routers.system import router as system_router
 from video_sum_service.routers.tasks import router as tasks_router
 from video_sum_service.routers.videos import router as videos_router
+from video_sum_service.runtime_startup import (
+    get_runtime_startup_state,
+    initialize_runtime_startup_state,
+    mark_runtime_worker_ready,
+    request_runtime_startup_shutdown,
+    start_runtime_startup,
+    submit_mindmap_or_queue,
+)
 from video_sum_service.runtime_support import (
     build_worker,
     clear_environment_probe_cache,
@@ -44,20 +60,18 @@ from video_sum_service.runtime_support import (
     replace_task_worker,
     run_command,
     serialize_settings,
-    install_knowledge_dependencies as install_knowledge_dependencies_with_worker,
 )
-from video_sum_service.runtime_startup import (
-    get_runtime_startup_state,
-    initialize_runtime_startup_state,
-    mark_runtime_worker_ready,
-    request_runtime_startup_shutdown,
-    start_runtime_startup,
-    submit_mindmap_or_queue,
+from video_sum_service.runtime_support import (
+    install_knowledge_dependencies as install_knowledge_dependencies_with_worker,
 )
 from video_sum_service.schemas import TaskMindMapResponse, TaskVisualEvidenceResponse
 from video_sum_service.settings_manager import SettingsUpdatePayload
-from video_sum_service.task_artifacts import cleanup_video_files, load_task_mindmap, load_visual_context, load_visual_note_markdown
-import video_sum_service.video_assets as video_assets
+from video_sum_service.task_artifacts import (
+    cleanup_video_files,
+    load_task_mindmap,
+    load_visual_context,
+    load_visual_note_markdown,
+)
 
 probe_video_asset = video_assets.probe_video_asset
 
@@ -98,7 +112,7 @@ def recover_incomplete_tasks(repository: SqliteTaskRepository, task_worker) -> i
             logger.warning("recover interrupted running task task_id=%s video_id=%s", record.task_id, record.video_id)
         else:
             logger.info("recover queued task task_id=%s video_id=%s", record.task_id, record.video_id)
-        task_worker.submit(record)
+        task_worker.recover(record)
         recovered_count += 1
 
     logger.info("recovered incomplete tasks count=%d", recovered_count)
@@ -147,6 +161,7 @@ app.mount("/media", StaticFiles(directory=CACHE_STATIC_DIR), name="media")
 app.include_router(system_router)
 app.include_router(videos_router)
 app.include_router(tasks_router)
+app.include_router(agent_work_router)
 app.include_router(knowledge_router)
 
 

@@ -2,13 +2,34 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import AwareDatetime, BaseModel, Field
-from video_sum_core.models.tasks import MindMapNode, TaskInput, TaskMindMap, TaskResult, TaskStatus
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
+from video_sum_core.models.tasks import (
+    ModelRouting,
+    TaskInput,
+    TaskMindMap,
+    TaskResult,
+    TaskStatus,
+    blank_to_none,
+    check_extra_instructions_length,
+)
 from video_sum_core.utils import extract_bilibili_page
 
+from video_sum_service.task_routing import TaskRoutingRequest
 
-class TaskCreateRequest(TaskInput):
+
+class TaskCreateRequest(TaskInput, TaskRoutingRequest):
+    """POST /tasks. The engine may come top-level or as ``options.engine`` (top-level wins)."""
+
     video_id: str | None = None
+
+    def routing_request(self) -> TaskRoutingRequest:
+        fields = TaskRoutingRequest.model_fields
+        values = {name: getattr(self, name) for name in fields}
+        values["engine"] = self.engine or self.options.engine
+        return TaskRoutingRequest.model_validate(values)
+
+    def to_task_input(self) -> TaskInput:
+        return TaskInput.model_validate(self.model_dump(include=set(TaskInput.model_fields)))
 
 
 class ResummaryRequest(BaseModel):
@@ -16,12 +37,25 @@ class ResummaryRequest(BaseModel):
     page_number: int | None = None
 
 
-class VideoTaskCreateRequest(BaseModel):
+class VideoTaskCreateRequest(TaskRoutingRequest):
     scheduled_at: AwareDatetime | None = None
     page_number: int | None = None
     visual_note_mode: str | None = None
     prompt_preset_id: str | None = None
     summary_scope: str | None = None
+    # Same rules as TaskOptions: blank = not specified, 补充要求 capped at 1000 chars.
+    extra_instructions: str | None = None
+    language: str | None = Field(default=None, max_length=32)
+
+    @field_validator("language", "extra_instructions", mode="before")
+    @classmethod
+    def _normalize_optional_text(cls, value: object) -> object:
+        return blank_to_none(value)
+
+    @field_validator("extra_instructions")
+    @classmethod
+    def _limit_extra_instructions(cls, value: str | None) -> str | None:
+        return check_extra_instructions_length(value)
 
 
 class VideoTaskBatchRequest(BaseModel):
@@ -91,6 +125,8 @@ class VideoTaskBatchResponse(BaseModel):
     operation: str
     requested_page_numbers: list[int] = Field(default_factory=list)
     requires_confirmation: bool = False
+    # Batch shared by created_tasks (None when nothing was created).
+    batch_id: str | None = None
     created_tasks: list["TaskDetailResponse"] = Field(default_factory=list)
     skipped_pages: list[VideoTaskBatchPageResponse] = Field(default_factory=list)
     conflict_pages: list[VideoTaskBatchPageResponse] = Field(default_factory=list)
@@ -426,12 +462,24 @@ class TaskSummaryResponse(BaseModel):
     updated_at: datetime
     llm_total_tokens: int | None = None
     task_duration_seconds: float | None = None
+    batch_id: str | None = None
 
 
 class TaskDetailResponse(TaskSummaryResponse):
+    model_routing: ModelRouting | None = None
     result: TaskResult | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+class ReusableTaskResponse(BaseModel):
+    """An existing task that answers a create request (C1 reuse)."""
+
+    reused: bool = True
+    match: Literal["completed", "in_progress"]
+    task: TaskDetailResponse
+    # Agent batch to claim from when attaching to an agent_summarizing task.
+    batch_id: str | None = None
 
 
 class TaskMindMapResponse(BaseModel):
@@ -519,11 +567,13 @@ class TaskRecord(BaseModel):
             updated_at=self.updated_at,
             llm_total_tokens=self.result.llm_total_tokens if self.result else None,
             task_duration_seconds=self.task_duration_seconds,
+            batch_id=self.task_input.options.batch_id,
         )
 
     def to_detail(self) -> TaskDetailResponse:
         return TaskDetailResponse(
             **self.to_summary().model_dump(),
+            model_routing=self.task_input.options.model_routing,
             result=self.result,
             error_code=self.error_code,
             error_message=self.error_message,

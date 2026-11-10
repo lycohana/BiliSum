@@ -1,9 +1,11 @@
 import sqlite3
+
 import httpx
 from fastapi import HTTPException
-
 from video_sum_core.models.tasks import TaskResult
 from video_sum_infra.config import ServiceSettings
+from video_sum_infra.model_client import ModelResponseError
+from video_sum_infra.model_client_fake import FakeModelClient, RawBody
 from video_sum_service.app import app
 from video_sum_service.context import settings_manager
 from video_sum_service.knowledge.index_service import KnowledgeIndexService
@@ -623,32 +625,141 @@ def test_extract_stream_reasoning_delta_accepts_reasoning_shapes() -> None:
     assert _extract_stream_reasoning_delta({"message": {"reasoning_content": "plan"}}) == "plan"
 
 
-def test_chat_knowledge_llm_returns_clear_timeout_error(monkeypatch) -> None:
-    settings = ServiceSettings(
-        knowledge_llm_mode="custom",
-        knowledge_llm_enabled=True,
-        knowledge_llm_base_url="https://api.example.com/v1",
-        knowledge_llm_api_key="test-key",
-        knowledge_llm_model="remote-model",
+def _remote_knowledge_settings(**overrides: object) -> ServiceSettings:
+    values: dict[str, object] = {
+        "knowledge_llm_mode": "custom",
+        "knowledge_llm_enabled": True,
+        "knowledge_llm_base_url": "https://api.example.com/v1",
+        "knowledge_llm_api_key": "test-key",
+        "knowledge_llm_model": "remote-model",
+    }
+    values.update(overrides)
+    return ServiceSettings(**values)
+
+
+def test_chat_knowledge_llm_records_knowledge_stage_and_timeout() -> None:
+    fake = FakeModelClient(["答案"])
+
+    chat_knowledge_llm(
+        _remote_knowledge_settings(), system_prompt="system", user_prompt="user", model_client=fake
     )
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
+    request = fake.requests[0]
+    assert request.usage_stage == "knowledge_chat"
+    assert request.transport_retries == 0
+    assert request.timeout == httpx.Timeout(connect=15.0, read=45.0, write=30.0, pool=30.0)
 
-        def __enter__(self):
-            return self
 
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, *args, **kwargs):
-            raise httpx.ReadTimeout("The read operation timed out")
-
-    monkeypatch.setattr("video_sum_service.knowledge.local_llm.httpx.Client", FakeClient)
+def test_chat_knowledge_llm_maps_http_status_error() -> None:
+    error_response = httpx.Response(
+        401,
+        json={"message": "bad key"},
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+    )
+    fake = FakeModelClient(
+        [
+            httpx.HTTPStatusError(
+                "unauthorized", request=error_response.request, response=error_response
+            )
+        ]
+    )
 
     try:
-        chat_knowledge_llm(settings, system_prompt="system", user_prompt="user")
+        chat_knowledge_llm(
+            _remote_knowledge_settings(),
+            system_prompt="system",
+            user_prompt="user",
+            model_client=fake,
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 401
+        assert exc.detail == "知识库 LLM 调用失败：bad key"
+    else:
+        raise AssertionError("expected HTTPException")
+
+
+def test_chat_knowledge_llm_maps_connection_error_to_502() -> None:
+    fake = FakeModelClient([httpx.ConnectError("refused")])
+
+    try:
+        chat_knowledge_llm(
+            _remote_knowledge_settings(),
+            system_prompt="system",
+            user_prompt="user",
+            model_client=fake,
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert exc.detail == "知识库 LLM 连接失败：refused"
+    else:
+        raise AssertionError("expected HTTPException")
+
+
+def test_chat_knowledge_llm_retries_once_after_empty_reply() -> None:
+    fake = FakeModelClient(["", "恢复后的答案"])
+
+    content, _body = chat_knowledge_llm(
+        _remote_knowledge_settings(), system_prompt="system", user_prompt="user", model_client=fake
+    )
+
+    assert content == "恢复后的答案"
+    retry_payload = fake.requests[1].payload
+    assert retry_payload["max_tokens"] == 1600
+    assert retry_payload["messages"][0]["content"].startswith("system\n\n这是一次恢复请求。")
+
+
+def test_chat_knowledge_llm_unreadable_body_is_reported() -> None:
+    # Bodies are parsed leniently (JSON / SSE / NDJSON); one that still cannot be
+    # read is a gateway problem, reported at once instead of retried as empty.
+    fake = FakeModelClient(
+        [ModelResponseError("LLM response contains unexpected data after JSON.")]
+    )
+
+    try:
+        chat_knowledge_llm(
+            _remote_knowledge_settings(),
+            system_prompt="system",
+            user_prompt="user",
+            model_client=fake,
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 502
+        assert (
+            exc.detail
+            == "知识库 LLM 返回了无法读取的响应：LLM response contains unexpected data after JSON."
+        )
+    else:
+        raise AssertionError("expected HTTPException")
+    assert len(fake.requests) == 1
+    assert fake.requests[0].lenient_body is True
+
+
+def test_chat_knowledge_llm_continues_truncated_answer() -> None:
+    fake = FakeModelClient(
+        [
+            RawBody(
+                {"choices": [{"message": {"content": "前半段答案"}, "finish_reason": "length"}]}
+            ),
+            "答案的后半段",
+        ]
+    )
+
+    content, _body = chat_knowledge_llm(
+        _remote_knowledge_settings(), system_prompt="system", user_prompt="user", model_client=fake
+    )
+
+    assert content == "前半段答案的后半段"
+    continuation = fake.requests[1].payload
+    assert continuation["max_tokens"] == 3000
+    assert "已经输出的正文：\n---\n前半段答案\n---" in continuation["messages"][1]["content"]
+
+
+def test_chat_knowledge_llm_returns_clear_timeout_error() -> None:
+    settings = _remote_knowledge_settings()
+    fake = FakeModelClient([httpx.ReadTimeout("The read operation timed out")])
+
+    try:
+        chat_knowledge_llm(settings, system_prompt="system", user_prompt="user", model_client=fake)
     except HTTPException as exc:
         assert exc.status_code == 504
         assert "响应超时" in str(exc.detail)
@@ -656,7 +767,7 @@ def test_chat_knowledge_llm_returns_clear_timeout_error(monkeypatch) -> None:
         raise AssertionError("expected HTTPException")
 
 
-def test_chat_knowledge_llm_normalizes_mimo_model(monkeypatch) -> None:
+def test_chat_knowledge_llm_normalizes_mimo_model() -> None:
     settings = ServiceSettings(
         knowledge_llm_mode="custom",
         knowledge_llm_enabled=True,
@@ -664,38 +775,28 @@ def test_chat_knowledge_llm_normalizes_mimo_model(monkeypatch) -> None:
         knowledge_llm_api_key="test-key",
         knowledge_llm_model="MiMo-V2.5-Pro",
     )
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(["答案"])
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"答案"}}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": "答案"}}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_service.knowledge.local_llm.httpx.Client", FakeClient)
-
-    content, _body = chat_knowledge_llm(settings, system_prompt="system", user_prompt="user")
+    content, _body = chat_knowledge_llm(
+        settings, system_prompt="system", user_prompt="user", model_client=fake
+    )
 
     assert content == "答案"
-    assert calls[0]["json"]["model"] == "mimo-v2.5-pro"
+    wire = fake.wire_requests()[0]
+    assert wire.url == "https://api.example.com/v1/chat/completions"
+    assert wire.headers["Authorization"] == "Bearer test-key"
+    assert wire.json == {
+        "model": "mimo-v2.5-pro",
+        "messages": [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "user"},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 800,
+    }
 
 
-def test_chat_knowledge_llm_disables_thinking_for_official_deepseek_v4(monkeypatch) -> None:
+def test_chat_knowledge_llm_disables_thinking_for_official_deepseek_v4() -> None:
     settings = ServiceSettings(
         knowledge_llm_mode="custom",
         knowledge_llm_enabled=True,
@@ -703,36 +804,18 @@ def test_chat_knowledge_llm_disables_thinking_for_official_deepseek_v4(monkeypat
         knowledge_llm_api_key="test-key",
         knowledge_llm_model="deepseek-v4-pro",
     )
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient(
+        [RawBody({"choices": [{"message": {"content": "完整答案"}, "finish_reason": "stop"}]})]
+    )
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"choices":[{"message":{"content":"完整答案"},"finish_reason":"stop"}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"choices": [{"message": {"content": "完整答案"}, "finish_reason": "stop"}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_service.knowledge.local_llm.httpx.Client", FakeClient)
-
-    content, _body = chat_knowledge_llm(settings, system_prompt="system", user_prompt="user", max_tokens=3000)
+    content, _body = chat_knowledge_llm(
+        settings, system_prompt="system", user_prompt="user", max_tokens=3000, model_client=fake
+    )
 
     assert content == "完整答案"
-    assert calls[0]["json"]["thinking"] == {"type": "disabled"}
-    assert calls[0]["json"]["max_tokens"] == 3000
+    wire = fake.wire_requests()[0]
+    assert wire.json["thinking"] == {"type": "disabled"}
+    assert wire.json["max_tokens"] == 3000
 
 
 def test_knowledge_llm_availability_requires_api_key() -> None:
@@ -755,7 +838,7 @@ def test_knowledge_llm_availability_requires_api_key() -> None:
         raise AssertionError("expected HTTPException")
 
 
-def test_chat_knowledge_llm_accepts_anthropic_messages_response(monkeypatch) -> None:
+def test_chat_knowledge_llm_accepts_anthropic_messages_response() -> None:
     settings = ServiceSettings(
         llm_provider="openai-compatible",
         knowledge_llm_mode="custom",
@@ -765,35 +848,21 @@ def test_chat_knowledge_llm_accepts_anthropic_messages_response(monkeypatch) -> 
         knowledge_llm_api_key="test-key",
         knowledge_llm_model="claude-3-5-haiku-latest",
     )
-    calls: list[dict[str, object]] = []
+    fake = FakeModelClient([RawBody({"content": [{"type": "text", "text": "答案"}]})])
 
-    class FakeResponse:
-        status_code = 200
-        text = '{"content":[{"type":"text","text":"答案"}]}'
-
-        def json(self) -> dict[str, object]:
-            return {"content": [{"type": "text", "text": "答案"}]}
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> None:
-            return None
-
-        def post(self, url: str, headers: dict[str, str], json: dict[str, object]) -> FakeResponse:
-            calls.append({"url": url, "headers": headers, "json": json})
-            return FakeResponse()
-
-    monkeypatch.setattr("video_sum_service.knowledge.local_llm.httpx.Client", FakeClient)
-
-    content, _body = chat_knowledge_llm(settings, system_prompt="system", user_prompt="user")
+    content, _body = chat_knowledge_llm(
+        settings, system_prompt="system", user_prompt="user", model_client=fake
+    )
 
     assert content == "答案"
-    assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
-    assert calls[0]["headers"]["x-api-key"] == "test-key"
-    assert calls[0]["headers"]["anthropic-version"] == "2023-06-01"
-    assert calls[0]["json"]["system"] == "system"
+    wire = fake.wire_requests()[0]
+    assert wire.url == "https://api.anthropic.com/v1/messages"
+    assert wire.headers["x-api-key"] == "test-key"
+    assert wire.headers["anthropic-version"] == "2023-06-01"
+    assert wire.json == {
+        "model": "claude-3-5-haiku-latest",
+        "messages": [{"role": "user", "content": "user"}],
+        "max_tokens": 800,
+        "system": "system",
+        "temperature": 0.2,
+    }

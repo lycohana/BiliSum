@@ -58,6 +58,8 @@ from video_sum_service.repository import SqliteTaskRepository
 from video_sum_service.settings_manager import SettingsUpdatePayload, is_blank_or_masked_secret
 
 if TYPE_CHECKING:
+    from video_sum_infra.model_client import ChatModelClient
+
     from video_sum_service.worker import TaskWorker
 
 _environment_probe_cache: dict[str, dict[str, object]] = {}
@@ -2090,10 +2092,18 @@ def clear_environment_probe_cache(runtime_channel: str | None = None) -> None:
         _write_environment_probe_cache_file(cache_file)
 
 
+#: Test seam: when set, every worker built by ``build_worker`` (startup, settings
+#: save, runtime sync ...) hands this client to its pipeline instead of the real
+#: ``ModelClient``. Tests set it to a ``FakeModelClient``; production leaves it None.
+PIPELINE_MODEL_CLIENT: ChatModelClient | None = None
+
+
 def build_worker(
     repository: SqliteTaskRepository,
     current_settings: ServiceSettings,
     environment_info: dict[str, object] | None = None,
+    *,
+    model_client: ChatModelClient | None = None,
 ) -> TaskWorker:
     from video_sum_core.pipeline.real import PipelineSettings, RealPipelineRunner
 
@@ -2191,7 +2201,10 @@ def build_worker(
     )
     return TaskWorker(
         repository=repository,
-        pipeline_runner=RealPipelineRunner(pipeline_settings),
+        pipeline_runner=RealPipelineRunner(
+            pipeline_settings,
+            model_client=model_client if model_client is not None else PIPELINE_MODEL_CLIENT,
+        ),
         auto_generate_mindmap=current_settings.auto_generate_mindmap,
         auto_generate_visual_evidence=current_settings.visual_evidence_enabled and current_settings.visual_note_mode != "text",
         knowledge_index_auto_rebuild=(
@@ -2276,6 +2289,10 @@ def serialize_settings(
         "language": current_settings.language,
         "summary_mode": current_settings.summary_mode,
         "prompt_router_mode": current_settings.prompt_router_mode,
+        "default_engine": current_settings.default_engine,
+        "agent_default_capabilities": current_settings.agent_default_capabilities,
+        "agent_delegation": current_settings.agent_delegation,
+        "agent_lease_ttl": current_settings.agent_lease_ttl,
         "prompt_presets_path": current_settings.prompt_presets_path,
         "llm_enabled": current_settings.llm_enabled,
         "auto_generate_mindmap": current_settings.auto_generate_mindmap,

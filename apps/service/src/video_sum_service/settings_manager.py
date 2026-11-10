@@ -90,6 +90,10 @@ class SettingsUpdatePayload(BaseModel):
     summary_context_mode: str | None = None
     summary_full_context_max_chars: int | None = None
     prompt_router_mode: str | None = None
+    default_engine: str | None = None
+    agent_default_capabilities: str | None = None
+    agent_delegation: str | None = None
+    agent_lease_ttl: int | None = None
     prompt_presets_path: str | None = None
     llm_enabled: bool | None = None
     auto_generate_mindmap: bool | None = None

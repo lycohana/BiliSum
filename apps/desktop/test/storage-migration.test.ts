@@ -108,13 +108,15 @@ run("storage root prefers the environment, then desktop preference, then system 
   assert.equal(resolveStorageRoot(undefined, undefined, systemDefaultRoot), path.resolve(systemDefaultRoot));
 });
 
-run("migration task guard counts queued and running tasks only", () => {
+run("migration task guard counts queued, running and Agent-waiting tasks only", () => {
   assert.equal(getActiveTaskCount([
     { status: "queued" },
     { status: "running" },
+    { status: "agent_summarizing" },
     { status: "completed" },
     { status: "failed" },
-  ]), 2);
+    { status: "paused" },
+  ]), 3);
 });
 
 run("migration preview counts root-contained directories once and skips export by default", async () => {

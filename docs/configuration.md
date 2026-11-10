@@ -121,6 +121,17 @@ Gemini 可通过 Google 的 OpenAI-compatible 端点使用：将 Provider 设为
 | `VIDEO_SUM_KNOWLEDGE_LLM_ENABLED` / `_PROVIDER` / `_BASE_URL` / `_MODEL` / `_API_KEY` | 关 / 同主 LLM | 知识问答 LLM |
 | `VIDEO_SUM_KNOWLEDGE_INDEX_AUTO_REBUILD` | `disabled` | 任务完成自动重建索引 |
 
+### Agent 模式
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `VIDEO_SUM_DEFAULT_ENGINE` | `builtin` | 默认引擎：`builtin`（内置模型）/ `agent`（把模型步骤交给调用方 Agent）；无法识别的值按 `builtin` 处理。调用时显式指定的引擎优先。只有声明自己是 Agent 的调用方（如带 `--agent-name` 或 `--engine agent` 的 CLI、MCP 服务）才可能走 Agent；桌面端界面创建的任务始终用内置模型 |
+| `VIDEO_SUM_AGENT_DEFAULT_CAPABILITIES` | `text,vision` | Agent 默认能力，逗号分隔，可选 `text` / `vision`；调用时显式声明的能力优先。未声明 `vision` 时，需要看图的步骤（`visual_frame`）不交给 Agent |
+| `VIDEO_SUM_AGENT_DELEGATION` | `summary,knowledge_note,keyframe_plan,visual_frame,visual_compose,mindmap` | 允许交给 Agent 的步骤，逗号分隔，可选值即默认列出的六个；实际交给 Agent 的步骤 = 本项 ∩ Agent 能力所覆盖的步骤，其余步骤用内置模型 |
+| `VIDEO_SUM_AGENT_LEASE_TTL` | `600` | Agent 领取任务后的独占权有效期（秒）；Agent 需在到期前提交或续期，过期后其他 Agent 可重新领取。`0` 或负数按 `600` 处理 |
+
+> 前三项只在**创建任务时**决定该任务走哪个引擎、哪些步骤交给 Agent；路由写入任务后，执行过程中修改这些设置不会改变已创建任务的路由。`VIDEO_SUM_AGENT_LEASE_TTL` 不影响路由，按 Agent 领取或续期时的设置计算到期时间。
+
 ### 其他
 
 | 变量 | 默认 | 说明 |

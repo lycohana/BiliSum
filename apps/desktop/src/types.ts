@@ -1,4 +1,4 @@
-export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "paused";
+export type TaskStatus = "queued" | "running" | "agent_summarizing" | "completed" | "failed" | "cancelled" | "paused";
 export type PageAggregateStatus = "not_started" | "in_progress" | "completed" | "failed";
 
 export type TimelineItem = {
@@ -48,6 +48,9 @@ export type LlmUsageRecord = {
   cache_creation_tokens?: number | null;
 };
 
+export type ModelStep = "summary" | "knowledge_note" | "keyframe_plan" | "visual_frame" | "visual_compose" | "mindmap";
+export type ModelSource = "agent" | "internal" | "local" | "none";
+
 export type TaskResult = {
   overview: string;
   knowledge_note_markdown?: string;
@@ -76,6 +79,34 @@ export type TaskResult = {
   visual_note_updated_at?: string | null;
   visual_note_mode?: VisualNoteMode | string;
   visual_frame_count?: number;
+  /** 执行来源 per model step; missing on results stored before it was recorded. */
+  model_sources?: Partial<Record<ModelStep, ModelSource>>;
+  /** Agent self-reported identity per item it answered, keyed "usage_stage#index" (older results: usage_stage); BiliSum cannot verify it. */
+  agent_identities?: Record<string, AgentIdentity>;
+  /** 补充要求 / output language that produced this result (null = not specified). */
+  extra_instructions?: string | null;
+  language?: string | null;
+};
+
+export type AgentIdentity = {
+  name: string;
+  model?: string | null;
+  self_reported: boolean;
+};
+
+/** GET /api/v1/tasks/{id}/agent-work (read-only view; never exposes the lease id). */
+export type AgentWorkView = {
+  task_id: string;
+  status: TaskStatus;
+  batch_id?: string | null;
+  round: number;
+  waiting_since?: string | null;
+  use_builtin?: boolean;
+  lease: null | {
+    agent: AgentIdentity;
+    claimed_at: string;
+    expires_at: string;
+  };
 };
 
 export type VideoAssetSummary = {
@@ -510,6 +541,12 @@ export type ServiceSettings = {
   prompt_router_mode: "auto" | "confirm" | string;
   prompt_presets_path: string;
   llm_enabled: boolean;
+  /** 默认引擎 for tasks created by an Agent (CLI/MCP); desktop-created tasks always use the built-in model. */
+  default_engine?: "builtin" | "agent" | string;
+  /** Comma list of text,vision. */
+  agent_default_capabilities?: string;
+  /** Comma list of model steps the Agent may take over. */
+  agent_delegation?: string;
   auto_generate_mindmap: boolean;
   visual_note_mode: VisualNoteMode;
   visual_evidence_enabled: boolean;
@@ -927,7 +964,7 @@ export type KnowledgeJobItem = {
   task_id: string;
   video_id?: string | null;
   title: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "agent_summarizing" | "completed" | "failed" | "cancelled" | "paused";
   progress: number;
   message: string;
   error_message?: string | null;

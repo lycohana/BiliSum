@@ -510,6 +510,61 @@ def normalize_knowledge_embedding_provider(value: str | None, default: str = "lo
     return default
 
 
+# --- Agent mode (F2): engine / capability / delegation settings -------------
+ENGINES: tuple[str, ...] = ("builtin", "agent")
+"""Task engines: ``builtin`` = internal model chain, ``agent`` = hand steps to an external Agent."""
+AGENT_CAPABILITIES: tuple[str, ...] = ("text", "vision")
+"""What an Agent can do, in canonical order."""
+AGENT_DELEGATION_STEPS: tuple[str, ...] = (
+    "summary",
+    "knowledge_note",
+    "keyframe_plan",
+    "visual_frame",
+    "visual_compose",
+    "mindmap",
+)
+"""Model step names (``video_sum_core.pipeline.model_steps.STEPS``) the Agent may be allowed."""
+DEFAULT_AGENT_LEASE_TTL_SECONDS = 600
+
+
+def parse_choice_list(value: object, allowed: tuple[str, ...]) -> list[str]:
+    """Comma text or list -> known choices in canonical (``allowed``) order.
+
+    Unknown entries raise ValueError.
+    """
+    if value is None:
+        return []
+    items = value.split(",") if isinstance(value, str) else list(value)  # type: ignore[arg-type]
+    chosen = {str(item).strip().lower() for item in items if str(item).strip()}
+    unknown = sorted(chosen - set(allowed))
+    if unknown:
+        raise ValueError(f"不支持的取值：{', '.join(unknown)}（可选：{', '.join(allowed)}）。")
+    return [item for item in allowed if item in chosen]
+
+
+def _normalize_choice_setting(value: object, allowed: tuple[str, ...], default: str) -> str:
+    if value is None:
+        return default
+    items = value.split(",") if isinstance(value, str) else list(value)  # type: ignore[arg-type]
+    known = [item for item in items if str(item).strip().lower() in allowed]
+    return ",".join(parse_choice_list(known, allowed))
+
+
+def normalize_engine(value: str | None, default: str = "builtin") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in ENGINES else default
+
+
+def normalize_agent_capabilities(value: object, default: str = "text,vision") -> str:
+    return _normalize_choice_setting(value, AGENT_CAPABILITIES, default)
+
+
+def normalize_agent_delegation(
+    value: object, default: str = ",".join(AGENT_DELEGATION_STEPS)
+) -> str:
+    return _normalize_choice_setting(value, AGENT_DELEGATION_STEPS, default)
+
+
 def recommend_task_concurrency(settings: "ServiceSettings", *, cuda_available: bool | None = None) -> int:
     provider = normalize_transcription_provider(settings.transcription_provider)
     if provider == "local":
@@ -678,6 +733,11 @@ class ServiceSettings(BaseSettings):
     settings_schema_version: int = 2
     ytdlp_cookies_file: str = ""
     ytdlp_cookies_browser: str = ""
+    # Agent mode (F2). Comma lists are stored canonically ("text,vision").
+    default_engine: str = "builtin"
+    agent_default_capabilities: str = "text,vision"
+    agent_delegation: str = ",".join(AGENT_DELEGATION_STEPS)
+    agent_lease_ttl: int = DEFAULT_AGENT_LEASE_TTL_SECONDS  # seconds
 
     model_config = SettingsConfigDict(
         env_prefix="VIDEO_SUM_",
@@ -734,6 +794,35 @@ class ServiceSettings(BaseSettings):
     @classmethod
     def _normalize_prompt_router_mode(cls, value: str | None) -> str:
         return normalize_prompt_router_mode(value)
+
+    @field_validator("default_engine", mode="before")
+    @classmethod
+    def _normalize_default_engine(cls, value: str | None) -> str:
+        return normalize_engine(value)
+
+    @field_validator("agent_default_capabilities", mode="before")
+    @classmethod
+    def _normalize_agent_default_capabilities(cls, value: object) -> str:
+        return normalize_agent_capabilities(value)
+
+    @field_validator("agent_delegation", mode="before")
+    @classmethod
+    def _normalize_agent_delegation(cls, value: object) -> str:
+        return normalize_agent_delegation(value)
+
+    @field_validator("agent_lease_ttl", mode="before")
+    @classmethod
+    def _coerce_agent_lease_ttl(cls, value: int | str | None) -> int:
+        parsed = int(value or DEFAULT_AGENT_LEASE_TTL_SECONDS)
+        return parsed if parsed > 0 else DEFAULT_AGENT_LEASE_TTL_SECONDS
+
+    @property
+    def agent_default_capability_list(self) -> list[str]:
+        return parse_choice_list(self.agent_default_capabilities, AGENT_CAPABILITIES)
+
+    @property
+    def agent_delegation_list(self) -> list[str]:
+        return parse_choice_list(self.agent_delegation, AGENT_DELEGATION_STEPS)
 
     @field_validator("knowledge_index_auto_rebuild", mode="before")
     @classmethod

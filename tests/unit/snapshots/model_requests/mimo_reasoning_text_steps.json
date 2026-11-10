@@ -1,0 +1,187 @@
+[
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "max_tokens": 32,
+      "messages": [
+        {
+          "content": "你是一个 JSON 测试助手。你只能返回合法 JSON，不能输出任何额外文字。",
+          "role": "system"
+        },
+        {
+          "content": "请只返回：{\"ok\":true}",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "temperature": 0,
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=20)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是一名严谨、克制、信息密度优先的中文视频内容编辑。你的任务不是泛泛总结，而是基于转写和分段信息，产出可以直接用于“知识卡片”页面的结构化内容。所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。You must return valid json only.",
+          "role": "system"
+        },
+        {
+          "content": "请阅读下面的视频资料，并输出一个 JSON 对象。\n注意：你必须返回合法的 json 对象，且只返回 json。\n\n目标：\n生成一个适合详情页展示的结构化摘要，让用户在不看完整视频的情况下，也能快速理解：\n1. 这支视频核心在讲什么；\n2. 有哪些关键观点、论据、案例、争议和结论；\n3. 内容是如何逐步展开的。\n\n强约束：\n1. 必须输出合法 JSON，对象顶层只允许包含 title、overview、bulletPoints、chapters、chapterGroups 五个字段。\n2. title 必须是简洁、准确的中文标题，避免口号式空话。\n3. overview 必须写成 3 到 5 句中文，整体形成一段完整概述：\n   - 第 1 句交代主题或讨论对象；\n   - 中间句交代关键论点、论据、背景、冲突或方法；\n   - 最后 1 句交代结论、判断、影响或最终落点；\n   - 总体要具体、完整，适合单独作为“核心概览”展示。\n4. bulletPoints 必须是 5 到 8 条中文要点，每条 28 到 88 个字：\n   - 每条都要能单独成为一张知识卡片；\n   - 优先提炼事实、观点、因果、对比、条件、风险、建议、争议；\n   - 不要把同一件事拆成多条近义重复表达；\n   - 不要写“作者认为”“视频提到”这类低信息密度前缀，直接写结论。\n5. chapters 必须按内容自然分布生成，每个章节必须包含 title、start、summary：\n   - chapter.title 要像小标题，短而具体，能体现这一段的主题推进；\n   - chapter.summary 必须比普通概述更详细，写成 2 到 3 个短句或 40 到 120 个字，说明这一段具体讲了什么、举了什么例子、得出了什么判断；\n   - chapters 应体现内容推进关系，而不是机械平均切分；\n   - 章节数量不要预设固定值，应根据内容转折、主题切换、论证层次和视频时长自适应决定；\n   - 短视频可以较少章节，长视频或知识密度高的视频应适当增加章节，必要时可达到 9 到 12 个；\n   - 只有在确实进入新主题、新问题、新案例或新结论时才切出新章节，不要为了凑数量硬拆。\n6. chapterGroups 用来表示“大章节 / 小章节”层级，按真实结构归纳大章节；每个大章节必须包含 title、start、summary、children。\n   - chapterGroups.title 必须是有内容的主题名，禁止使用“大章节1”“第一部分”“Part 1”“Section 1”这类占位标题；\n   - 当原文层级明显时，大章节数量也应随内容自适应，不要固定成 2 到 4 组；\n   - 如果层级不明显，可以少量归并；如果层级明显，可以返回更多组，但不要机械平均分配。\n7. start 必须使用视频里真实出现的时间点，单位为秒，按升序排列。\n8. 如果原文信息有限，也必须尽量提炼出非空 bulletPoints 和 chapters，不能返回空数组。\n9. 不要写“视频主要讲了”“本视频介绍了”“作者首先”这类模板化空话，直接进入信息本体。\n10. 不要引用不存在的数据，不要补充外部背景，不要猜测说话者未明确表达的动机。\n\n写作要求：\n- 保持中文自然、清楚、具体，避免官话和营销口吻。\n- 优先保留高价值信息：定义、判断、证据、例子、条件、限制、影响、结论。\n- 如果视频包含多个层次，overview 负责总览，bulletPoints 负责拆出关键结论，chapters 负责还原内容推进，chapterGroups 负责归纳章节层级。\n- 标题必须像真实目录项，而不是编号占位符；宁可少而准，也不要为了数量固定而硬拆。\n\n输出格式示例：\n{\"title\":\"\",\"overview\":\"\",\"bulletPoints\":[\"\", \"\", \"\", \"\", \"\"],\"chapters\":[{\"title\":\"\",\"start\":0,\"summary\":\"\"}],\"chapterGroups\":[{\"title\":\"\",\"start\":0,\"summary\":\"\",\"children\":[{\"title\":\"\",\"start\":0,\"summary\":\"\"}]}]}\n\n视频标题：示例视频\n\n转写节选：\n[00:00] 开场介绍今天的主题\n[00:30] 讲解具体方法\n\n分段数据节选：\n[{\"start\": 0, \"end\": 30}, {\"start\": 30, \"end\": 60}]",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=180)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是一名严谨、擅长整理学习型内容的中文知识编辑。你的任务是基于转写、分段和现有结构化摘要，单独产出一篇适合阅读的知识笔记。知识笔记必须比知识卡片更完整，能够承担学习、回顾和查阅任务。所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。You must return valid json only.",
+          "role": "system"
+        },
+        {
+          "content": "请阅读下面的视频资料，并输出一个 JSON 对象。\n注意：你必须返回合法的 json 对象，且只返回 json。\n\n目标：\n基于原始转写和结构化摘要，生成一篇适合详情页“知识笔记”阅读视图的 Markdown 笔记。\n\n强约束：\n1. 顶层只允许包含 knowledgeNoteMarkdown 一个字段。\n2. knowledgeNoteMarkdown 必须是一篇完整 Markdown 笔记，不要输出代码围栏包裹整篇内容。\n3. 笔记必须明显区别于知识卡片：\n   - 不要只是把 bulletPoints 改写一遍；\n   - 要有连续叙述、上下文解释、章节展开和重点串联；\n   - 允许引用已有结构化摘要，但必须重新组织为适合阅读的笔记。\n4. 遇到知识类内容时，优先组织为：核心结论、关键概念、推理/方法、章节展开、易错点/限制。\n5. 遇到教程、评论、新闻等非知识类内容时，退化为通用深度笔记：主题概览、关键信息、内容推进、结论/影响。\n6. 只有在原文确实涉及公式、符号、函数、逻辑表达式时才使用 LaTeX：\n   - 行内公式使用 `$...$`\n   - 独立公式使用 `$$...$$`\n   - 不要强行输出数学公式。\n7. 不要照抄转写全文，不要把原始 transcript 直接拼进笔记主体。\n8. 不要补充外部背景，不要编造例子，不要猜测说话者未表达的动机。\n\n写作要求：\n- 标题层级清楚，便于长文阅读。\n- 保留定义、条件、因果、例子、结论、限制、争议等高价值信息。\n- 如果结构化摘要过于简略，应优先参考转写和分段把笔记写得更完整。\n\n输出格式示例：\n{\"knowledgeNoteMarkdown\":\"# 标题\n\n## 核心结论\n\n...\"}\n\n视频标题：\n示例视频\n\n已有结构化摘要：\n{\"title\": \"示例标题\", \"overview\": \"示例概览\", \"bulletPoints\": [\"要点一\", \"要点二\"], \"chapters\": [{\"title\": \"开场\", \"start\": 0.0, \"summary\": \"开场介绍\"}, {\"title\": \"方法\", \"start\": 30.0, \"summary\": \"方法说明\"}]}\n\n转写节选：\n[00:00] 开场介绍今天的主题\n[00:30] 讲解具体方法\n\n分段数据节选：\n[{\"start\": 0, \"end\": 30}, {\"start\": 30, \"end\": 60}]",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=180)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是一名擅长把学习内容重新组织为知识导图的中文内容编辑。你的任务是基于已有结构化摘要和知识笔记，输出一个适合思维导图展示、信息密度充足、覆盖完整的 JSON 树。所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。You must return valid json only.\n硬性验收：顶层 root.children 必须生成至少 3 个彼此有区分的一级分支，只返回根节点或少于 3 个一级分支都视为不合格；一级分支必须来自内容本身的归纳，不能为了凑数拆碎章节或要点。",
+          "role": "system"
+        },
+        {
+          "content": "请阅读下面的视频资料，并输出一个 JSON 对象。\n注意：你必须返回合法的 json 对象，且只返回 json。\n\n目标：\n把当前视频内容组织成一棵真正“像思维导图”的知识树。它必须以概念、主题、方法、结论之间的关系为核心，而不是把章节标题换个层级重新排列。最末层节点仍然必须能回到原视频片段。\n\n强约束：\n1. 顶层只允许包含 title、root、nodes 三个字段。\n2. root 必须是整棵导图的根节点 id。\n3. nodes 必须是数组，其中包含唯一的根节点；每个节点必须包含 id、label、type、summary、children、time_anchor、source_chapter_titles、source_chapter_starts。\n4. type 只能是 root、theme、topic、leaf 之一。\n5. 整体结构必须是树，最大深度为 root -> theme -> topic/leaf -> leaf。\n6. 顶层 theme 至少必须有 3 个；通常控制在 3 到 5 个，只有内容确实存在更多互相独立的知识域时才增加。后续层级的节点数量和深度不设固定下限，以内容结构为准，不要为了满足数量硬拆。\n7. 一级分支必须有明确语义、彼此区分且能覆盖主要内容；不得用“其他”“更多内容”等空泛占位词凑数，也不得按每个章节或每个要点机械铺开。\n8. leaf 节点必须能映射到原章节，并带真实时间点；time_anchor 必须取自 source_chapter_starts 中最早的时间点。\n9. source_chapter_titles 和 source_chapter_starts 只保留最相关的 1 到 3 项，且数量一致。\n10. label 必须是有内容的主题名，禁止“主题1”“Part 1”“Section 1”等占位标题。\n11. summary 要适合学习复盘，直接写信息本体，不要重复整段知识笔记；只有在内容确实存在不同子议题时才继续细化。\n12. label 和 summary 内如果出现数学内容，优先使用 KaTeX 兼容的 LaTeX 写法，例如 `$\\frac{1}{n}$`、`$(-1)^n$`、`$\\varepsilon$-$N$`；不要输出无法解析的伪公式。\n13. 只允许输出 JSON；但 JSON 字符串内部允许包含少量 Markdown 和 `$...$` / `$$...$$` 数学公式。\n14. 不要把 chapters 或 chapterGroups 直接一一平移成 theme/topic；必须先做语义归纳，再组织层级。\n15. 如果多个章节都在讲同一个概念、同一种方法、同一类例子，应该先合并为一个主题，而不是拆成多个并列节点。\n16. 导图的每一层都应体现“父主题如何拆成子主题”，形成概念—方法—案例—条件等架构，而不是简单的时间顺序。\n\n写作要求：\n- 优先按“概念定义 / 推导方法 / 典型例子 / 易错点 / 结论判断 / 应用条件”这类知识结构重组。\n- 根节点应该是整支视频真正的学习主题，不要只是视频标题原样重复，除非标题本身已经是明确概念。\n- theme 层优先整理成 3 到 5 个最核心的大主题，彼此之间要有明显区分；只有材料确实需要时才增加主题。\n- topic 层应承担细化作用，只有当某个 theme 下确实存在两到三类不同子议题时才保留 topic；否则可直接挂 leaf。\n- leaf 节点要具体、短促、可点击后立刻看懂，不要写成长句，也不要只是“第X部分”。\n- 允许把多个来源章节压缩成一个更抽象、更像脑图节点的表达。\n- 如果原文本身是教程或知识讲解，优先提炼“知识结构”；如果原文是评论或资讯，优先提炼“观点结构”和“因果关系”。\n- 若视频包含公式、定义、判别条件、证明步骤、典型例题，不要省略它们；应把它们归入合适的主题或子节点，而不是只保留一个笼统标题。\n- 优先保证“覆盖完整”和“节点可学”，但要合并重复内容，避免把每个章节、每个句子都变成节点。\n- 对于数学/理工类内容，优先把“定义、命题、判别条件、证明思路、典型例题、易错点”拆成不同节点；不要把整段证明压成一句泛泛描述。\n- 如果一个 theme 下只有 1 个子节点，只要它准确概括了该主题就可以保留，不要为了凑数量继续发散。\n- 如果知识笔记已经给出分点、例题或条件，你应该把这些信息展开到对应节点，而不是只复述 theme 名称。\n- 最终观感要像学习者自己整理出来的脑图，而不是讲稿目录。\n\n输出格式示例（仅示意至少 3 个一级分支，实际节点必须根据内容整合）：\n{\"title\":\"\",\"root\":\"root\",\"nodes\":[{\"id\":\"root\",\"label\":\"\",\"type\":\"root\",\"summary\":\"\",\"children\":[{\"id\":\"theme-1\",\"label\":\"核心概念\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]},{\"id\":\"theme-2\",\"label\":\"方法与过程\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]},{\"id\":\"theme-3\",\"label\":\"应用与判断\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]}],\"source_chapter_titles\":[],\"source_chapter_starts\":[]}]}\n\n视频标题：\n示例视频\n\n已有结构化摘要：\n{\"title\": \"示例视频\", \"overview\": \"视频概览\", \"keyPoints\": [\"关键点一\", \"关键点二\"], \"chapters\": [{\"title\": \"开场\", \"start\": 0, \"summary\": \"开场介绍\"}, {\"title\": \"方法\", \"start\": 30, \"summary\": \"方法说明\"}], \"chapterGroups\": []}\n\n知识笔记：\n# 知识笔记\n\n## 开场\n\n内容",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=180)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是一名擅长把学习内容重新组织为知识导图的中文内容编辑。你的任务是基于已有结构化摘要和知识笔记，输出一个适合思维导图展示、信息密度充足、覆盖完整的 JSON 树。所有内容都必须忠实原文，不得编造，不得补充外部资料，不得输出 JSON 以外的任何文字。You must return valid json only.\n硬性验收：顶层 root.children 必须生成至少 3 个彼此有区分的一级分支，只返回根节点或少于 3 个一级分支都视为不合格；一级分支必须来自内容本身的归纳，不能为了凑数拆碎章节或要点。",
+          "role": "system"
+        },
+        {
+          "content": "请阅读下面的视频资料，并输出一个 JSON 对象。\n注意：你必须返回合法的 json 对象，且只返回 json。\n\n目标：\n把当前视频内容组织成一棵真正“像思维导图”的知识树。它必须以概念、主题、方法、结论之间的关系为核心，而不是把章节标题换个层级重新排列。最末层节点仍然必须能回到原视频片段。\n\n强约束：\n1. 顶层只允许包含 title、root、nodes 三个字段。\n2. root 必须是整棵导图的根节点 id。\n3. nodes 必须是数组，其中包含唯一的根节点；每个节点必须包含 id、label、type、summary、children、time_anchor、source_chapter_titles、source_chapter_starts。\n4. type 只能是 root、theme、topic、leaf 之一。\n5. 整体结构必须是树，最大深度为 root -> theme -> topic/leaf -> leaf。\n6. 顶层 theme 至少必须有 3 个；通常控制在 3 到 5 个，只有内容确实存在更多互相独立的知识域时才增加。后续层级的节点数量和深度不设固定下限，以内容结构为准，不要为了满足数量硬拆。\n7. 一级分支必须有明确语义、彼此区分且能覆盖主要内容；不得用“其他”“更多内容”等空泛占位词凑数，也不得按每个章节或每个要点机械铺开。\n8. leaf 节点必须能映射到原章节，并带真实时间点；time_anchor 必须取自 source_chapter_starts 中最早的时间点。\n9. source_chapter_titles 和 source_chapter_starts 只保留最相关的 1 到 3 项，且数量一致。\n10. label 必须是有内容的主题名，禁止“主题1”“Part 1”“Section 1”等占位标题。\n11. summary 要适合学习复盘，直接写信息本体，不要重复整段知识笔记；只有在内容确实存在不同子议题时才继续细化。\n12. label 和 summary 内如果出现数学内容，优先使用 KaTeX 兼容的 LaTeX 写法，例如 `$\\frac{1}{n}$`、`$(-1)^n$`、`$\\varepsilon$-$N$`；不要输出无法解析的伪公式。\n13. 只允许输出 JSON；但 JSON 字符串内部允许包含少量 Markdown 和 `$...$` / `$$...$$` 数学公式。\n14. 不要把 chapters 或 chapterGroups 直接一一平移成 theme/topic；必须先做语义归纳，再组织层级。\n15. 如果多个章节都在讲同一个概念、同一种方法、同一类例子，应该先合并为一个主题，而不是拆成多个并列节点。\n16. 导图的每一层都应体现“父主题如何拆成子主题”，形成概念—方法—案例—条件等架构，而不是简单的时间顺序。\n\n写作要求：\n- 优先按“概念定义 / 推导方法 / 典型例子 / 易错点 / 结论判断 / 应用条件”这类知识结构重组。\n- 根节点应该是整支视频真正的学习主题，不要只是视频标题原样重复，除非标题本身已经是明确概念。\n- theme 层优先整理成 3 到 5 个最核心的大主题，彼此之间要有明显区分；只有材料确实需要时才增加主题。\n- topic 层应承担细化作用，只有当某个 theme 下确实存在两到三类不同子议题时才保留 topic；否则可直接挂 leaf。\n- leaf 节点要具体、短促、可点击后立刻看懂，不要写成长句，也不要只是“第X部分”。\n- 允许把多个来源章节压缩成一个更抽象、更像脑图节点的表达。\n- 如果原文本身是教程或知识讲解，优先提炼“知识结构”；如果原文是评论或资讯，优先提炼“观点结构”和“因果关系”。\n- 若视频包含公式、定义、判别条件、证明步骤、典型例题，不要省略它们；应把它们归入合适的主题或子节点，而不是只保留一个笼统标题。\n- 优先保证“覆盖完整”和“节点可学”，但要合并重复内容，避免把每个章节、每个句子都变成节点。\n- 对于数学/理工类内容，优先把“定义、命题、判别条件、证明思路、典型例题、易错点”拆成不同节点；不要把整段证明压成一句泛泛描述。\n- 如果一个 theme 下只有 1 个子节点，只要它准确概括了该主题就可以保留，不要为了凑数量继续发散。\n- 如果知识笔记已经给出分点、例题或条件，你应该把这些信息展开到对应节点，而不是只复述 theme 名称。\n- 最终观感要像学习者自己整理出来的脑图，而不是讲稿目录。\n\n输出格式示例（仅示意至少 3 个一级分支，实际节点必须根据内容整合）：\n{\"title\":\"\",\"root\":\"root\",\"nodes\":[{\"id\":\"root\",\"label\":\"\",\"type\":\"root\",\"summary\":\"\",\"children\":[{\"id\":\"theme-1\",\"label\":\"核心概念\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]},{\"id\":\"theme-2\",\"label\":\"方法与过程\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]},{\"id\":\"theme-3\",\"label\":\"应用与判断\",\"type\":\"theme\",\"summary\":\"\",\"children\":[],\"source_chapter_titles\":[],\"source_chapter_starts\":[]}],\"source_chapter_titles\":[],\"source_chapter_starts\":[]}]}\n\n视频标题：\n示例视频\n\n已有结构化摘要：\n{\"title\": \"示例视频\", \"overview\": \"视频概览\", \"keyPoints\": [\"关键点一\", \"关键点二\"], \"chapters\": [{\"title\": \"开场\", \"start\": 0, \"summary\": \"开场介绍\"}, {\"title\": \"方法\", \"start\": 30, \"summary\": \"方法说明\"}], \"chapterGroups\": []}\n\n知识笔记：\n# 知识笔记\n\n## 开场\n\n内容",
+          "role": "user"
+        },
+        {
+          "content": "上一版导图未通过结构验收。请重新输出完整 JSON，不要解释原因。硬性要求：root.children 至少包含 3 个有明确语义的一级 theme；后续层级不设固定数量，不要为了凑数继续拆分或制造空泛节点。请先合并同类章节，再根据已有摘要和知识笔记中的概念、方法、例子、条件或结论组织架构，严禁编造外部信息。",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "temperature": 0,
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=180)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  },
+  {
+    "follow_redirects": true,
+    "headers": {
+      "Authorization": "Bearer test-key",
+      "Content-Type": "application/json"
+    },
+    "json": {
+      "enable_thinking": false,
+      "messages": [
+        {
+          "content": "你是视频学习笔记的信息架构师。你只输出合法 JSON。",
+          "role": "system"
+        },
+        {
+          "content": "请根据视频摘要和知识笔记，选择最值得截图辅助理解的关键画面。\n目标链路是：先找知识点 -> 按时间点截图 -> 让 VLM 理解图片 -> 整合成图文笔记。\n只返回 JSON 对象，格式：{\"keyframes\":[{\"timestamp_seconds\":数字,\"anchor_heading\":\"应插入到的笔记标题\",\"concept\":\"被图片支撑的知识点\",\"reason\":\"为什么需要截图\",\"caption_hint\":\"图片标题建议\",\"note_hint\":\"插入笔记时应补充的说明\",\"priority\":0到1}]}。\n最多选择 12 张；不要平均抽帧，只选能解释界面、代码、图表、演示、对比或步骤的画面。\n视频标题：{title}\n模式：{mode}\n摘要 JSON：\n{summary_json}\n\n知识笔记：\n{knowledge_note_markdown}\n\n视频标题：示例视频\n模式：vlm_integrated\n摘要 JSON：\n{\"overview\": \"视频概览\", \"keyPoints\": [\"关键点一\", \"关键点二\"], \"chapters\": [{\"title\": \"开场\", \"start\": 0, \"summary\": \"开场介绍\"}, {\"title\": \"方法\", \"start\": 30, \"summary\": \"方法说明\"}], \"chapterGroups\": []}\n\n知识笔记：\n# 知识笔记\n\n## 开场\n\n内容\n\n分段数据：\n[{\"title\": \"开场\", \"start\": 0, \"summary\": \"开场介绍\"}, {\"title\": \"方法\", \"start\": 30, \"summary\": \"方法说明\"}]",
+          "role": "user"
+        }
+      ],
+      "model": "mimo-v2-test",
+      "reasoning_effort": "high",
+      "temperature": 0.1,
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "timeout": "Timeout(timeout=90)",
+    "url": "https://llm.example.com/v1/chat/completions"
+  }
+]

@@ -156,5 +156,9 @@ node "$web_static_validation_script"
 
 npm run build:electron
 
+# The bundled CLI (resources/cli) needs its runtime dependencies (MCP SDK, zod, jpeg-js).
+echo "Installing CLI dependencies for bundling..."
+npm ci --prefix "$repo_root/packages/npx" --omit=dev --no-audit --fund=false
+
 export CSC_IDENTITY_AUTO_DISCOVERY=false
 npx electron-builder --config electron-builder.config.js --mac "$electron_builder_arch" --publish=never

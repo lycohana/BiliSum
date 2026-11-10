@@ -65,8 +65,8 @@ def test_watchdog_exits_when_idle_and_queue_empty(monkeypatch) -> None:
     monkeypatch.setattr(cli_idle.os, "_exit", fake_exit)
 
     class EmptyRepo:
-        def list_recoverable_tasks(self):
-            return []
+        def has_active_tasks(self):
+            return False
 
     with pytest.raises(RuntimeError, match="exit-called"):
         cli_idle._watchdog_loop(30, EmptyRepo())
@@ -88,8 +88,8 @@ def test_watchdog_stays_alive_while_tasks_active(monkeypatch) -> None:
     monkeypatch.setattr(cli_idle.os, "_exit", lambda code: exited.append(code))
 
     class ActiveRepo:
-        def list_recoverable_tasks(self):
-            return [object()]  # queued/running task keeps the service alive
+        def has_active_tasks(self):
+            return True  # an active task keeps the service alive
 
     with pytest.raises(RuntimeError, match="stop-loop"):
         cli_idle._watchdog_loop(30, ActiveRepo())

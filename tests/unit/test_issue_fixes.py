@@ -73,7 +73,8 @@ def test_sse_error_is_not_silently_accepted():
 
 
 def test_ndjson_gateway_chunks_keep_usage_and_skip_reasoning():
-    from video_sum_core.pipeline.real import _parse_llm_response_json
+    # The pipeline parses through ModelClient; both entry points share one parser.
+    from video_sum_infra.model_client import parse_response_body as _parse_llm_response_json
 
     chunks = [
         {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
@@ -91,20 +92,29 @@ def test_ndjson_gateway_chunks_keep_usage_and_skip_reasoning():
 @pytest.mark.parametrize("status,expected_calls", [(401, 1), (403, 1), (429, 3), (503, 3)])
 def test_llm_retries_only_transient_http_errors(monkeypatch, tmp_path, status, expected_calls):
     calls = []
-    original_client = httpx.Client
     def respond(request):
         calls.append(request)
         if len(calls) < 3 or status in (401, 403):
             return httpx.Response(status, json={"error": "temporary"})
         return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"{\\\"overview\\\":\\\"ok\\\"}"}}]}\n\ndata: [DONE]')
-    monkeypatch.setattr("video_sum_core.pipeline.real.httpx.Client", lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
-    monkeypatch.setattr("video_sum_core.pipeline.real.time.sleep", lambda _: None)
-    runner = RealPipelineRunner(PipelineSettings(tasks_dir=tmp_path, llm_enabled=True, llm_api_key="test", summary_chunk_retry_count=2))
+    from video_sum_infra.model_client import ModelClient
+
+    monkeypatch.setattr("video_sum_core.pipeline.model_steps.time.sleep", lambda _: None)
+    monkeypatch.setattr("video_sum_infra.model_client.time.sleep", lambda _: None)
+    runner = RealPipelineRunner(
+        PipelineSettings(
+            tasks_dir=tmp_path, llm_enabled=True, llm_api_key="test", summary_chunk_retry_count=2
+        ),
+        model_client=ModelClient(transport=httpx.MockTransport(respond)),
+    )
+    request = dict(
+        base_url="https://example.com/v1", payload={"messages": []}, usage_stage="summary_full"
+    )
     if status in (401, 403):
         with pytest.raises(LLMAuthenticationError):
-            runner._request_llm_json_with_retries(base_url="https://example.com/v1", payload={"messages": []})
+            runner._request_llm_json_with_retries(**request)
     else:
-        assert runner._request_llm_json_with_retries(base_url="https://example.com/v1", payload={"messages": []})["overview"] == "ok"
+        assert runner._request_llm_json_with_retries(**request)["overview"] == "ok"
     assert len(calls) == expected_calls
 
 
